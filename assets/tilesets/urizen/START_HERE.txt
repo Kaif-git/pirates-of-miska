@@ -1,0 +1,62 @@
+URIZEN - LEFT TWO PANELS ONLY
+===========================
+
+Open index.html for the offline searchable catalog. No installation or server needed.
+
+tiles/transparent/   Individual occupied 12x12 source tiles; pure black removed.
+tiles/original/      The same tiles with exact, unchanged source RGBA pixels.
+larger/transparent/ Complete larger art, layout samples, and the extended border crop.
+larger/original/    Pixel-exact larger source rectangles, including native 1px gutters.
+larger/assembled/   Ready-to-use complete objects, empty 1px grid gutters removed.
+previews/           Enlarged labeled contact sheets; NOT native-size game assets.
+manifest.json/csv   Labels, categories, rectangles, paths, upstream aliases, duplicates.
+source_cells.csv    Every grid position in the two panels, including empty cells.
+verification.json  Exact-pixel, coverage, and browser audit results.
+tools/              Reproducible extraction, labeling, catalog, and validation tools.
+reference/          Older upstream metadata/images/licenses used to identify matches.
+
+Only panels 1 and 2 are exported. Panels 3, 4, and 5 are not included.
+The original input PNG next to this folder is unchanged.
+
+Tile filenames contain panel, row, column (zero based).
+Example: sword_name__p2_r06_c00.png.
+12x12 grid: 1px margin, 1px spacing, 25 columns x 50 rows per panel.
+Panel grid origins: x=0 and x=338. Rows start at y=0.
+Source rectangles use exclusive right/bottom coordinates.
+Duplicate sprites at different source coordinates are intentionally retained.
+Empty black/transparent positions are recorded but not exported as game PNGs.
+
+Labels use older Urizen metadata only after exact foreground-mask matching;
+positions in those older sheets differ from this sheet. Color differences are
+allowed for identifying a mask, and ALL candidate aliases/properties are saved.
+Other labels are visual interpretations, not author-provided official names.
+Abstract fragments are named by shape or position rather than invented gameplay.
+Larger layout samples are explicitly distinguished from complete objects.
+The large parchment layout contains reusable frame/torn variants, not a single scroll.
+
+Transparent variants change exactly RGB=(0,0,0) pixels to RGBA=(0,0,0,0).
+No near-black colors are removed, no pixels are recolored, trimmed or rescaled.
+Use originals if black interiors/backgrounds are required for your engine.
+The separate assembled variants join adjacent tiles of COMPLETE objects only;
+they remove empty grid-spacing rows/columns, never painted source pixels.
+Each assembled variant records its exact source-row/column map in the manifest.
+The catalog defaults to assembled objects with transparent individual tiles.
+
+Upstream reference: https://github.com/vurmux/urizen
+Pinned commit: 28b1e60cf8fa2f15622537f6df0290e2ac890d5f
+The upstream basic and fantasy-medieval reference packs include CC0 1.0 licenses,
+copied under reference/. This documents those references; no new license is
+invented for the user-supplied v2d0 sheet.
+
+Rebuild (PowerShell, any working directory; Python + Pillow required):
+python "D:/New folder (2)/Urizen-Left-2-Extracted/tools/extract_sprites.py"
+Verify existing output:
+python "D:/New folder (2)/Urizen-Left-2-Extracted/tools/extract_sprites.py" --verify-only
+Offline browser test (Node + installed Playwright/Edge):
+node "D:/New folder (2)/Urizen-Left-2-Extracted/tools/test_catalog.cjs"
+
+The extractor does not delete files. Label changes can leave stale generated
+filenames: verifier reports them; remove only confirmed obsolete generated files.
+After editing labels, BEFORE rebuilding, this helper removes only unchanged
+obsolete PNGs listed in the previous manifest, never unknown or modified files:
+python "D:/New folder (2)/Urizen-Left-2-Extracted/tools/reconcile_generated_names.py"

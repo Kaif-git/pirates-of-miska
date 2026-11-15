@@ -1,0 +1,67 @@
+{
+  "passed": true,
+  "source_rgba_size": [
+    2679,
+    651
+  ],
+  "source_file_sha256": "f5d927e5e9877a3c088bc488aa64d50f85ce09fd73ded3c1fd25ad715b3ac617",
+  "requested_panels": [
+    1,
+    2
+  ],
+  "excluded_panels": [
+    3,
+    4,
+    5
+  ],
+  "grid": {
+    "cell": [
+      12,
+      12
+    ],
+    "stride": 13,
+    "columns_per_panel": 25,
+    "rows": 50,
+    "origins_x": [
+      0,
+      338
+    ],
+    "margin": 1
+  },
+  "source_cells_checked": 2500,
+  "occupied_cells": 1177,
+  "empty_cells": 1323,
+  "tiles_per_panel": {
+    "1": 721,
+    "2": 456
+  },
+  "additional_larger_crops": 44,
+  "exported_pngs": 2480,
+  "foreground_pixels_covered": 56852,
+  "foreground_gutter_pixels_preserved_in_larger_crops": 42,
+  "category_count": 93,
+  "original_crops_pixel_exact": true,
+  "transparent_crops_exact_black_key_transform": true,
+  "gap_free_complete_objects": 38,
+  "assembled_objects_preserve_all_nonblack_pixels": true,
+  "duplicate_positions_retained": 4,
+  "labels_with_upstream_matches": 484,
+  "all_occupied_cells_labeled": true,
+  "no_stale_game_pngs": true,
+  "no_other_panels_exported": true,
+  "browser_test": {
+    "passed": true,
+    "browser": "Headless Microsoft Edge (Playwright)",
+    "offline_file_url": true,
+    "all_game_pngs_decoded": 2480,
+    "search": true,
+    "category_filter": true,
+    "panel_filter": true,
+    "kind_filter": true,
+    "variant_switch": true,
+    "background_switch": true,
+    "pagination_terminates": true,
+    "empty_search": true,
+    "javascript_or_resource_errors": []
+  }
+}

@@ -1,0 +1,256 @@
+PIRATES OF MISKA - SHIP LIFE
+
+Launch: double-click Play Pirates.bat, or run python play.py from this folder.
+Install dependencies if needed: python -m pip install -r requirements.txt
+Fresh game: python play.py --new
+
+Controls
+  Arrows / HJKL     Move; hold a direction to repeat
+  . / keypad 5     Wait
+  Enter            Nearby crew conversation / door / ship interactions
+  O                Open or close an adjacent door
+  G                Pick up supplies under your feet
+  I                View inventory
+  D                Choose an item to drop
+  E                Inspect your current tile
+  Left mouse       Inspect a visible tile
+  + / -            Zoom in / out
+  F1               Help
+  F2 / F7          Crew profiles, needs/wants, thoughts, skills, labor priorities
+  A                Chore board: inspect, prioritize and cancel work
+  F3               Ship ledger, provisions and stations
+  F4               Pass 10 seconds / 1 minute / 10 minutes, or watch crew live
+  F6               Crew events / work compliance / detailed audit
+  V                Officer consultations, voyage planning, free-time orders, sea chart
+  F5 / F9          Save / load
+  Escape / Q       Save and quit
+
+New captains start aboard the Wayward, a moored sloop with a working deck,
+forecastle/helm, mess, galley, water cask, cargo hold, workshop and six bunks.
+The west gangplank connects the ship to the harbor. Port supplies are at (31,23).
+Older saves keep their captain and inventory, and gain the new ship/crew systems.
+
+PORT SUPPLIES / TRADING
+Verdant Cay has farms, spring water, fisheries, timber and weaving. Cinder Quay
+has foundries and manufacturers but imports provisions, water, timber and cloth.
+Each island has three named merchants with different specialties and conversations.
+Follow the west gangplank ashore. $ marks a merchant; stand within two tiles and
+press Enter -> Talk / trade with their name. Merchant locations are in Enter ->
+Island guide / coastal passage. Start with 600 Marks; funds persist across saves.
+
+Verdant: Ada (30,21) sells crops; Bo (35,27) fish/water; Lina (25,28) wood/cloth.
+Cinder: Dara buys provisions; Brann sells tools/metal/arms; Petra sells practical kit.
+Their stalls use the same market coordinates on the respective islands.
+Regional ask/bid prices depend on supply and demand. Bulk quotes include marginal
+price changes. Merchants have finite stocks, budgets and accepted item categories.
+Daily local production replenishes exports to a cap; local demand consumes imports.
+Buying and reselling at the same merchant loses money. Regional trade can profit,
+but passage, delivery, cargo capacity and changing prices must be considered.
+
+Purchases go to TRADE CARGO via market porters: 2 Marks and 1 game minute per order.
+This porter delivery is abstracted, not a simulated dock-labor job. Selling takes
+10 seconds. Every transaction requires confirmation and rejects partial failures.
+Trade cargo plus issued equipment has a 250 kg / 350 L limit, separate from the
+captain's satchel and allocated working stockpiles. Goods, purses and history save.
+
+Enter -> Trade cargo / crew equipment opens the manifest. Stand next to the ship's
+hold to allocate provisions, issue/return kit or transfer goods to/from the satchel.
+Allocated food becomes ingredients or ready meals; water fills its actual stockpile;
+wood and shot enter actual working supplies, respecting available pile capacity.
+Allocated supplies are no longer sale cargo. Material masses follow ship-storage units.
+
+USEFUL ITEMS
+Food: grain/beans/salted fish feed cooking; fruit/biscuits provide ready portions.
+Water: sealed kegs provide ten servings each.
+Wood: timber/plank bundles supply repairs and construction.
+Tools: carpenter rolls +20% repair work; cookware +18% cooking; buckets +20% bailing;
+mops +15% cleaning; issued rope +12% rigging.
+Clothing: linen work clothes reduce work fatigue 15%; oilskins reduce it 25%;
+boots reduce walking energy expenditure 35%. Weather/armor protection is not simulated.
+Weapons: issue cutlasses/pistols and run arms drills with a rested, unoccupied sailor.
+Sailors walk to the workshop and gain practice only while actually training; urgent
+needs interrupt. Pistol practice consumes a standardized ammunition charge. Combat
+is not implemented. Iron, coal and sailcloth are trade commodities, not new recipes.
+Crew kit appears in F2 profiles. Issuing/replacing kit takes ten seconds; old items
+return to cargo rather than being deleted. Trade goods are standard undamaged items.
+
+ISLAND PASSAGE
+At the harbor office (42,23) or beside the helm, Enter -> Island guide / coastal
+passage books the other island for 15 Marks and 30 game minutes. The crew continues
+working and consuming supplies. This is charted passage abstraction, NOT ship-handling
+or naval sailing simulation. Ship geometry, fixtures, crew and cargo persist; each
+harbor retains its own ground items, door states and exploration memory.
+
+SEA VOYAGES / OFFICER ROLES
+Press V for Voyage Command. The captain chooses a chart destination; the navigator
+plots a lane and estimates time from rigging skill and wind. The quartermaster
+reports water, prepared meals and raw ingredients against the route estimate,
+warns about shortages/low hull and suggests provisioning/trade voyages. A separate,
+numbers-minded purser tracks the stores ledger. V >
+Assign roles lets you choose different named crew members for navigator,
+quartermaster and purser. Officer roles influence reports/route estimates; they
+do not replace the existing daily ship jobs.
+
+Review the route and confirm the captain's order to depart. The left harbor becomes
+open sea and the sea chart shows the Wayward (@), planned lanes (*) and rival ships.
+Use V > Watch / advance the voyage for 10 minutes, 1 hour or 6 hours. Sailing legs
+are strategic, abstract time steps, not continuous ship steering. The ordinary
+ShipLife simulation still runs each second: crew needs, chores, fatigue, stores,
+repairs and wear continue while the player watches the chart or walks the ship.
+Arrival and nearby-vessel sightings interrupt a long watch. The captain is returned
+to the normal playable ship map; there is no tactical combat/boarding system yet.
+
+V > Captain free-time action: rest (reduces captain fatigue), study charts (chart
+notes improve the next voyage estimate), inspect the ship, or talk with crew.
+V > Crew team order: work as needed, rest between watches, sword drill or brawling.
+Choose a leader and team. Sword-drill participants must each have a weapon issued.
+Participants still go to work or satisfy urgent needs; free-time practice never
+overrides a job or need. Practice is abstract deck activity, not combat training
+with a tactical resolution. F2/A/F4/F6 work as usual while underway.
+
+NPC SHIPS / REGIONAL ACTIVITY
+Three persistent rival vessels (Syndicate trader, Government marine patrol and
+rogue pirate brig) move on charted lanes. Their cargo, silver, routes and events
+persist. The trader buys/sells regional goods; the brig hunts ships, including
+government tenders and merchants; patrols move through their lane. Close chart-node
+encounters pause the voyage and return control to the ship. Tactical outcomes are
+not yet simulated. The prototype also models an NPC-only coercive slave market at
+Freeport: raider-held captives can be sold and rival crews can buy from a finite
+market pool. These transfers conserve tracked headcount; the player cannot trade,
+own, or command enslaved people in this slice. This is a fictional system record,
+not an endorsement. NPC ship incidents are summarized in V > sea chart/history.
+NPC trade and movement continue during normal in-game time, in port or at sea.
+
+CREW LIFE
+Six named sailors have individual labor preferences, skill levels, assigned
+bunks, hunger, thirst, fatigue, loneliness, boredom, health, morale and thoughts.
+Energy is short-term stamina. A rest restores energy and physical fatigue, but
+does not repay sleep debt: sailors must actually sleep in their assigned bunks.
+Early birds and night owls prefer different sleeping hours. Urgent sleep debt
+overrides those preferences. Needs/recovery rates are tuned for this prototype.
+
+Personality dimensions (diligence, sociability, resilience and curiosity) affect
+work interruptions, company/variety needs and stress. Traits have actual effects:
+hearty eaters get hungry faster, light sleepers recover more slowly, shy sailors
+seek company less often, hard workers work faster, perfectionists patch better
+but work more slowly, and quick learners gain more practice experience.
+F2 profiles explain each sailor's traits and show exact skills/practice totals.
+Mood combines fading memories, unmet needs, stress and resilience. Ordinary work
+may be refused when a sailor is miserable; survival/emergency chores take precedence.
+They walk to stations, open doors, carry supplies and work without direct orders.
+Urgent needs interrupt a chore; the exclusive claim and progress are retained.
+Meals and water are finite. Missing supplies / blocked routes appear on the board.
+Food and water deprivation eventually damage health and morale.
+Sailors seek companionship, develop friendships, relax and enjoy the sea view.
+You can speak with nearby crew to ease loneliness and improve morale.
+
+CHORES
+Hull repair, bilge bailing, meal preparation, swabbing, rigging and cannon loading.
+Wear and low stocks create work automatically. No two sailors claim the same job.
+Supplies are reserved in the hold, physically collected, then carried to the site.
+Cancellation returns carried supplies by walking them back, not teleportation.
+Cancelled chores have a two-minute requeue delay. Labor priorities are 0 = off,
+1 = preferred through 5 = last resort; board priorities take precedence.
+Select a chore in A and choose Assign to give it to a named sailor. Direct orders
+override ordinary preferences, but never override disabled labors, urgent needs,
+missing supplies or inaccessible work sites. Busy sailors finish their current
+claim first. Reassigning active work returns materials before handing it over.
+
+WHO IS FOLLOWING ORDERS?
+F2 > Work compliance, or F6 > Work compliance, shows every sailor's live task,
+order assignee, progress, needs-related pauses and explicit blockage reasons.
+The report runs actual claim/labor/material consistency checks (not a fixed PASS).
+F6 > Detailed work audit lists assignments, acceptance, material pickup, work
+starts, need pauses/resumes, completions and supply returns with simulation seconds.
+
+Time is TURN-BASED: menus never tick the simulation. Walking, waiting, transfers,
+door actions and conversations advance it. Use F4 to fast-forward, or choose
+Watch ship life for accelerated, animated observation (Esc stops watching).
+
+EQUIPMENT RELOCATION
+Enter -> Relocate equipment selects an existing fixture and a destination beside the captain.
+Carpenters unfasten it, physically haul it along available routes, then refasten it.
+Cyan F marks the planned destination. Heavy fixtures take longer per movement tile.
+Equipment is unavailable while being hauled; it is removed from the source map, not duplicated.
+Cancellation, reassignment or urgent needs return carried equipment to its original position first.
+Mid-haul saves retain the carrier and exclusive claim. A manages these orders; F4 advances work.
+Stocked hold relocation awaits spatial storage. Tackle/roller hauling speed is provisional;
+multi-worker handling and structural foundations are not simulated yet.
+
+ROOMS / DESIGNATIONS
+Enter -> Room designation / report inspects or labels the space you stand in.
+Walls and doors determine room boundaries; opening a door does not erase its room.
+Labels are saved per tile, so splitting/merging spaces preserves their intended uses.
+Assign berths, mess, galley, hold, workshop, infirmary, magazine, brig or working deck.
+Reports show actual area, walkable tiles, bunks, stations, boundary doors and supply
+walking distances. Distances ignore bodies and door-opening time; they are not reload times.
+Labels never create equipment or grant bonuses. Infirmary/magazine/brig are designation-only
+until their dedicated equipment/jobs exist. Spaces are not yet watertight/roofed compartments.
+Existing saves without designations start with undesignated spaces; equipment still works.
+
+STOCKPILES / HAULING
+Enter -> Storage / hauling inspects real pile positions, contents, available capacity and marks.
+Designate/remove an empty floor stockpile beside the captain; designated stockpiles block walls.
+Order physical transfers by selecting source, destination, resource and quantity.
+Workers reserve the source, walk to collect and deliver it; cancellations return goods to source.
+One load is at most 50 kg; heavier bundles must be moved in separate trips. Load adds travel delay.
+Existing hold/water totals are backed by spatial piles; moving a stocked hold moves its contents,
+adds their mass to the haul and makes the storage inaccessible until reinstalled.
+Recipe inputs can be reserved from multiple reachable piles. Available totals exclude reservations
+and carried goods; F6 audit reports double/missing allocations. Saves retain piles and mid-haul work.
+Floor piles can be removed only empty and unreserved; fixtures and active-job routes are protected.
+
+CONSTRUCTION / BLUEPRINTS
+Enter -> Construction orders -> North/East/South/West selects an adjacent tile.
+Build a connected deck floor, oak wall or door, or dismantle an interior barrier/floor.
+Building costs one provisional plank bundle and uses the Patch hull labor skill.
+Workers reserve and carry planks from the hold before doing the construction.
+Cyan #/+ mark planned walls/doors; cyan x marks dismantling. Plans do not block walking.
+Use A to inspect/prioritize/cancel construction and F4 to let the crew work.
+Menus and designations do not advance time. Save/load retains work and carried supplies.
+An occupied tile blocks completion until clear; blocked work retains its supplies.
+Stations, bunks, essential access and the outer hull are protected in this slice.
+Dismantling currently recovers no materials. F8 opens the ship-local blueprint editor;
+arrows move the cursor, B cycles floor/wall/door build/dismantle, Space marks/unmarks, T sets
+a drawing anchor, L draws a line, G a rectangle, F flood-fills within current deck bounds, and
+Y toggles vertical-centerline symmetry. [ and ] set selection corners, D sets copy destination,
+C copies, M mirrors, R rotates, Z undoes one gesture, Backspace clears all proposed edits, Enter
+queues physical jobs, and Esc exits. Purple structural marks are nonphysical proposals until queued.
+Copy/mirror/rotation and all proposed edits can be undone before job queueing. Floor removal
+at the outer-hull edge or beneath walls is deliberately rejected: flooding-aware hull opening,
+upper/lower decks and sailing physics remain future work.
+Blueprint jobs reject tiles crews cannot physically reach; connected floor extensions are queued
+from the current deck outward and each section requires its own plank haul.
+The ship ledger reports actual deck-zero floor area, exposed contour edges, enclosed cutouts,
+connected sections, structural mass and center of mass; these derive from built model geometry.
+
+Implemented: copied windowed SDL/tcod renderer, smooth movement and repeat,
+camera follow, zoom, minimap, visibility/exploration memory, mouse inspection,
+scrollable menus, capacity-aware inventory, load-adjusted movement, doors,
+clock, atomic saving, validated loading, automatic resume and save on quit.
+Also implemented: autonomous crew, finite ship stores, jobs, needs and wants.
+Also implemented: regional trading, merchant dialogue, crew equipment and abstract passage.
+Not implemented in this slice: naval sailing, combat, recruitment, wages or the wider GDD.
+Cannons can be loaded but not fired. The helm does not sail the ship yet.
+No original campaign data, artwork, or save slots were copied.
+
+Local save slot: saves/captain.json (independent of Tales of Miska).
+--new ignores the slot and replaces it only when saving or quitting.
+If a save is invalid, startup reports the error without overwriting it.
+
+Verification
+  python -m pip install pytest
+  python -m pytest -q
+  python play.py --smoke-render
+  python play.py --smoke-render --screenshot preview.png
+  python tools/preview_ship.py --reveal --output "C:/Users/Warp/AppData/Local/Temp/opencode/pirates-ship-life"
+  python tools/preview_trading.py --output "C:/Users/Warp/AppData/Local/Temp/opencode/pirates-trading"
+Smoke mode never loads or writes a save.
+The ship preview is also save-free; --reveal is developer-only visibility.
+
+Source snapshot: engine-origin.json records hashes of copied Python files.
+engine/ is the unmodified engine snapshot from E:/Tales Of Mizka.
+tales_sim/ contains only inventory, clock and their helper dependencies.
+pirates/game.py and play.py are the independent game and presentation adapter.
+pirates/ship.py owns ship life; pirates/management.py owns its menus/reports.
+No external source folder is needed to run this copy.

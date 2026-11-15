@@ -1,0 +1,366 @@
+{
+  "source": "E:/Tales Of Mizka",
+  "description": "Unmodified local source snapshot; no story, saves, maps or art copied. tales_sim contains only reusable inventory dependencies and clock.",
+  "files": [
+    {
+      "sha256": "14B21EDAB7E43B9C25961F8177E82A26655C83969B2AF445EFC3F2F09B0AF5A8",
+      "path": "engine/omnisim/__init__.py"
+    },
+    {
+      "sha256": "B5CB7EA94195EBB277580E6CF53F868F378058332DB48E95FC27F795E1F7F787",
+      "path": "engine/omnisim/__main__.py"
+    },
+    {
+      "sha256": "0CB757D5787DB839AADEF9E8D71C22B33801A934CEB8F3363F3712AB393C0AB9",
+      "path": "engine/omnisim/content/loader.py"
+    },
+    {
+      "sha256": "6078FF6189479169B5255FE5760497EDA7F02DD6DF6AAACEC3644797885BB85D",
+      "path": "engine/omnisim/core/actions.py"
+    },
+    {
+      "sha256": "9BE2344F2989DA7748B4113B4595D797396746D59A37A6FED9108DEF0E8A843D",
+      "path": "engine/omnisim/core/clock.py"
+    },
+    {
+      "sha256": "5A58D3B9616FE78C09D85BDB6FD19A8F4B1873E2158BBB397A1DE75EAAA0932F",
+      "path": "engine/omnisim/core/game.py"
+    },
+    {
+      "sha256": "B3BFB25AD6DA8E8EBC176878889C0CD88FF046905CE00877AE7B2D22454E45F6",
+      "path": "engine/omnisim/core/save.py"
+    },
+    {
+      "sha256": "C78815C641D4D2041EB7D1D715069BF7DEE78095A7D8BC27C8D26E311D330D4E",
+      "path": "engine/omnisim/core/time_queue.py"
+    },
+    {
+      "sha256": "95D037EAA8C11FC1624B604E5209CC64068EA881A466D041B31357B9CE1D6640",
+      "path": "engine/omnisim/entities/archetypes.py"
+    },
+    {
+      "sha256": "0A1A772F1D8C314D881ACDB8DF6126C66D3D9E6D11587012C2B5983D8BEBFE5F",
+      "path": "engine/omnisim/entities/components.py"
+    },
+    {
+      "sha256": "25BFAB03AB5AFF77396C0B0D656A32BC13A7D558F3002EDC4B921489A5147DC8",
+      "path": "engine/omnisim/entities/entity.py"
+    },
+    {
+      "sha256": "EA0B4533793A8DA0E87E13FB99B2DB95596D33048BACEB61BF262F5D657B509B",
+      "path": "engine/omnisim/entities/items.py"
+    },
+    {
+      "sha256": "7FCCC4FFBE07B7458CCF60D150481077C6CF002226CD2B7823C299F423236C99",
+      "path": "engine/omnisim/play/__init__.py"
+    },
+    {
+      "sha256": "65246CBC986BAC1E53946CF16DCC8D6820CAC4409FC672C332F2AA7875EE40C8",
+      "path": "engine/omnisim/play/server.py"
+    },
+    {
+      "sha256": "C0A04820B06BB85304A8C27341E5AC7A00D6B117FACE3B3F5822D0A88395AECE",
+      "path": "engine/omnisim/play/session.py"
+    },
+    {
+      "sha256": "F5AE2A9709767C3B1DABAF366319F91D0D7E30D09204990330FF2DCD20F7B4E9",
+      "path": "engine/omnisim/systems/ai_agenda.py"
+    },
+    {
+      "sha256": "39620F65456E456D7E9A13637D8B86CF4CFB0848B1DE3EDA5B06C45E38A2125E",
+      "path": "engine/omnisim/systems/barks.py"
+    },
+    {
+      "sha256": "EA18CF3528E63C96890EC40D56EA0640F165AA33B488167FB15977A4E5AE6DAF",
+      "path": "engine/omnisim/systems/brain.py"
+    },
+    {
+      "sha256": "D171080DFC9577C0009E67F7DF4A44067C6D449C39540317BAE45043346BE44C",
+      "path": "engine/omnisim/systems/buildings.py"
+    },
+    {
+      "sha256": "ABC5A60E3AB465FF6FB750E4692529BCB01DEF55F725479E971E03F4CEB2FEAD",
+      "path": "engine/omnisim/systems/chainvalue.py"
+    },
+    {
+      "sha256": "A6FA974E4526663BCDF27DA3D23BD5459471BD36D1ABBAA83846BB1FE04BB289",
+      "path": "engine/omnisim/systems/combat_stub.py"
+    },
+    {
+      "sha256": "C2E9869E5171B7D4CE214CA5BC3C64ED56C7AA30D132E799C5A265CA098D8018",
+      "path": "engine/omnisim/systems/content_drops.py"
+    },
+    {
+      "sha256": "2ED350711EE434B25A891B76D2E4A45CBB658018C381B3BCF823395531F5E4E3",
+      "path": "engine/omnisim/systems/crops.py"
+    },
+    {
+      "sha256": "EDABC9167394E72988F17D3A56DAC48CA84476B87AD3B95EA142D58F6916CDE8",
+      "path": "engine/omnisim/systems/decision.py"
+    },
+    {
+      "sha256": "71833D82C5E44761C5B6937D872F2BE1E3820DC0944333807EF8BB5365DB9BE8",
+      "path": "engine/omnisim/systems/deriveddemand.py"
+    },
+    {
+      "sha256": "D5726578F41F25D6984B04DDD0AAFD81844BF363E6F02B0C2DB7538C7C33C845",
+      "path": "engine/omnisim/systems/desires.py"
+    },
+    {
+      "sha256": "7F7DE29D5BC29915A8A9D4A7E0C1C78C762DB2D4B47C612565FC292CEDAE7A0C",
+      "path": "engine/omnisim/systems/director.py"
+    },
+    {
+      "sha256": "44D223DB14FCF6D70B6E0497DA52E9064513D98CAD61D733B3595BBCE7ECCF2A",
+      "path": "engine/omnisim/systems/estate.py"
+    },
+    {
+      "sha256": "C93FF67714866A437D934CED0193C172445AF9636315F1F299A038267DBF101C",
+      "path": "engine/omnisim/systems/fishery.py"
+    },
+    {
+      "sha256": "AFFF3418A23A8ED8735D3122EC17AD6F8A314D0C927DC13717073499C5DA64BC",
+      "path": "engine/omnisim/systems/forage.py"
+    },
+    {
+      "sha256": "F2FED7BC25F7F61CFF2D65C88E09CEC1E10C4F1234B28A9258CFF2A3F82D1CAD",
+      "path": "engine/omnisim/systems/forageregrow.py"
+    },
+    {
+      "sha256": "0417BCCDA4225EDB530B684425878E19C96296DFA7830260E788EE9D187E7C82",
+      "path": "engine/omnisim/systems/haggle.py"
+    },
+    {
+      "sha256": "ED873B2348287CDF4366633F18BB408D771E1268A1B3BBBAB46657F6D006CF32",
+      "path": "engine/omnisim/systems/hungerfirst.py"
+    },
+    {
+      "sha256": "57E04B814A1C84D5609A50E42A37A8B761C8A60AC0488D5BF4565F2B896D8BD8",
+      "path": "engine/omnisim/systems/inputpriority.py"
+    },
+    {
+      "sha256": "28568293313BCB0114088C18A392AB71044F1BFB5B486F2F7D9B5B435247ADA5",
+      "path": "engine/omnisim/systems/land.py"
+    },
+    {
+      "sha256": "FA58DF8E9DDE09EDE60B63FA5AA5426471D0FE9BD70EE6A36A37EF61335E311D",
+      "path": "engine/omnisim/systems/ledger.py"
+    },
+    {
+      "sha256": "4ACF8C1D1320AE1E78BFCBF41DFD4CC6761DB577FF4C206DC6CF1E4261B984B4",
+      "path": "engine/omnisim/systems/lighting.py"
+    },
+    {
+      "sha256": "86DDEA6C655FF581AC9EA27E85EA6C88F6164C5DD943247FC909871E55162D83",
+      "path": "engine/omnisim/systems/localview.py"
+    },
+    {
+      "sha256": "E57E9D95ABA7F43E4170344E87CD0D9C604BA7756FEE6851DC2E0262331BD74B",
+      "path": "engine/omnisim/systems/mastery.py"
+    },
+    {
+      "sha256": "CBCC976B1696D2CD8909809DEF9EDAC9356C2E1EA1EC8FCE1D53CE972C64FA1C",
+      "path": "engine/omnisim/systems/memory.py"
+    },
+    {
+      "sha256": "7FC42D8E28FD9D0573A2F4642156BBC2F682434A6C275ED486331DEDA05495B7",
+      "path": "engine/omnisim/systems/metrics.py"
+    },
+    {
+      "sha256": "678100DF59D4DB193CC210A551E814A8A8E731AC49390989445D91C609B41295",
+      "path": "engine/omnisim/systems/mood.py"
+    },
+    {
+      "sha256": "AF241423B1B35B685FA89480A410D698A54C3F6CB5F0E982BD1473CAD434D67E",
+      "path": "engine/omnisim/systems/needs.py"
+    },
+    {
+      "sha256": "E46FA84CCFDD872BD38F01761380D15088FCC6F6EC74E59D09E28F830B4FF5CD",
+      "path": "engine/omnisim/systems/needs3.py"
+    },
+    {
+      "sha256": "30EDFEF7199F2730604486F11944F08C640ECB06F902A2A15BF4E127AA26C1CC",
+      "path": "engine/omnisim/systems/ownership.py"
+    },
+    {
+      "sha256": "A44CEE7553BB4ED1ACF7C8AB4F814B6D83D2889110EF755DC99996B4146B15EF",
+      "path": "engine/omnisim/systems/owninput.py"
+    },
+    {
+      "sha256": "E3509DFC8AB1F643731685FDE921F3E28BEDE2EF615FE16F6B9C950B07ED60C0",
+      "path": "engine/omnisim/systems/perks.py"
+    },
+    {
+      "sha256": "EBF5B8AF2C2546DEEC53F763BCD3A4C75CC66877212C176FCB94DD7CB99DA3CB",
+      "path": "engine/omnisim/systems/pricing.py"
+    },
+    {
+      "sha256": "72C7AEE8F4631BEE78E85EF92170A8E440D926B745567A753703CFEC6C1A3182",
+      "path": "engine/omnisim/systems/procurement.py"
+    },
+    {
+      "sha256": "D98C6F4708A83751B0D5B5A6FB924C94AE867391028DBE29967D38AB40A881CE",
+      "path": "engine/omnisim/systems/production.py"
+    },
+    {
+      "sha256": "4993BAAFD342F09DDAA636108822FD1680E599EF8037120601ACF0873EEE6C59",
+      "path": "engine/omnisim/systems/professions.py"
+    },
+    {
+      "sha256": "3A56B6A997F50DC423DC8BCA71BE2FCDEC9B1A71547D2B7EFBDC21362E985F1E",
+      "path": "engine/omnisim/systems/quest.py"
+    },
+    {
+      "sha256": "0C3CE504E6B75ED7F76708623A6721D40E3480A4147503C3B21CA7DA545506B3",
+      "path": "engine/omnisim/systems/realizedchain.py"
+    },
+    {
+      "sha256": "7CC84F06ED99BE0DB9E4F0ABD593D238E6B8B59E8A066EE7A463137B7C86FCB7",
+      "path": "engine/omnisim/systems/realizedtv.py"
+    },
+    {
+      "sha256": "BF795FFF5CE2B1583674F92DE730694E6F61126A91F46486FAF7108D45701DB6",
+      "path": "engine/omnisim/systems/recipebuy.py"
+    },
+    {
+      "sha256": "417B6063BCC9DAF5E06E9671A67F3E1D1B6D95018A4F9104B4CB5C72E59300D1",
+      "path": "engine/omnisim/systems/recipes.py"
+    },
+    {
+      "sha256": "92FDEC6A4C72896E69DCA9B687998E9C691DADF9E25765A79A4CDC3549746431",
+      "path": "engine/omnisim/systems/relationships.py"
+    },
+    {
+      "sha256": "84FFEC9196157AB9D1F30C0CEE4C624C80AED5C8205C8CFAF349949494D9569D",
+      "path": "engine/omnisim/systems/rot.py"
+    },
+    {
+      "sha256": "103F55AA73EFC10D603543129BE6029E80E7680CB495D93F8F6BD91C87CB4F78",
+      "path": "engine/omnisim/systems/scenario.py"
+    },
+    {
+      "sha256": "4E638AFB74BBAD157600CD00BCD4138E84DDE3F66E8F95093692AE6343D8898C",
+      "path": "engine/omnisim/systems/schedule.py"
+    },
+    {
+      "sha256": "06D0C8879B831F6800B2E487462EBE32D3EDEE52973990C925FBB192F64DC301",
+      "path": "engine/omnisim/systems/skills.py"
+    },
+    {
+      "sha256": "E153404D3F55194CEE29DD72EEF4F00DF60EB7ABA30397962088439EA4D1FFA0",
+      "path": "engine/omnisim/systems/tools.py"
+    },
+    {
+      "sha256": "08C10065F8279913F08DBBD92EA75B9D77085485796EB64A9C4CC8951C19E71D",
+      "path": "engine/omnisim/systems/valuation.py"
+    },
+    {
+      "sha256": "0733C9FE6D01EE43FF517C2966A3167B8D81D5C8C41C8C0FCD68F5C22CB1E99A",
+      "path": "engine/omnisim/systems/weather.py"
+    },
+    {
+      "sha256": "C9231A65F81E7AF6A3B5E37D40E9403FBF7647C7061B9DB784A0179C4904BFA3",
+      "path": "engine/omnisim/systems/workspaces.py"
+    },
+    {
+      "sha256": "918BF5ADBF0D30BF7D4598068E10E34959CFF15A96A95AA3F6B86F1C74D719DA",
+      "path": "engine/omnisim/ui/ascii_renderer.py"
+    },
+    {
+      "sha256": "F992CF3136DA3841FC8B71E8A505A0AA4F5E5A78E26F0408D90B2939B36A7737",
+      "path": "engine/omnisim/ui/diagnostic.py"
+    },
+    {
+      "sha256": "5C8698B2A25FACFB713E11DB544C64174CD90E8457008516A1DDC1C891203BB0",
+      "path": "engine/omnisim/ui/everrogue.py"
+    },
+    {
+      "sha256": "4CE7F0BCF3C1C62E64EDB8FCB6DDEBB6FF5B403BF507309FBC2CCDB47E41B294",
+      "path": "engine/omnisim/ui/input.py"
+    },
+    {
+      "sha256": "986BDF250943EC33B16E2B7BF637E791062AD170D276073477DB0F0626EF7558",
+      "path": "engine/omnisim/ui/kenney_1bit.py"
+    },
+    {
+      "sha256": "076FCD0A44F4F7637D5030C28BEB8C22318F3C40D0BA411B837E0942768397D3",
+      "path": "engine/omnisim/ui/overlay_renderer.py"
+    },
+    {
+      "sha256": "934EB07A61B7077FAA5AC2EE88EFCA36E9EE31F7CE174C1A1A5E5DE8934D597E",
+      "path": "engine/omnisim/ui/render_settings.py"
+    },
+    {
+      "sha256": "889FB6D373E03F52BA068399153AA6B6A95916C322D01A53AE17BA69F1358E19",
+      "path": "engine/omnisim/ui/renderer.py"
+    },
+    {
+      "sha256": "C809AF89DAA068DAE870637FE0EBC82046ABBF56C891B43D848E379D23DFB829",
+      "path": "engine/omnisim/ui/retro_days.py"
+    },
+    {
+      "sha256": "4683FFA960624960E7A2061B781B347C249A24ABF08862E6ABB3959EAF5F5A1F",
+      "path": "engine/omnisim/ui/sidebar.py"
+    },
+    {
+      "sha256": "5D41CBBC2D1FD58D238ED350B8A985F94F1D40400584DF286A3AB71A95DC1F5D",
+      "path": "engine/omnisim/ui/ui_renderer.py"
+    },
+    {
+      "sha256": "70406B3D5DABBA09E9B54F9F688490278CD3F968DDC1AC2B85B0D051C2F660B9",
+      "path": "engine/omnisim/ui/world_renderer.py"
+    },
+    {
+      "sha256": "AEBB9220ACFA041C5874CD2CB1F151A90A01345C1A471B084F7539CEDEE5EBC5",
+      "path": "engine/omnisim/web/__init__.py"
+    },
+    {
+      "sha256": "8D67269FB51F657B5EC749BC118056EA9BCE212A848DF29FB387F3D1A9B431AB",
+      "path": "engine/omnisim/web/server.py"
+    },
+    {
+      "sha256": "CBFCE855669C6B8919A2C8677349FB0A254D385990868239FB5AFF03FA08F7B2",
+      "path": "engine/omnisim/world/fov.py"
+    },
+    {
+      "sha256": "14A7E4A8E753E55302FC2D3AB40A7334FE82BF7990EFE358E19ACABEE95137E3",
+      "path": "engine/omnisim/world/map.py"
+    },
+    {
+      "sha256": "E348402A5881C5BE5A1F0564CEB0AA85DC0DC1A33E8B904B23272ADC5AA6BED0",
+      "path": "engine/omnisim/world/places.py"
+    },
+    {
+      "sha256": "C6121D70FB7419E7B8522C53E5FB8F3B89B2C1BDF30DD5F9AB9DEC9797381FB3",
+      "path": "engine/omnisim/world/tile.py"
+    },
+    {
+      "sha256": "B5DB734429825885DB25240074CBAE284D82329DE2FB3240CBE3816EA192F821",
+      "path": "engine/omnisim/world/worldgen_random_stub.py"
+    },
+    {
+      "sha256": "2BB7AF3FE4553C5843EDAEC454FBC56825C462D5BEC186214AB23157A4C0420B",
+      "path": "engine/omnisim/world/worldgen_scripted.py"
+    },
+    {
+      "sha256": "62780E72F659A34CA3ABFEAD8211023310E2053D81C3F2ADB427705A07FED05B",
+      "path": "tales_sim/clock.py"
+    },
+    {
+      "sha256": "937F83EDD86EB31F7DFC23ADC9402E12E517CC424F2AF195C33CD252026044A4",
+      "path": "tales_sim/freshness.py"
+    },
+    {
+      "sha256": "BB20C07967500CDF250E07E2D74D6CD9719ECD376CA69A792C55B47B09426CE9",
+      "path": "tales_sim/inventory.py"
+    },
+    {
+      "sha256": "5164A690F5BD7B79FE22A276BB0E662C7B4D31CB68F382D2F727CCD1EA3236A6",
+      "path": "tales_sim/materials.py"
+    },
+    {
+      "sha256": "D33CBF72808338FDB1B8F49EA23DEFFBE6EEA0494C8EEE20576705A166CD229E",
+      "path": "tales_sim/temperature.py"
+    }
+  ]
+}

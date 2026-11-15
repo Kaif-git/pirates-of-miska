@@ -1,0 +1,1 @@
+"""Thornhollow browser front door."""

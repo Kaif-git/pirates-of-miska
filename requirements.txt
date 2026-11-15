@@ -1,0 +1,4 @@
+tcod>=16
+numpy>=1.26
+PyYAML>=6
+Pillow>=10

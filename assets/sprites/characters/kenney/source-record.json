@@ -1,0 +1,39 @@
+{
+  "tile_id": 74,
+  "coordinate_id": "r01_c25",
+  "row": 1,
+  "column": 25,
+  "name": "wide_brim_hat_person__r01_c25",
+  "label": "wide brim hat person",
+  "category": "characters/people",
+  "kind": "sprite",
+  "label_source": "visual interpretation",
+  "width": 16,
+  "height": 16,
+  "empty": false,
+  "content_bbox": [
+    2,
+    1,
+    15,
+    15
+  ],
+  "duplicate_of_colored_transparent": null,
+  "spaced_rect": {
+    "x": 425,
+    "y": 17,
+    "width": 16,
+    "height": 16
+  },
+  "packed_rect": {
+    "x": 400,
+    "y": 16,
+    "width": 16,
+    "height": 16
+  },
+  "files": {
+    "colored_transparent": "sprites/colored_transparent/characters/people/wide_brim_hat_person__r01_c25.png",
+    "colored_opaque": "sprites/colored_opaque/characters/people/wide_brim_hat_person__r01_c25.png",
+    "monochrome_transparent": "sprites/monochrome_transparent/characters/people/wide_brim_hat_person__r01_c25.png",
+    "monochrome_opaque": "sprites/monochrome_opaque/characters/people/wide_brim_hat_person__r01_c25.png"
+  }
+}
