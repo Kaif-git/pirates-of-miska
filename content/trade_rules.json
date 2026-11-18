@@ -1,0 +1,31 @@
+{
+  "fees": {
+    "delivery_order": 2,
+    "coastal_passage": 15
+  },
+  "markets": {
+    "initial_merchant_funds": 1500,
+    "scarcity_reference_stock": 10,
+    "scarcity_base_percent": 100,
+    "scarcity_per_unit_percent": 3,
+    "scarcity_min_percent": 80,
+    "scarcity_max_percent": 150,
+    "regional_factor_reference_percent": 100,
+    "price_divisor": 1000000,
+    "buy_price_percent": 120,
+    "sell_price_percent": 65,
+    "export_restock_cap_multiplier": 2,
+    "export_restock_minimum_per_day": 1,
+    "export_restock_divisor": 3,
+    "import_consumption_per_day": 2
+  },
+  "contracts": {
+    "duration_days": 4,
+    "max_active": 2,
+    "reward_base_price_multiplier": 2,
+    "passage_allowance": 15,
+    "reputation_per_delivery": 1,
+    "max_reputation": 1000000,
+    "ledger_limit": 256
+  }
+}

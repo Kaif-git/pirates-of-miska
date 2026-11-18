@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "goods": [
+    {"id":"grain","name":"Grain","base_price_silver":4,"unit_mass_kg_milli":1000,"unit_volume_l_milli":1400,"perishable":true,"category":"food","uses":["population_consumption","ship_provisions"],"consumption_per_1000_per_day_milli":1800},
+    {"id":"fish","name":"Fish","base_price_silver":5,"unit_mass_kg_milli":1000,"unit_volume_l_milli":1200,"perishable":true,"category":"food","uses":["population_consumption","ship_provisions"],"consumption_per_1000_per_day_milli":900},
+    {"id":"water","name":"Fresh Water","base_price_silver":2,"unit_mass_kg_milli":1000,"unit_volume_l_milli":1000,"perishable":false,"category":"provision","uses":["population_consumption","ship_provisions"],"consumption_per_1000_per_day_milli":3000},
+    {"id":"rum","name":"Rum","base_price_silver":8,"unit_mass_kg_milli":1000,"unit_volume_l_milli":1200,"perishable":false,"category":"provision","uses":["crew_morale","trade"],"consumption_per_1000_per_day_milli":150},
+    {"id":"timber","name":"Ship Timber","base_price_silver":12,"unit_mass_kg_milli":12000,"unit_volume_l_milli":18000,"perishable":false,"category":"material","uses":["ship_repair","shipbuilding"],"consumption_per_1000_per_day_milli":0},
+    {"id":"iron","name":"Iron","base_price_silver":18,"unit_mass_kg_milli":8000,"unit_volume_l_milli":3500,"perishable":false,"category":"material","uses":["ship_repair","shipbuilding","tools"],"consumption_per_1000_per_day_milli":0},
+    {"id":"sailcloth","name":"Sailcloth","base_price_silver":14,"unit_mass_kg_milli":3000,"unit_volume_l_milli":7000,"perishable":false,"category":"material","uses":["ship_repair","shipbuilding"],"consumption_per_1000_per_day_milli":0},
+    {"id":"powder","name":"Black Powder","base_price_silver":20,"unit_mass_kg_milli":1000,"unit_volume_l_milli":800,"perishable":false,"category":"arms","uses":["ship_gunnery","trade"],"consumption_per_1000_per_day_milli":0},
+    {"id":"medicine","name":"Medicine","base_price_silver":25,"unit_mass_kg_milli":500,"unit_volume_l_milli":600,"perishable":true,"category":"medicine","uses":["injury_treatment","disease_treatment"],"consumption_per_1000_per_day_milli":25},
+    {"id":"tools","name":"Tools","base_price_silver":16,"unit_mass_kg_milli":2000,"unit_volume_l_milli":2500,"perishable":false,"category":"material","uses":["ship_repair","production"],"consumption_per_1000_per_day_milli":0},
+    {"id":"luxury_goods","name":"Luxury Goods","base_price_silver":32,"unit_mass_kg_milli":1500,"unit_volume_l_milli":3000,"perishable":false,"category":"luxury","uses":["trade","faction_status"],"consumption_per_1000_per_day_milli":40},
+    {"id":"spices","name":"Spices","base_price_silver":22,"unit_mass_kg_milli":500,"unit_volume_l_milli":700,"perishable":false,"category":"luxury","uses":["trade","food_preservation"],"consumption_per_1000_per_day_milli":15},
+    {"id":"contraband","name":"Contraband","base_price_silver":28,"unit_mass_kg_milli":1000,"unit_volume_l_milli":1500,"perishable":false,"category":"contraband","uses":["black_market_trade"],"consumption_per_1000_per_day_milli":0},
+    {"id":"rare_relics","name":"Rare Relics","base_price_silver":120,"unit_mass_kg_milli":2000,"unit_volume_l_milli":2500,"perishable":false,"category":"relic","uses":["finite_treasure","trade"],"consumption_per_1000_per_day_milli":0},
+    {"id":"charcoal","name":"Charcoal","base_price_silver":6,"unit_mass_kg_milli":2000,"unit_volume_l_milli":4000,"perishable":false,"category":"material","uses":["smelting","heating"],"consumption_per_1000_per_day_milli":50}
+  ]
+}

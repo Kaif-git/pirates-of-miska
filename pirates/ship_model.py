@@ -2,7 +2,7 @@
 
 This foundation deliberately does not claim to calculate seaworthiness yet.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections import deque
 
 
@@ -49,11 +49,32 @@ class ShipModel:
     def __init__(self):
         self._components = {}
         self._slots = {}
+        self._component_view = None
+        self._navigation_geometry = None
+        self._deck_geometry_cache = {}
         self.next_id = 1
 
     @property
     def components(self):
-        return tuple(self._components[key] for key in sorted(self._components))
+        if self._component_view is None:
+            self._component_view = tuple(self._components[key] for key in sorted(self._components))
+        return self._component_view
+
+    def navigation_geometry(self):
+        """Return cached immutable floor/wall/door/stair coordinate sets."""
+        if self._navigation_geometry is None:
+            by_kind = {kind: set() for kind in ("floor", "wall", "door", "stair")}
+            for component in self.components:
+                if component.kind in by_kind:
+                    by_kind[component.kind].add((component.x, component.y, component.z))
+            self._navigation_geometry = {kind: frozenset(positions)
+                                         for kind, positions in by_kind.items()}
+        return dict(self._navigation_geometry)
+
+    def _invalidate_geometry(self):
+        self._component_view = None
+        self._navigation_geometry = None
+        self._deck_geometry_cache.clear()
 
     def place(self, x, y, z, kind, material="oak"):
         component = Component(self.next_id, x, y, z, kind, material)
@@ -74,11 +95,23 @@ class ShipModel:
             raise ValueError("Overlapping component or duplicate identity")
         self._components[component.id] = component
         self._slots[key] = component.id
+        self._invalidate_geometry()
 
     def remove(self, component_id):
         component = self._components.pop(component_id)
         del self._slots[(component.x, component.y, component.z, SLOTS[component.kind])]
+        self._invalidate_geometry()
         return component
+
+    def set_condition(self, component_id, condition):
+        if type(condition) is not int or not 0 <= condition <= 100:
+            raise ValueError("Component condition must be between 0 and 100")
+        component = self._components[component_id]
+        self._components[component_id] = replace(component, condition=condition)
+        # The ordered component view contains the old immutable object, but
+        # topology and deck footprints are unchanged by condition wear.
+        self._component_view = None
+        return self._components[component_id]
 
     def at(self, x, y, z):
         return tuple(c for c in self.components if (c.x, c.y, c.z) == (x, y, z))
@@ -99,10 +132,15 @@ class ShipModel:
         """
         if type(z) is not int:
             raise ValueError("Deck elevation must be an integer")
+        cached = self._deck_geometry_cache.get(z)
+        if cached is not None:
+            return dict(cached)
         floors = {(c.x, c.y) for c in self.components if c.z == z and c.kind == "floor"}
         if not floors:
-            return {"deck": z, "tiles": 0, "bounds": None, "perimeter_edges": (),
-                    "perimeter": 0, "components": 0, "holes": 0}
+            result = {"deck": z, "tiles": 0, "bounds": None, "perimeter_edges": (),
+                      "perimeter": 0, "components": 0, "holes": 0}
+            self._deck_geometry_cache[z] = result
+            return dict(result)
         xmin, xmax = min(x for x, _ in floors), max(x for x, _ in floors)
         ymin, ymax = min(y for _, y in floors), max(y for _, y in floors)
         directions = ((0, -1), (1, 0), (0, 1), (-1, 0))
@@ -139,9 +177,11 @@ class ShipModel:
                         todo.append(at)
             if not touches_bounds:
                 holes += 1
-        return {"deck": z, "tiles": len(floors), "bounds": (xmin, ymin, xmax, ymax),
-                "perimeter_edges": edges, "perimeter": len(edges),
-                "components": component_count, "holes": holes}
+        result = {"deck": z, "tiles": len(floors), "bounds": (xmin, ymin, xmax, ymax),
+                  "perimeter_edges": edges, "perimeter": len(edges),
+                  "components": component_count, "holes": holes}
+        self._deck_geometry_cache[z] = result
+        return dict(result)
 
     def snapshot(self):
         from dataclasses import asdict

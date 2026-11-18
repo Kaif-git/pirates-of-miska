@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "silver_unit": "silver",
+  "population_classes": ["laborers","artisans","merchants","sailors","officials","criminals"],
+  "market_rules": {
+    "target_stock_per_1000_population": 20,
+    "price_smoothing_percent": 20,
+    "price_elasticity_milli": 500,
+    "minimum_price_multiplier_milli": 500,
+    "maximum_price_multiplier_milli": 3000,
+    "starting_treasury_min_silver": 3000,
+    "starting_silver_per_resident": 6,
+    "tax_basis_points_per_day": 8,
+    "garrison_upkeep_silver_per_10_strength_per_day": 1,
+    "port_upkeep_silver_per_day": 1,
+    "unrest_shortage_increase_per_1000_people": 2,
+    "unrest_recovery_per_day": 1,
+    "blockade_productivity_permille": 500,
+    "famine_threshold_days": 5
+  },
+  "profiles": {
+    "farming": {
+      "population_classes_basis_points":{"laborers":5200,"artisans":1400,"merchants":900,"sailors":1100,"officials":900,"criminals":500},
+      "produces_per_day":{"grain":32,"water":10,"timber":3,"fish":2},
+      "services":["repair","tavern","bounty_office"],"harbor_tier":2,"garrison_strength":12,
+      "stockpile":{"grain":900,"water":500,"fish":120,"timber":90,"iron":35,"medicine":20,"tools":25,"rum":40}
+    },
+    "fishing": {
+      "population_classes_basis_points":{"laborers":4400,"artisans":1500,"merchants":1100,"sailors":1900,"officials":700,"criminals":400},
+      "produces_per_day":{"fish":38,"water":14,"grain":6,"rum":2},
+      "services":["repair","tavern"],"harbor_tier":2,"garrison_strength":8,
+      "stockpile":{"fish":1000,"water":700,"grain":180,"timber":60,"iron":25,"medicine":15,"tools":20,"rum":70}
+    },
+    "port": {
+      "population_classes_basis_points":{"laborers":2800,"artisans":1700,"merchants":2300,"sailors":1900,"officials":800,"criminals":500},
+      "produces_per_day":{"fish":8,"water":12,"tools":2},
+      "services":["repair","shipyard","tavern","black_market","bounty_office","infirmary"],"harbor_tier":4,"garrison_strength":36,
+      "stockpile":{"grain":500,"fish":500,"water":800,"rum":250,"timber":240,"iron":170,"sailcloth":120,"powder":90,"medicine":80,"tools":140,"luxury_goods":70,"spices":60,"contraband":20}
+    },
+    "forestry": {
+      "population_classes_basis_points":{"laborers":5700,"artisans":1300,"merchants":800,"sailors":800,"officials":900,"criminals":500},
+      "produces_per_day":{"timber":28,"grain":8,"water":8,"charcoal":5},
+      "services":["repair","tavern"],"harbor_tier":1,"garrison_strength":8,
+      "stockpile":{"timber":700,"grain":250,"water":350,"charcoal":180,"iron":20,"medicine":15,"tools":30,"fish":80}
+    },
+    "mining": {
+      "population_classes_basis_points":{"laborers":6100,"artisans":1500,"merchants":700,"sailors":500,"officials":800,"criminals":400},
+      "produces_per_day":{"iron":22,"charcoal":18,"tools":3,"water":6},
+      "services":["repair","tavern","black_market"],"harbor_tier":1,"garrison_strength":14,
+      "stockpile":{"iron":550,"charcoal":400,"tools":90,"grain":200,"water":300,"timber":45,"medicine":12,"contraband":35}
+    },
+    "spice_trade": {
+      "population_classes_basis_points":{"laborers":3600,"artisans":1600,"merchants":2100,"sailors":1600,"officials":700,"criminals":400},
+      "produces_per_day":{"spices":16,"grain":8,"water":7,"fish":4},
+      "services":["repair","tavern","black_market"],"harbor_tier":2,"garrison_strength":10,
+      "stockpile":{"spices":420,"grain":220,"water":300,"fish":180,"rum":90,"timber":50,"iron":30,"contraband":35,"luxury_goods":25}
+    },
+    "backwater": {
+      "population_classes_basis_points":{"laborers":5900,"artisans":1200,"merchants":500,"sailors":1100,"officials":600,"criminals":700},
+      "produces_per_day":{"fish":5,"water":4,"grain":2},
+      "services":["tavern"],"harbor_tier":0,"garrison_strength":3,
+      "stockpile":{"fish":100,"water":90,"grain":60,"timber":15,"iron":5,"medicine":2,"rum":15,"contraband":12}
+    },
+    "relic_isle": {
+      "population_classes_basis_points":{"laborers":4800,"artisans":1200,"merchants":700,"sailors":1500,"officials":500,"criminals":1300},
+      "produces_per_day":{"rare_relics":0,"fish":3,"water":3},
+      "services":["black_market"],"harbor_tier":0,"garrison_strength":2,
+      "stockpile":{"rare_relics":2,"fish":55,"water":50,"grain":20,"contraband":15,"medicine":1}
+    }
+  },
+  "islands": [
+    {"island_id":"isle_001","population":18000,"profile":"farming","treasury_silver":18000,"unrest":12,"prosperity":72,"famine_level":0,"tax_basis_points_per_day":8},
+    {"island_id":"isle_002","population":4200,"profile":"fishing","treasury_silver":5200,"unrest":15,"prosperity":55,"famine_level":0,"tax_basis_points_per_day":5},
+    {"island_id":"isle_003","population":6800,"profile":"fishing","treasury_silver":7400,"unrest":10,"prosperity":64,"famine_level":0,"tax_basis_points_per_day":6},
+    {"island_id":"isle_004","population":9100,"profile":"forestry","treasury_silver":6800,"unrest":18,"prosperity":51,"famine_level":0,"tax_basis_points_per_day":5},
+    {"island_id":"isle_005","population":3500,"profile":"farming","treasury_silver":4300,"unrest":9,"prosperity":61,"famine_level":0,"tax_basis_points_per_day":5},
+    {"island_id":"isle_006","population":12500,"profile":"port","treasury_silver":36000,"unrest":16,"prosperity":78,"famine_level":0,"tax_basis_points_per_day":12},
+    {"island_id":"isle_007","population":15000,"profile":"mining","treasury_silver":22000,"unrest":24,"prosperity":66,"famine_level":0,"tax_basis_points_per_day":9},
+    {"island_id":"isle_008","population":7300,"profile":"mining","treasury_silver":8500,"unrest":31,"prosperity":48,"famine_level":0,"tax_basis_points_per_day":7},
+    {"island_id":"isle_009","population":5600,"profile":"spice_trade","treasury_silver":9200,"unrest":19,"prosperity":60,"famine_level":0,"tax_basis_points_per_day":7},
+    {"island_id":"isle_010","population":2800,"profile":"backwater","treasury_silver":3100,"unrest":28,"prosperity":42,"famine_level":0,"tax_basis_points_per_day":4},
+    {"island_id":"isle_011","population":8900,"profile":"forestry","treasury_silver":9700,"unrest":26,"prosperity":52,"famine_level":0,"tax_basis_points_per_day":6},
+    {"island_id":"isle_012","population":11300,"profile":"port","treasury_silver":24000,"unrest":21,"prosperity":70,"famine_level":0,"tax_basis_points_per_day":10},
+    {"island_id":"isle_013","population":2400,"profile":"fishing","treasury_silver":3900,"unrest":22,"prosperity":43,"famine_level":0,"tax_basis_points_per_day":4},
+    {"island_id":"isle_014","population":6700,"profile":"spice_trade","treasury_silver":11500,"unrest":17,"prosperity":67,"famine_level":0,"tax_basis_points_per_day":7},
+    {"island_id":"isle_015","population":9700,"profile":"port","treasury_silver":28000,"unrest":14,"prosperity":75,"famine_level":0,"tax_basis_points_per_day":11},
+    {"island_id":"isle_016","population":3800,"profile":"backwater","treasury_silver":4200,"unrest":25,"prosperity":40,"famine_level":0,"tax_basis_points_per_day":4},
+    {"island_id":"isle_017","population":5200,"profile":"fishing","treasury_silver":6600,"unrest":13,"prosperity":58,"famine_level":0,"tax_basis_points_per_day":6},
+    {"island_id":"isle_018","population":8400,"profile":"forestry","treasury_silver":9200,"unrest":18,"prosperity":54,"famine_level":0,"tax_basis_points_per_day":6},
+    {"island_id":"isle_019","population":21000,"profile":"port","treasury_silver":48000,"unrest":18,"prosperity":82,"famine_level":0,"tax_basis_points_per_day":13},
+    {"island_id":"isle_020","population":7400,"profile":"farming","treasury_silver":8100,"unrest":14,"prosperity":63,"famine_level":0,"tax_basis_points_per_day":7},
+    {"island_id":"isle_021","population":6300,"profile":"spice_trade","treasury_silver":9400,"unrest":23,"prosperity":57,"famine_level":0,"tax_basis_points_per_day":7},
+    {"island_id":"isle_022","population":4100,"profile":"fishing","treasury_silver":5500,"unrest":17,"prosperity":52,"famine_level":0,"tax_basis_points_per_day":5},
+    {"island_id":"isle_023","population":14600,"profile":"farming","treasury_silver":16600,"unrest":11,"prosperity":74,"famine_level":0,"tax_basis_points_per_day":9},
+    {"island_id":"isle_024","population":5900,"profile":"backwater","treasury_silver":6200,"unrest":29,"prosperity":45,"famine_level":0,"tax_basis_points_per_day":5},
+    {"island_id":"isle_025","population":1800,"profile":"backwater","treasury_silver":900,"unrest":38,"prosperity":28,"famine_level":12,"tax_basis_points_per_day":1},
+    {"island_id":"isle_026","population":900,"profile":"relic_isle","treasury_silver":350,"unrest":47,"prosperity":21,"famine_level":18,"tax_basis_points_per_day":0},
+    {"island_id":"isle_027","population":600,"profile":"backwater","treasury_silver":250,"unrest":51,"prosperity":18,"famine_level":22,"tax_basis_points_per_day":0},
+    {"island_id":"isle_028","population":3200,"profile":"mining","treasury_silver":1700,"unrest":35,"prosperity":32,"famine_level":8,"tax_basis_points_per_day":2},
+    {"island_id":"isle_029","population":1300,"profile":"relic_isle","treasury_silver":650,"unrest":43,"prosperity":24,"famine_level":14,"tax_basis_points_per_day":0},
+    {"island_id":"isle_030","population":750,"profile":"backwater","treasury_silver":300,"unrest":49,"prosperity":19,"famine_level":20,"tax_basis_points_per_day":0},
+    {"island_id":"isle_031","population":520,"profile":"backwater","treasury_silver":280,"unrest":48,"prosperity":20,"famine_level":18,"tax_basis_points_per_day":0},
+    {"island_id":"isle_032","population":1100,"profile":"relic_isle","treasury_silver":500,"unrest":44,"prosperity":25,"famine_level":13,"tax_basis_points_per_day":0},
+    {"island_id":"isle_033","population":680,"profile":"backwater","treasury_silver":320,"unrest":50,"prosperity":18,"famine_level":21,"tax_basis_points_per_day":0},
+    {"island_id":"isle_034","population":1450,"profile":"fishing","treasury_silver":720,"unrest":41,"prosperity":31,"famine_level":9,"tax_basis_points_per_day":1},
+    {"island_id":"isle_035","population":750,"profile":"backwater","treasury_silver":300,"unrest":49,"prosperity":19,"famine_level":20,"tax_basis_points_per_day":0},
+    {"island_id":"isle_036","population":2300,"profile":"mining","treasury_silver":1450,"unrest":36,"prosperity":35,"famine_level":7,"tax_basis_points_per_day":2},
+    {"island_id":"isle_037","population":1350,"profile":"fishing","treasury_silver":650,"unrest":43,"prosperity":27,"famine_level":14,"tax_basis_points_per_day":0},
+    {"island_id":"isle_038","population":610,"profile":"relic_isle","treasury_silver":300,"unrest":51,"prosperity":17,"famine_level":22,"tax_basis_points_per_day":0},
+    {"island_id":"isle_039","population":1750,"profile":"backwater","treasury_silver":800,"unrest":40,"prosperity":30,"famine_level":10,"tax_basis_points_per_day":1},
+    {"island_id":"isle_040","population":480,"profile":"backwater","treasury_silver":200,"unrest":53,"prosperity":15,"famine_level":25,"tax_basis_points_per_day":0}
+  ],
+  "initial_merchants": [
+    {"name":"Aven Sable","island_id":"isle_001","silver":12000,"capacity_milli":100000,"travel_cost_silver_per_day":6,"risk_cost_basis_points":3500,"risk_belief_ppm":2500},
+    {"name":"Tarin Quill","island_id":"isle_006","silver":9000,"capacity_milli":80000,"travel_cost_silver_per_day":8,"risk_cost_basis_points":4000,"risk_belief_ppm":3000},
+    {"name":"Milo Vey","island_id":"isle_014","silver":7000,"capacity_milli":70000,"travel_cost_silver_per_day":7,"risk_cost_basis_points":4000,"risk_belief_ppm":3000}
+  ]
+}

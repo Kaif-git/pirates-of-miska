@@ -1,0 +1,4861 @@
+{
+  "seed": 57,
+  "years": [
+    {
+      "alive_characters_by_tier_and_role": {
+        "LEGEND:captain": 3,
+        "MAJOR:gunner": 1,
+        "MAJOR:merchant": 2,
+        "MAJOR:official": 2,
+        "MAJOR:sailor": 1,
+        "MAJOR:shipwright": 1,
+        "MAJOR:surgeon": 1,
+        "MINOR:captain": 10,
+        "MINOR:civilian": 10,
+        "MINOR:cook": 10,
+        "MINOR:gunner": 10,
+        "MINOR:merchant": 10,
+        "MINOR:navigator": 10,
+        "MINOR:official": 10,
+        "MINOR:sailor": 10,
+        "MINOR:shipwright": 10,
+        "MINOR:surgeon": 10
+      },
+      "alive_ships_by_owner_type": {
+        "faction_fleet": 2,
+        "marine": 0,
+        "merchant": 1,
+        "pirate": 0,
+        "privateer": 0,
+        "unknown": 0
+      },
+      "births_or_recruits": 20,
+      "deaths_by_cause": {
+        "old_age": 1
+      },
+      "decision_scoring": {
+        "candidates_scored_by_action": {
+          "hunt_rival": 618,
+          "pursue_dream_step": 4400,
+          "rest_with_crew": 75,
+          "trade_run": 74
+        },
+        "executed_by_action_and_tier": {
+          "hunt_rival": {
+            "LEGEND": 522
+          },
+          "pursue_dream_step": {
+            "LEGEND": 544,
+            "MAJOR": 3284,
+            "MINOR": 21
+          },
+          "rest_with_crew": {
+            "LEGEND": 16
+          },
+          "trade_run": {
+            "LEGEND": 13
+          }
+        },
+        "scored_by_tier": {
+          "LEGEND": 1095,
+          "MAJOR": 3284,
+          "MINOR": 21
+        },
+        "scored_decisions": 4400
+      },
+      "events_by_class": {
+        "narrative": 6538,
+        "routine": 22854,
+        "structural": 7,
+        "unclassified": 0
+      },
+      "lifecycle_diagnostics": [
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_001998",
+          "reason": "terminal_state:missing",
+          "tick": 576
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_002001",
+          "reason": "terminal_state:missing",
+          "tick": 576
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_002993",
+          "reason": "terminal_state:missing",
+          "tick": 840
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003233",
+          "reason": "terminal_state:missing",
+          "tick": 912
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003311",
+          "reason": "terminal_state:missing",
+          "tick": 936
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003386",
+          "reason": "terminal_state:missing",
+          "tick": 960
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003471",
+          "reason": "terminal_state:missing",
+          "tick": 984
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003549",
+          "reason": "terminal_state:missing",
+          "tick": 1008
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003629",
+          "reason": "terminal_state:missing",
+          "tick": 1032
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003702",
+          "reason": "terminal_state:missing",
+          "tick": 1056
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003777",
+          "reason": "terminal_state:missing",
+          "tick": 1080
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003857",
+          "reason": "terminal_state:missing",
+          "tick": 1104
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_003935",
+          "reason": "terminal_state:missing",
+          "tick": 1128
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_003937",
+          "reason": "terminal_state:missing",
+          "tick": 1128
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004010",
+          "reason": "terminal_state:missing",
+          "tick": 1152
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004012",
+          "reason": "terminal_state:missing",
+          "tick": 1152
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004083",
+          "reason": "terminal_state:missing",
+          "tick": 1176
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004086",
+          "reason": "terminal_state:missing",
+          "tick": 1176
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004165",
+          "reason": "terminal_state:missing",
+          "tick": 1200
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004167",
+          "reason": "terminal_state:missing",
+          "tick": 1200
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004246",
+          "reason": "terminal_state:missing",
+          "tick": 1224
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004248",
+          "reason": "terminal_state:missing",
+          "tick": 1224
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004317",
+          "reason": "terminal_state:missing",
+          "tick": 1248
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004319",
+          "reason": "terminal_state:missing",
+          "tick": 1248
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004394",
+          "reason": "terminal_state:missing",
+          "tick": 1272
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004396",
+          "reason": "terminal_state:missing",
+          "tick": 1272
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004466",
+          "reason": "terminal_state:missing",
+          "tick": 1296
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004468",
+          "reason": "terminal_state:missing",
+          "tick": 1296
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004538",
+          "reason": "terminal_state:missing",
+          "tick": 1320
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004540",
+          "reason": "terminal_state:missing",
+          "tick": 1320
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004623",
+          "reason": "terminal_state:missing",
+          "tick": 1344
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004625",
+          "reason": "terminal_state:missing",
+          "tick": 1344
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004706",
+          "reason": "terminal_state:missing",
+          "tick": 1368
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004708",
+          "reason": "terminal_state:missing",
+          "tick": 1368
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_004823",
+          "reason": "terminal_state:missing",
+          "tick": 1392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004825",
+          "reason": "terminal_state:missing",
+          "tick": 1392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004827",
+          "reason": "terminal_state:missing",
+          "tick": 1392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_004900",
+          "reason": "terminal_state:missing",
+          "tick": 1416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004902",
+          "reason": "terminal_state:missing",
+          "tick": 1416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004904",
+          "reason": "terminal_state:missing",
+          "tick": 1416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004906",
+          "reason": "terminal_state:missing",
+          "tick": 1416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_004974",
+          "reason": "terminal_state:missing",
+          "tick": 1440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_004976",
+          "reason": "terminal_state:missing",
+          "tick": 1440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_004978",
+          "reason": "terminal_state:missing",
+          "tick": 1440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005069",
+          "reason": "terminal_state:missing",
+          "tick": 1464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005071",
+          "reason": "terminal_state:missing",
+          "tick": 1464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005073",
+          "reason": "terminal_state:missing",
+          "tick": 1464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005151",
+          "reason": "terminal_state:missing",
+          "tick": 1488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005153",
+          "reason": "terminal_state:missing",
+          "tick": 1488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005155",
+          "reason": "terminal_state:missing",
+          "tick": 1488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005227",
+          "reason": "terminal_state:missing",
+          "tick": 1512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005229",
+          "reason": "terminal_state:missing",
+          "tick": 1512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005231",
+          "reason": "terminal_state:missing",
+          "tick": 1512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005312",
+          "reason": "terminal_state:missing",
+          "tick": 1536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005314",
+          "reason": "terminal_state:missing",
+          "tick": 1536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005316",
+          "reason": "terminal_state:missing",
+          "tick": 1536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005390",
+          "reason": "terminal_state:missing",
+          "tick": 1560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005392",
+          "reason": "terminal_state:missing",
+          "tick": 1560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005394",
+          "reason": "terminal_state:missing",
+          "tick": 1560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005478",
+          "reason": "terminal_state:missing",
+          "tick": 1584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005480",
+          "reason": "terminal_state:missing",
+          "tick": 1584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005482",
+          "reason": "terminal_state:missing",
+          "tick": 1584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005556",
+          "reason": "terminal_state:missing",
+          "tick": 1608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005558",
+          "reason": "terminal_state:missing",
+          "tick": 1608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005561",
+          "reason": "terminal_state:missing",
+          "tick": 1608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005638",
+          "reason": "terminal_state:missing",
+          "tick": 1632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005640",
+          "reason": "terminal_state:missing",
+          "tick": 1632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005642",
+          "reason": "terminal_state:missing",
+          "tick": 1632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005720",
+          "reason": "terminal_state:missing",
+          "tick": 1656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005722",
+          "reason": "terminal_state:missing",
+          "tick": 1656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005724",
+          "reason": "terminal_state:missing",
+          "tick": 1656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005800",
+          "reason": "terminal_state:missing",
+          "tick": 1680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005802",
+          "reason": "terminal_state:missing",
+          "tick": 1680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005804",
+          "reason": "terminal_state:missing",
+          "tick": 1680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005888",
+          "reason": "terminal_state:missing",
+          "tick": 1704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005890",
+          "reason": "terminal_state:missing",
+          "tick": 1704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005892",
+          "reason": "terminal_state:missing",
+          "tick": 1704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_005965",
+          "reason": "terminal_state:missing",
+          "tick": 1728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_005967",
+          "reason": "terminal_state:missing",
+          "tick": 1728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_005969",
+          "reason": "terminal_state:missing",
+          "tick": 1728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006042",
+          "reason": "terminal_state:missing",
+          "tick": 1752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006044",
+          "reason": "terminal_state:missing",
+          "tick": 1752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006046",
+          "reason": "terminal_state:missing",
+          "tick": 1752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006122",
+          "reason": "terminal_state:missing",
+          "tick": 1776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006124",
+          "reason": "terminal_state:missing",
+          "tick": 1776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006126",
+          "reason": "terminal_state:missing",
+          "tick": 1776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006197",
+          "reason": "terminal_state:missing",
+          "tick": 1800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006199",
+          "reason": "terminal_state:missing",
+          "tick": 1800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006201",
+          "reason": "terminal_state:missing",
+          "tick": 1800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006284",
+          "reason": "terminal_state:missing",
+          "tick": 1824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006286",
+          "reason": "terminal_state:missing",
+          "tick": 1824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006288",
+          "reason": "terminal_state:missing",
+          "tick": 1824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006362",
+          "reason": "terminal_state:missing",
+          "tick": 1848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006364",
+          "reason": "terminal_state:missing",
+          "tick": 1848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006366",
+          "reason": "terminal_state:missing",
+          "tick": 1848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006441",
+          "reason": "terminal_state:missing",
+          "tick": 1872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006444",
+          "reason": "terminal_state:missing",
+          "tick": 1872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006446",
+          "reason": "terminal_state:missing",
+          "tick": 1872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006530",
+          "reason": "terminal_state:missing",
+          "tick": 1896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006532",
+          "reason": "terminal_state:missing",
+          "tick": 1896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006534",
+          "reason": "terminal_state:missing",
+          "tick": 1896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006608",
+          "reason": "terminal_state:missing",
+          "tick": 1920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006610",
+          "reason": "terminal_state:missing",
+          "tick": 1920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006612",
+          "reason": "terminal_state:missing",
+          "tick": 1920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006688",
+          "reason": "terminal_state:missing",
+          "tick": 1944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006690",
+          "reason": "terminal_state:missing",
+          "tick": 1944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006692",
+          "reason": "terminal_state:missing",
+          "tick": 1944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006768",
+          "reason": "terminal_state:missing",
+          "tick": 1968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006770",
+          "reason": "terminal_state:missing",
+          "tick": 1968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006772",
+          "reason": "terminal_state:missing",
+          "tick": 1968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006890",
+          "reason": "terminal_state:missing",
+          "tick": 1992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000002",
+          "event_id": "event_006894",
+          "reason": "terminal_state:missing",
+          "tick": 1992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006895",
+          "reason": "terminal_state:missing",
+          "tick": 1992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_006970",
+          "reason": "terminal_state:missing",
+          "tick": 2016
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_006974",
+          "reason": "terminal_state:missing",
+          "tick": 2016
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007051",
+          "reason": "terminal_state:missing",
+          "tick": 2040
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007055",
+          "reason": "terminal_state:missing",
+          "tick": 2040
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007138",
+          "reason": "terminal_state:missing",
+          "tick": 2064
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007142",
+          "reason": "terminal_state:missing",
+          "tick": 2064
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007216",
+          "reason": "terminal_state:missing",
+          "tick": 2088
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007220",
+          "reason": "terminal_state:missing",
+          "tick": 2088
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007290",
+          "reason": "terminal_state:missing",
+          "tick": 2112
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007294",
+          "reason": "terminal_state:missing",
+          "tick": 2112
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007368",
+          "reason": "terminal_state:missing",
+          "tick": 2136
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007372",
+          "reason": "terminal_state:missing",
+          "tick": 2136
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007447",
+          "reason": "terminal_state:missing",
+          "tick": 2160
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007451",
+          "reason": "terminal_state:missing",
+          "tick": 2160
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007534",
+          "reason": "terminal_state:missing",
+          "tick": 2184
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007538",
+          "reason": "terminal_state:missing",
+          "tick": 2184
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007616",
+          "reason": "terminal_state:missing",
+          "tick": 2208
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007620",
+          "reason": "terminal_state:missing",
+          "tick": 2208
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007692",
+          "reason": "terminal_state:missing",
+          "tick": 2232
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007696",
+          "reason": "terminal_state:missing",
+          "tick": 2232
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007772",
+          "reason": "terminal_state:missing",
+          "tick": 2256
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007776",
+          "reason": "terminal_state:missing",
+          "tick": 2256
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007849",
+          "reason": "terminal_state:missing",
+          "tick": 2280
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007853",
+          "reason": "terminal_state:missing",
+          "tick": 2280
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_007932",
+          "reason": "terminal_state:missing",
+          "tick": 2304
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_007937",
+          "reason": "terminal_state:missing",
+          "tick": 2304
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008019",
+          "reason": "terminal_state:missing",
+          "tick": 2328
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008023",
+          "reason": "terminal_state:missing",
+          "tick": 2328
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008097",
+          "reason": "terminal_state:missing",
+          "tick": 2352
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008101",
+          "reason": "terminal_state:missing",
+          "tick": 2352
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008177",
+          "reason": "terminal_state:missing",
+          "tick": 2376
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008181",
+          "reason": "terminal_state:missing",
+          "tick": 2376
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008259",
+          "reason": "terminal_state:missing",
+          "tick": 2400
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008263",
+          "reason": "terminal_state:missing",
+          "tick": 2400
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008344",
+          "reason": "terminal_state:missing",
+          "tick": 2424
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008348",
+          "reason": "terminal_state:missing",
+          "tick": 2424
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008422",
+          "reason": "terminal_state:missing",
+          "tick": 2448
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008426",
+          "reason": "terminal_state:missing",
+          "tick": 2448
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008501",
+          "reason": "terminal_state:missing",
+          "tick": 2472
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008505",
+          "reason": "terminal_state:missing",
+          "tick": 2472
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008579",
+          "reason": "terminal_state:missing",
+          "tick": 2496
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008583",
+          "reason": "terminal_state:missing",
+          "tick": 2496
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008661",
+          "reason": "terminal_state:missing",
+          "tick": 2520
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008665",
+          "reason": "terminal_state:missing",
+          "tick": 2520
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008754",
+          "reason": "terminal_state:missing",
+          "tick": 2544
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008758",
+          "reason": "terminal_state:missing",
+          "tick": 2544
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008835",
+          "reason": "terminal_state:missing",
+          "tick": 2568
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008839",
+          "reason": "terminal_state:missing",
+          "tick": 2568
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008914",
+          "reason": "terminal_state:missing",
+          "tick": 2592
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008918",
+          "reason": "terminal_state:missing",
+          "tick": 2592
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_008992",
+          "reason": "terminal_state:missing",
+          "tick": 2616
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_008996",
+          "reason": "terminal_state:missing",
+          "tick": 2616
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009073",
+          "reason": "terminal_state:missing",
+          "tick": 2640
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009077",
+          "reason": "terminal_state:missing",
+          "tick": 2640
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009159",
+          "reason": "terminal_state:missing",
+          "tick": 2664
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009163",
+          "reason": "terminal_state:missing",
+          "tick": 2664
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009237",
+          "reason": "terminal_state:missing",
+          "tick": 2688
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009241",
+          "reason": "terminal_state:missing",
+          "tick": 2688
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009318",
+          "reason": "terminal_state:missing",
+          "tick": 2712
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009322",
+          "reason": "terminal_state:missing",
+          "tick": 2712
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009395",
+          "reason": "terminal_state:missing",
+          "tick": 2736
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009399",
+          "reason": "terminal_state:missing",
+          "tick": 2736
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009472",
+          "reason": "terminal_state:missing",
+          "tick": 2760
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009476",
+          "reason": "terminal_state:missing",
+          "tick": 2760
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009553",
+          "reason": "terminal_state:missing",
+          "tick": 2784
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009557",
+          "reason": "terminal_state:missing",
+          "tick": 2784
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009630",
+          "reason": "terminal_state:missing",
+          "tick": 2808
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009634",
+          "reason": "terminal_state:missing",
+          "tick": 2808
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009707",
+          "reason": "terminal_state:missing",
+          "tick": 2832
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009711",
+          "reason": "terminal_state:missing",
+          "tick": 2832
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009784",
+          "reason": "terminal_state:missing",
+          "tick": 2856
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009788",
+          "reason": "terminal_state:missing",
+          "tick": 2856
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009865",
+          "reason": "terminal_state:missing",
+          "tick": 2880
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009869",
+          "reason": "terminal_state:missing",
+          "tick": 2880
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_009960",
+          "reason": "terminal_state:missing",
+          "tick": 2904
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_009964",
+          "reason": "terminal_state:missing",
+          "tick": 2904
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010038",
+          "reason": "terminal_state:missing",
+          "tick": 2928
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010042",
+          "reason": "terminal_state:missing",
+          "tick": 2928
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010115",
+          "reason": "terminal_state:missing",
+          "tick": 2952
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010119",
+          "reason": "terminal_state:missing",
+          "tick": 2952
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010192",
+          "reason": "terminal_state:missing",
+          "tick": 2976
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010196",
+          "reason": "terminal_state:missing",
+          "tick": 2976
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010268",
+          "reason": "terminal_state:missing",
+          "tick": 3000
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010272",
+          "reason": "terminal_state:missing",
+          "tick": 3000
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010354",
+          "reason": "terminal_state:missing",
+          "tick": 3024
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010358",
+          "reason": "terminal_state:missing",
+          "tick": 3024
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010437",
+          "reason": "terminal_state:missing",
+          "tick": 3048
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010441",
+          "reason": "terminal_state:missing",
+          "tick": 3048
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010512",
+          "reason": "terminal_state:missing",
+          "tick": 3072
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010516",
+          "reason": "terminal_state:missing",
+          "tick": 3072
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010594",
+          "reason": "terminal_state:missing",
+          "tick": 3096
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010598",
+          "reason": "terminal_state:missing",
+          "tick": 3096
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010673",
+          "reason": "terminal_state:missing",
+          "tick": 3120
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010677",
+          "reason": "terminal_state:missing",
+          "tick": 3120
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010756",
+          "reason": "terminal_state:missing",
+          "tick": 3144
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010760",
+          "reason": "terminal_state:missing",
+          "tick": 3144
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010837",
+          "reason": "terminal_state:missing",
+          "tick": 3168
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010841",
+          "reason": "terminal_state:missing",
+          "tick": 3168
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_010917",
+          "reason": "terminal_state:missing",
+          "tick": 3192
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_010921",
+          "reason": "terminal_state:missing",
+          "tick": 3192
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011000",
+          "reason": "terminal_state:missing",
+          "tick": 3216
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011004",
+          "reason": "terminal_state:missing",
+          "tick": 3216
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011078",
+          "reason": "terminal_state:missing",
+          "tick": 3240
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011082",
+          "reason": "terminal_state:missing",
+          "tick": 3240
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011166",
+          "reason": "terminal_state:missing",
+          "tick": 3264
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011170",
+          "reason": "terminal_state:missing",
+          "tick": 3264
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011246",
+          "reason": "terminal_state:missing",
+          "tick": 3288
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011250",
+          "reason": "terminal_state:missing",
+          "tick": 3288
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011326",
+          "reason": "terminal_state:missing",
+          "tick": 3312
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011330",
+          "reason": "terminal_state:missing",
+          "tick": 3312
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011401",
+          "reason": "terminal_state:missing",
+          "tick": 3336
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011405",
+          "reason": "terminal_state:missing",
+          "tick": 3336
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011477",
+          "reason": "terminal_state:missing",
+          "tick": 3360
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011481",
+          "reason": "terminal_state:missing",
+          "tick": 3360
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011567",
+          "reason": "terminal_state:missing",
+          "tick": 3384
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011571",
+          "reason": "terminal_state:missing",
+          "tick": 3384
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011644",
+          "reason": "terminal_state:missing",
+          "tick": 3408
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011648",
+          "reason": "terminal_state:missing",
+          "tick": 3408
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011722",
+          "reason": "terminal_state:missing",
+          "tick": 3432
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011726",
+          "reason": "terminal_state:missing",
+          "tick": 3432
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011799",
+          "reason": "terminal_state:missing",
+          "tick": 3456
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011803",
+          "reason": "terminal_state:missing",
+          "tick": 3456
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011874",
+          "reason": "terminal_state:missing",
+          "tick": 3480
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011878",
+          "reason": "terminal_state:missing",
+          "tick": 3480
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_011956",
+          "reason": "terminal_state:missing",
+          "tick": 3504
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_011960",
+          "reason": "terminal_state:missing",
+          "tick": 3504
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012035",
+          "reason": "terminal_state:missing",
+          "tick": 3528
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012039",
+          "reason": "terminal_state:missing",
+          "tick": 3528
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012117",
+          "reason": "terminal_state:missing",
+          "tick": 3552
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012121",
+          "reason": "terminal_state:missing",
+          "tick": 3552
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012197",
+          "reason": "terminal_state:missing",
+          "tick": 3576
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012201",
+          "reason": "terminal_state:missing",
+          "tick": 3576
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012273",
+          "reason": "terminal_state:missing",
+          "tick": 3600
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012277",
+          "reason": "terminal_state:missing",
+          "tick": 3600
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012364",
+          "reason": "terminal_state:missing",
+          "tick": 3624
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012368",
+          "reason": "terminal_state:missing",
+          "tick": 3624
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012441",
+          "reason": "terminal_state:missing",
+          "tick": 3648
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012445",
+          "reason": "terminal_state:missing",
+          "tick": 3648
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012518",
+          "reason": "terminal_state:missing",
+          "tick": 3672
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012522",
+          "reason": "terminal_state:missing",
+          "tick": 3672
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012596",
+          "reason": "terminal_state:missing",
+          "tick": 3696
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012600",
+          "reason": "terminal_state:missing",
+          "tick": 3696
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012680",
+          "reason": "terminal_state:missing",
+          "tick": 3720
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012684",
+          "reason": "terminal_state:missing",
+          "tick": 3720
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012767",
+          "reason": "terminal_state:missing",
+          "tick": 3744
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012771",
+          "reason": "terminal_state:missing",
+          "tick": 3744
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012845",
+          "reason": "terminal_state:missing",
+          "tick": 3768
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012849",
+          "reason": "terminal_state:missing",
+          "tick": 3768
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_012924",
+          "reason": "terminal_state:missing",
+          "tick": 3792
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_012928",
+          "reason": "terminal_state:missing",
+          "tick": 3792
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013003",
+          "reason": "terminal_state:missing",
+          "tick": 3816
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013007",
+          "reason": "terminal_state:missing",
+          "tick": 3816
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013085",
+          "reason": "terminal_state:missing",
+          "tick": 3840
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013089",
+          "reason": "terminal_state:missing",
+          "tick": 3840
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013170",
+          "reason": "terminal_state:missing",
+          "tick": 3864
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013174",
+          "reason": "terminal_state:missing",
+          "tick": 3864
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013256",
+          "reason": "terminal_state:missing",
+          "tick": 3888
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013260",
+          "reason": "terminal_state:missing",
+          "tick": 3888
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013336",
+          "reason": "terminal_state:missing",
+          "tick": 3912
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013340",
+          "reason": "terminal_state:missing",
+          "tick": 3912
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013417",
+          "reason": "terminal_state:missing",
+          "tick": 3936
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013421",
+          "reason": "terminal_state:missing",
+          "tick": 3936
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013496",
+          "reason": "terminal_state:missing",
+          "tick": 3960
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013500",
+          "reason": "terminal_state:missing",
+          "tick": 3960
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013588",
+          "reason": "terminal_state:missing",
+          "tick": 3984
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013592",
+          "reason": "terminal_state:missing",
+          "tick": 3984
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013668",
+          "reason": "terminal_state:missing",
+          "tick": 4008
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013672",
+          "reason": "terminal_state:missing",
+          "tick": 4008
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013750",
+          "reason": "terminal_state:missing",
+          "tick": 4032
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013754",
+          "reason": "terminal_state:missing",
+          "tick": 4032
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013831",
+          "reason": "terminal_state:missing",
+          "tick": 4056
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013835",
+          "reason": "terminal_state:missing",
+          "tick": 4056
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013911",
+          "reason": "terminal_state:missing",
+          "tick": 4080
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_013915",
+          "reason": "terminal_state:missing",
+          "tick": 4080
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_013999",
+          "reason": "terminal_state:missing",
+          "tick": 4104
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014003",
+          "reason": "terminal_state:missing",
+          "tick": 4104
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014080",
+          "reason": "terminal_state:missing",
+          "tick": 4128
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014084",
+          "reason": "terminal_state:missing",
+          "tick": 4128
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014159",
+          "reason": "terminal_state:missing",
+          "tick": 4152
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014163",
+          "reason": "terminal_state:missing",
+          "tick": 4152
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014242",
+          "reason": "terminal_state:missing",
+          "tick": 4176
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014246",
+          "reason": "terminal_state:missing",
+          "tick": 4176
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014322",
+          "reason": "terminal_state:missing",
+          "tick": 4200
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014326",
+          "reason": "terminal_state:missing",
+          "tick": 4200
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014414",
+          "reason": "terminal_state:missing",
+          "tick": 4224
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014418",
+          "reason": "terminal_state:missing",
+          "tick": 4224
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014495",
+          "reason": "terminal_state:missing",
+          "tick": 4248
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014499",
+          "reason": "terminal_state:missing",
+          "tick": 4248
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014572",
+          "reason": "terminal_state:missing",
+          "tick": 4272
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014576",
+          "reason": "terminal_state:missing",
+          "tick": 4272
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014649",
+          "reason": "terminal_state:missing",
+          "tick": 4296
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014653",
+          "reason": "terminal_state:missing",
+          "tick": 4296
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014725",
+          "reason": "terminal_state:missing",
+          "tick": 4320
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014729",
+          "reason": "terminal_state:missing",
+          "tick": 4320
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014819",
+          "reason": "terminal_state:missing",
+          "tick": 4344
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014823",
+          "reason": "terminal_state:missing",
+          "tick": 4344
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014896",
+          "reason": "terminal_state:missing",
+          "tick": 4368
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014900",
+          "reason": "terminal_state:missing",
+          "tick": 4368
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_014979",
+          "reason": "terminal_state:missing",
+          "tick": 4392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_014983",
+          "reason": "terminal_state:missing",
+          "tick": 4392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015055",
+          "reason": "terminal_state:missing",
+          "tick": 4416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015059",
+          "reason": "terminal_state:missing",
+          "tick": 4416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015133",
+          "reason": "terminal_state:missing",
+          "tick": 4440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015137",
+          "reason": "terminal_state:missing",
+          "tick": 4440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015219",
+          "reason": "terminal_state:missing",
+          "tick": 4464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015223",
+          "reason": "terminal_state:missing",
+          "tick": 4464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015295",
+          "reason": "terminal_state:missing",
+          "tick": 4488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015299",
+          "reason": "terminal_state:missing",
+          "tick": 4488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015375",
+          "reason": "terminal_state:missing",
+          "tick": 4512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015379",
+          "reason": "terminal_state:missing",
+          "tick": 4512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015453",
+          "reason": "terminal_state:missing",
+          "tick": 4536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015457",
+          "reason": "terminal_state:missing",
+          "tick": 4536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015536",
+          "reason": "terminal_state:missing",
+          "tick": 4560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015540",
+          "reason": "terminal_state:missing",
+          "tick": 4560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015621",
+          "reason": "terminal_state:missing",
+          "tick": 4584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015625",
+          "reason": "terminal_state:missing",
+          "tick": 4584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015700",
+          "reason": "terminal_state:missing",
+          "tick": 4608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015704",
+          "reason": "terminal_state:missing",
+          "tick": 4608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015777",
+          "reason": "terminal_state:missing",
+          "tick": 4632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015781",
+          "reason": "terminal_state:missing",
+          "tick": 4632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015856",
+          "reason": "terminal_state:missing",
+          "tick": 4656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015860",
+          "reason": "terminal_state:missing",
+          "tick": 4656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_015933",
+          "reason": "terminal_state:missing",
+          "tick": 4680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_015937",
+          "reason": "terminal_state:missing",
+          "tick": 4680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016017",
+          "reason": "terminal_state:missing",
+          "tick": 4704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016021",
+          "reason": "terminal_state:missing",
+          "tick": 4704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016098",
+          "reason": "terminal_state:missing",
+          "tick": 4728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016102",
+          "reason": "terminal_state:missing",
+          "tick": 4728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016177",
+          "reason": "terminal_state:missing",
+          "tick": 4752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016181",
+          "reason": "terminal_state:missing",
+          "tick": 4752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016254",
+          "reason": "terminal_state:missing",
+          "tick": 4776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016258",
+          "reason": "terminal_state:missing",
+          "tick": 4776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016332",
+          "reason": "terminal_state:missing",
+          "tick": 4800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016336",
+          "reason": "terminal_state:missing",
+          "tick": 4800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016410",
+          "reason": "terminal_state:missing",
+          "tick": 4824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016414",
+          "reason": "terminal_state:missing",
+          "tick": 4824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016488",
+          "reason": "terminal_state:missing",
+          "tick": 4848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016492",
+          "reason": "terminal_state:missing",
+          "tick": 4848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016567",
+          "reason": "terminal_state:missing",
+          "tick": 4872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016571",
+          "reason": "terminal_state:missing",
+          "tick": 4872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016648",
+          "reason": "terminal_state:missing",
+          "tick": 4896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016652",
+          "reason": "terminal_state:missing",
+          "tick": 4896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016727",
+          "reason": "terminal_state:missing",
+          "tick": 4920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016731",
+          "reason": "terminal_state:missing",
+          "tick": 4920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016807",
+          "reason": "terminal_state:missing",
+          "tick": 4944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016811",
+          "reason": "terminal_state:missing",
+          "tick": 4944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016882",
+          "reason": "terminal_state:missing",
+          "tick": 4968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016886",
+          "reason": "terminal_state:missing",
+          "tick": 4968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_016961",
+          "reason": "terminal_state:missing",
+          "tick": 4992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_016965",
+          "reason": "terminal_state:missing",
+          "tick": 4992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017040",
+          "reason": "terminal_state:missing",
+          "tick": 5016
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017044",
+          "reason": "terminal_state:missing",
+          "tick": 5016
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017113",
+          "reason": "terminal_state:missing",
+          "tick": 5040
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017117",
+          "reason": "terminal_state:missing",
+          "tick": 5040
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017200",
+          "reason": "terminal_state:missing",
+          "tick": 5064
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017204",
+          "reason": "terminal_state:missing",
+          "tick": 5064
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017278",
+          "reason": "terminal_state:missing",
+          "tick": 5088
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017282",
+          "reason": "terminal_state:missing",
+          "tick": 5088
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017356",
+          "reason": "terminal_state:missing",
+          "tick": 5112
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017360",
+          "reason": "terminal_state:missing",
+          "tick": 5112
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017429",
+          "reason": "terminal_state:missing",
+          "tick": 5136
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017433",
+          "reason": "terminal_state:missing",
+          "tick": 5136
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017507",
+          "reason": "terminal_state:missing",
+          "tick": 5160
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017511",
+          "reason": "terminal_state:missing",
+          "tick": 5160
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017585",
+          "reason": "terminal_state:missing",
+          "tick": 5184
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017589",
+          "reason": "terminal_state:missing",
+          "tick": 5184
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017662",
+          "reason": "terminal_state:missing",
+          "tick": 5208
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017666",
+          "reason": "terminal_state:missing",
+          "tick": 5208
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017745",
+          "reason": "terminal_state:missing",
+          "tick": 5232
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017749",
+          "reason": "terminal_state:missing",
+          "tick": 5232
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017824",
+          "reason": "terminal_state:missing",
+          "tick": 5256
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017828",
+          "reason": "terminal_state:missing",
+          "tick": 5256
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017902",
+          "reason": "terminal_state:missing",
+          "tick": 5280
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017906",
+          "reason": "terminal_state:missing",
+          "tick": 5280
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_017978",
+          "reason": "terminal_state:missing",
+          "tick": 5304
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_017982",
+          "reason": "terminal_state:missing",
+          "tick": 5304
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018055",
+          "reason": "terminal_state:missing",
+          "tick": 5328
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018059",
+          "reason": "terminal_state:missing",
+          "tick": 5328
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018130",
+          "reason": "terminal_state:missing",
+          "tick": 5352
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018134",
+          "reason": "terminal_state:missing",
+          "tick": 5352
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018209",
+          "reason": "terminal_state:missing",
+          "tick": 5376
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018213",
+          "reason": "terminal_state:missing",
+          "tick": 5376
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018292",
+          "reason": "terminal_state:missing",
+          "tick": 5400
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018296",
+          "reason": "terminal_state:missing",
+          "tick": 5400
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018372",
+          "reason": "terminal_state:missing",
+          "tick": 5424
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018376",
+          "reason": "terminal_state:missing",
+          "tick": 5424
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018448",
+          "reason": "terminal_state:missing",
+          "tick": 5448
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018452",
+          "reason": "terminal_state:missing",
+          "tick": 5448
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018524",
+          "reason": "terminal_state:missing",
+          "tick": 5472
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018528",
+          "reason": "terminal_state:missing",
+          "tick": 5472
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018603",
+          "reason": "terminal_state:missing",
+          "tick": 5496
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018607",
+          "reason": "terminal_state:missing",
+          "tick": 5496
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018680",
+          "reason": "terminal_state:missing",
+          "tick": 5520
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018684",
+          "reason": "terminal_state:missing",
+          "tick": 5520
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018759",
+          "reason": "terminal_state:missing",
+          "tick": 5544
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018763",
+          "reason": "terminal_state:missing",
+          "tick": 5544
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018843",
+          "reason": "terminal_state:missing",
+          "tick": 5568
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018847",
+          "reason": "terminal_state:missing",
+          "tick": 5568
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_018919",
+          "reason": "terminal_state:missing",
+          "tick": 5592
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_018923",
+          "reason": "terminal_state:missing",
+          "tick": 5592
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019000",
+          "reason": "terminal_state:missing",
+          "tick": 5616
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019004",
+          "reason": "terminal_state:missing",
+          "tick": 5616
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019077",
+          "reason": "terminal_state:missing",
+          "tick": 5640
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019081",
+          "reason": "terminal_state:missing",
+          "tick": 5640
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019156",
+          "reason": "terminal_state:missing",
+          "tick": 5664
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019160",
+          "reason": "terminal_state:missing",
+          "tick": 5664
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019231",
+          "reason": "terminal_state:missing",
+          "tick": 5688
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019235",
+          "reason": "terminal_state:missing",
+          "tick": 5688
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019309",
+          "reason": "terminal_state:missing",
+          "tick": 5712
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019313",
+          "reason": "terminal_state:missing",
+          "tick": 5712
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019394",
+          "reason": "terminal_state:missing",
+          "tick": 5736
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019398",
+          "reason": "terminal_state:missing",
+          "tick": 5736
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019472",
+          "reason": "terminal_state:missing",
+          "tick": 5760
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019476",
+          "reason": "terminal_state:missing",
+          "tick": 5760
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019551",
+          "reason": "terminal_state:missing",
+          "tick": 5784
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019555",
+          "reason": "terminal_state:missing",
+          "tick": 5784
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019628",
+          "reason": "terminal_state:missing",
+          "tick": 5808
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019632",
+          "reason": "terminal_state:missing",
+          "tick": 5808
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019708",
+          "reason": "terminal_state:missing",
+          "tick": 5832
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019712",
+          "reason": "terminal_state:missing",
+          "tick": 5832
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019785",
+          "reason": "terminal_state:missing",
+          "tick": 5856
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019789",
+          "reason": "terminal_state:missing",
+          "tick": 5856
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019863",
+          "reason": "terminal_state:missing",
+          "tick": 5880
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019867",
+          "reason": "terminal_state:missing",
+          "tick": 5880
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_019943",
+          "reason": "terminal_state:missing",
+          "tick": 5904
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_019947",
+          "reason": "terminal_state:missing",
+          "tick": 5904
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020022",
+          "reason": "terminal_state:missing",
+          "tick": 5928
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020026",
+          "reason": "terminal_state:missing",
+          "tick": 5928
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020098",
+          "reason": "terminal_state:missing",
+          "tick": 5952
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020102",
+          "reason": "terminal_state:missing",
+          "tick": 5952
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020176",
+          "reason": "terminal_state:missing",
+          "tick": 5976
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020180",
+          "reason": "terminal_state:missing",
+          "tick": 5976
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020249",
+          "reason": "terminal_state:missing",
+          "tick": 6000
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020253",
+          "reason": "terminal_state:missing",
+          "tick": 6000
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020326",
+          "reason": "terminal_state:missing",
+          "tick": 6024
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020330",
+          "reason": "terminal_state:missing",
+          "tick": 6024
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020404",
+          "reason": "terminal_state:missing",
+          "tick": 6048
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020408",
+          "reason": "terminal_state:missing",
+          "tick": 6048
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020486",
+          "reason": "terminal_state:missing",
+          "tick": 6072
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020490",
+          "reason": "terminal_state:missing",
+          "tick": 6072
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020563",
+          "reason": "terminal_state:missing",
+          "tick": 6096
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020567",
+          "reason": "terminal_state:missing",
+          "tick": 6096
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020640",
+          "reason": "terminal_state:missing",
+          "tick": 6120
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020644",
+          "reason": "terminal_state:missing",
+          "tick": 6120
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020722",
+          "reason": "terminal_state:missing",
+          "tick": 6144
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020726",
+          "reason": "terminal_state:missing",
+          "tick": 6144
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020798",
+          "reason": "terminal_state:missing",
+          "tick": 6168
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020802",
+          "reason": "terminal_state:missing",
+          "tick": 6168
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020876",
+          "reason": "terminal_state:missing",
+          "tick": 6192
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020880",
+          "reason": "terminal_state:missing",
+          "tick": 6192
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_020954",
+          "reason": "terminal_state:missing",
+          "tick": 6216
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_020958",
+          "reason": "terminal_state:missing",
+          "tick": 6216
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021038",
+          "reason": "terminal_state:missing",
+          "tick": 6240
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021042",
+          "reason": "terminal_state:missing",
+          "tick": 6240
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021115",
+          "reason": "terminal_state:missing",
+          "tick": 6264
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021119",
+          "reason": "terminal_state:missing",
+          "tick": 6264
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021198",
+          "reason": "terminal_state:missing",
+          "tick": 6288
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021202",
+          "reason": "terminal_state:missing",
+          "tick": 6288
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021276",
+          "reason": "terminal_state:missing",
+          "tick": 6312
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021280",
+          "reason": "terminal_state:missing",
+          "tick": 6312
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021357",
+          "reason": "terminal_state:missing",
+          "tick": 6336
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021361",
+          "reason": "terminal_state:missing",
+          "tick": 6336
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021435",
+          "reason": "terminal_state:missing",
+          "tick": 6360
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021439",
+          "reason": "terminal_state:missing",
+          "tick": 6360
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021514",
+          "reason": "terminal_state:missing",
+          "tick": 6384
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021518",
+          "reason": "terminal_state:missing",
+          "tick": 6384
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021597",
+          "reason": "terminal_state:missing",
+          "tick": 6408
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021601",
+          "reason": "terminal_state:missing",
+          "tick": 6408
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021676",
+          "reason": "terminal_state:missing",
+          "tick": 6432
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021680",
+          "reason": "terminal_state:missing",
+          "tick": 6432
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021753",
+          "reason": "terminal_state:missing",
+          "tick": 6456
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021757",
+          "reason": "terminal_state:missing",
+          "tick": 6456
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021831",
+          "reason": "terminal_state:missing",
+          "tick": 6480
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021835",
+          "reason": "terminal_state:missing",
+          "tick": 6480
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021909",
+          "reason": "terminal_state:missing",
+          "tick": 6504
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021913",
+          "reason": "terminal_state:missing",
+          "tick": 6504
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_021988",
+          "reason": "terminal_state:missing",
+          "tick": 6528
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_021992",
+          "reason": "terminal_state:missing",
+          "tick": 6528
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022065",
+          "reason": "terminal_state:missing",
+          "tick": 6552
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022069",
+          "reason": "terminal_state:missing",
+          "tick": 6552
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022144",
+          "reason": "terminal_state:missing",
+          "tick": 6576
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022148",
+          "reason": "terminal_state:missing",
+          "tick": 6576
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022221",
+          "reason": "terminal_state:missing",
+          "tick": 6600
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022225",
+          "reason": "terminal_state:missing",
+          "tick": 6600
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022297",
+          "reason": "terminal_state:missing",
+          "tick": 6624
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022301",
+          "reason": "terminal_state:missing",
+          "tick": 6624
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022377",
+          "reason": "terminal_state:missing",
+          "tick": 6648
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022381",
+          "reason": "terminal_state:missing",
+          "tick": 6648
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022453",
+          "reason": "terminal_state:missing",
+          "tick": 6672
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022457",
+          "reason": "terminal_state:missing",
+          "tick": 6672
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022532",
+          "reason": "terminal_state:missing",
+          "tick": 6696
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022536",
+          "reason": "terminal_state:missing",
+          "tick": 6696
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022610",
+          "reason": "terminal_state:missing",
+          "tick": 6720
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022614",
+          "reason": "terminal_state:missing",
+          "tick": 6720
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022694",
+          "reason": "terminal_state:missing",
+          "tick": 6744
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022698",
+          "reason": "terminal_state:missing",
+          "tick": 6744
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022774",
+          "reason": "terminal_state:missing",
+          "tick": 6768
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022778",
+          "reason": "terminal_state:missing",
+          "tick": 6768
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022854",
+          "reason": "terminal_state:missing",
+          "tick": 6792
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022858",
+          "reason": "terminal_state:missing",
+          "tick": 6792
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_022931",
+          "reason": "terminal_state:missing",
+          "tick": 6816
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_022935",
+          "reason": "terminal_state:missing",
+          "tick": 6816
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023006",
+          "reason": "terminal_state:missing",
+          "tick": 6840
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023010",
+          "reason": "terminal_state:missing",
+          "tick": 6840
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023088",
+          "reason": "terminal_state:missing",
+          "tick": 6864
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023092",
+          "reason": "terminal_state:missing",
+          "tick": 6864
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023165",
+          "reason": "terminal_state:missing",
+          "tick": 6888
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023169",
+          "reason": "terminal_state:missing",
+          "tick": 6888
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023248",
+          "reason": "terminal_state:missing",
+          "tick": 6912
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023252",
+          "reason": "terminal_state:missing",
+          "tick": 6912
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023328",
+          "reason": "terminal_state:missing",
+          "tick": 6936
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023332",
+          "reason": "terminal_state:missing",
+          "tick": 6936
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023409",
+          "reason": "terminal_state:missing",
+          "tick": 6960
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023413",
+          "reason": "terminal_state:missing",
+          "tick": 6960
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023487",
+          "reason": "terminal_state:missing",
+          "tick": 6984
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023491",
+          "reason": "terminal_state:missing",
+          "tick": 6984
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023570",
+          "reason": "terminal_state:missing",
+          "tick": 7008
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023574",
+          "reason": "terminal_state:missing",
+          "tick": 7008
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023647",
+          "reason": "terminal_state:missing",
+          "tick": 7032
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023651",
+          "reason": "terminal_state:missing",
+          "tick": 7032
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023725",
+          "reason": "terminal_state:missing",
+          "tick": 7056
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023729",
+          "reason": "terminal_state:missing",
+          "tick": 7056
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023809",
+          "reason": "terminal_state:missing",
+          "tick": 7080
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023813",
+          "reason": "terminal_state:missing",
+          "tick": 7080
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023892",
+          "reason": "terminal_state:missing",
+          "tick": 7104
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023896",
+          "reason": "terminal_state:missing",
+          "tick": 7104
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_023972",
+          "reason": "terminal_state:missing",
+          "tick": 7128
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_023976",
+          "reason": "terminal_state:missing",
+          "tick": 7128
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024053",
+          "reason": "terminal_state:missing",
+          "tick": 7152
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024057",
+          "reason": "terminal_state:missing",
+          "tick": 7152
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024131",
+          "reason": "terminal_state:missing",
+          "tick": 7176
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024135",
+          "reason": "terminal_state:missing",
+          "tick": 7176
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024208",
+          "reason": "terminal_state:missing",
+          "tick": 7200
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024212",
+          "reason": "terminal_state:missing",
+          "tick": 7200
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024287",
+          "reason": "terminal_state:missing",
+          "tick": 7224
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024291",
+          "reason": "terminal_state:missing",
+          "tick": 7224
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024372",
+          "reason": "terminal_state:missing",
+          "tick": 7248
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024376",
+          "reason": "terminal_state:missing",
+          "tick": 7248
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024448",
+          "reason": "terminal_state:missing",
+          "tick": 7272
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024452",
+          "reason": "terminal_state:missing",
+          "tick": 7272
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024527",
+          "reason": "terminal_state:missing",
+          "tick": 7296
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024531",
+          "reason": "terminal_state:missing",
+          "tick": 7296
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024602",
+          "reason": "terminal_state:missing",
+          "tick": 7320
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024606",
+          "reason": "terminal_state:missing",
+          "tick": 7320
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024675",
+          "reason": "terminal_state:missing",
+          "tick": 7344
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024679",
+          "reason": "terminal_state:missing",
+          "tick": 7344
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024754",
+          "reason": "terminal_state:missing",
+          "tick": 7368
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024758",
+          "reason": "terminal_state:missing",
+          "tick": 7368
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024831",
+          "reason": "terminal_state:missing",
+          "tick": 7392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024835",
+          "reason": "terminal_state:missing",
+          "tick": 7392
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024912",
+          "reason": "terminal_state:missing",
+          "tick": 7416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024916",
+          "reason": "terminal_state:missing",
+          "tick": 7416
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_024992",
+          "reason": "terminal_state:missing",
+          "tick": 7440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_024996",
+          "reason": "terminal_state:missing",
+          "tick": 7440
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025070",
+          "reason": "terminal_state:missing",
+          "tick": 7464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025074",
+          "reason": "terminal_state:missing",
+          "tick": 7464
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025146",
+          "reason": "terminal_state:missing",
+          "tick": 7488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025150",
+          "reason": "terminal_state:missing",
+          "tick": 7488
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025221",
+          "reason": "terminal_state:missing",
+          "tick": 7512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025225",
+          "reason": "terminal_state:missing",
+          "tick": 7512
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025299",
+          "reason": "terminal_state:missing",
+          "tick": 7536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025303",
+          "reason": "terminal_state:missing",
+          "tick": 7536
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025376",
+          "reason": "terminal_state:missing",
+          "tick": 7560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025380",
+          "reason": "terminal_state:missing",
+          "tick": 7560
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025463",
+          "reason": "terminal_state:missing",
+          "tick": 7584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025467",
+          "reason": "terminal_state:missing",
+          "tick": 7584
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025541",
+          "reason": "terminal_state:missing",
+          "tick": 7608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025545",
+          "reason": "terminal_state:missing",
+          "tick": 7608
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025621",
+          "reason": "terminal_state:missing",
+          "tick": 7632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025625",
+          "reason": "terminal_state:missing",
+          "tick": 7632
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025699",
+          "reason": "terminal_state:missing",
+          "tick": 7656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025703",
+          "reason": "terminal_state:missing",
+          "tick": 7656
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025775",
+          "reason": "terminal_state:missing",
+          "tick": 7680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025779",
+          "reason": "terminal_state:missing",
+          "tick": 7680
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025852",
+          "reason": "terminal_state:missing",
+          "tick": 7704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025856",
+          "reason": "terminal_state:missing",
+          "tick": 7704
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_025929",
+          "reason": "terminal_state:missing",
+          "tick": 7728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_025933",
+          "reason": "terminal_state:missing",
+          "tick": 7728
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026008",
+          "reason": "terminal_state:missing",
+          "tick": 7752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026012",
+          "reason": "terminal_state:missing",
+          "tick": 7752
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026087",
+          "reason": "terminal_state:missing",
+          "tick": 7776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026091",
+          "reason": "terminal_state:missing",
+          "tick": 7776
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026167",
+          "reason": "terminal_state:missing",
+          "tick": 7800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026171",
+          "reason": "terminal_state:missing",
+          "tick": 7800
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026242",
+          "reason": "terminal_state:missing",
+          "tick": 7824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026246",
+          "reason": "terminal_state:missing",
+          "tick": 7824
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026323",
+          "reason": "terminal_state:missing",
+          "tick": 7848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026327",
+          "reason": "terminal_state:missing",
+          "tick": 7848
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026401",
+          "reason": "terminal_state:missing",
+          "tick": 7872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026405",
+          "reason": "terminal_state:missing",
+          "tick": 7872
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026478",
+          "reason": "terminal_state:missing",
+          "tick": 7896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026482",
+          "reason": "terminal_state:missing",
+          "tick": 7896
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026559",
+          "reason": "terminal_state:missing",
+          "tick": 7920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026563",
+          "reason": "terminal_state:missing",
+          "tick": 7920
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026643",
+          "reason": "terminal_state:missing",
+          "tick": 7944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026647",
+          "reason": "terminal_state:missing",
+          "tick": 7944
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026722",
+          "reason": "terminal_state:missing",
+          "tick": 7968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026726",
+          "reason": "terminal_state:missing",
+          "tick": 7968
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026802",
+          "reason": "terminal_state:missing",
+          "tick": 7992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026806",
+          "reason": "terminal_state:missing",
+          "tick": 7992
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026882",
+          "reason": "terminal_state:missing",
+          "tick": 8016
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026886",
+          "reason": "terminal_state:missing",
+          "tick": 8016
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_026958",
+          "reason": "terminal_state:missing",
+          "tick": 8040
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_026962",
+          "reason": "terminal_state:missing",
+          "tick": 8040
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027039",
+          "reason": "terminal_state:missing",
+          "tick": 8064
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027043",
+          "reason": "terminal_state:missing",
+          "tick": 8064
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027122",
+          "reason": "terminal_state:missing",
+          "tick": 8088
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027126",
+          "reason": "terminal_state:missing",
+          "tick": 8088
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027198",
+          "reason": "terminal_state:missing",
+          "tick": 8112
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027202",
+          "reason": "terminal_state:missing",
+          "tick": 8112
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027275",
+          "reason": "terminal_state:missing",
+          "tick": 8136
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027279",
+          "reason": "terminal_state:missing",
+          "tick": 8136
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027353",
+          "reason": "terminal_state:missing",
+          "tick": 8160
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027357",
+          "reason": "terminal_state:missing",
+          "tick": 8160
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027435",
+          "reason": "terminal_state:missing",
+          "tick": 8184
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027439",
+          "reason": "terminal_state:missing",
+          "tick": 8184
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027511",
+          "reason": "terminal_state:missing",
+          "tick": 8208
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027515",
+          "reason": "terminal_state:missing",
+          "tick": 8208
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027588",
+          "reason": "terminal_state:missing",
+          "tick": 8232
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027592",
+          "reason": "terminal_state:missing",
+          "tick": 8232
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027668",
+          "reason": "terminal_state:missing",
+          "tick": 8256
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027672",
+          "reason": "terminal_state:missing",
+          "tick": 8256
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027743",
+          "reason": "terminal_state:missing",
+          "tick": 8280
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027747",
+          "reason": "terminal_state:missing",
+          "tick": 8280
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027824",
+          "reason": "terminal_state:missing",
+          "tick": 8304
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027828",
+          "reason": "terminal_state:missing",
+          "tick": 8304
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027906",
+          "reason": "terminal_state:missing",
+          "tick": 8328
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027910",
+          "reason": "terminal_state:missing",
+          "tick": 8328
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_027983",
+          "reason": "terminal_state:missing",
+          "tick": 8352
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_027987",
+          "reason": "terminal_state:missing",
+          "tick": 8352
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028061",
+          "reason": "terminal_state:missing",
+          "tick": 8376
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028065",
+          "reason": "terminal_state:missing",
+          "tick": 8376
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028142",
+          "reason": "terminal_state:missing",
+          "tick": 8400
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028146",
+          "reason": "terminal_state:missing",
+          "tick": 8400
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028227",
+          "reason": "terminal_state:missing",
+          "tick": 8424
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028231",
+          "reason": "terminal_state:missing",
+          "tick": 8424
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028304",
+          "reason": "terminal_state:missing",
+          "tick": 8448
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028308",
+          "reason": "terminal_state:missing",
+          "tick": 8448
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028385",
+          "reason": "terminal_state:missing",
+          "tick": 8472
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028389",
+          "reason": "terminal_state:missing",
+          "tick": 8472
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028464",
+          "reason": "terminal_state:missing",
+          "tick": 8496
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028468",
+          "reason": "terminal_state:missing",
+          "tick": 8496
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028539",
+          "reason": "terminal_state:missing",
+          "tick": 8520
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028543",
+          "reason": "terminal_state:missing",
+          "tick": 8520
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028616",
+          "reason": "terminal_state:missing",
+          "tick": 8544
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028620",
+          "reason": "terminal_state:missing",
+          "tick": 8544
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028693",
+          "reason": "terminal_state:missing",
+          "tick": 8568
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028697",
+          "reason": "terminal_state:missing",
+          "tick": 8568
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028774",
+          "reason": "terminal_state:missing",
+          "tick": 8592
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028778",
+          "reason": "terminal_state:missing",
+          "tick": 8592
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028855",
+          "reason": "terminal_state:missing",
+          "tick": 8616
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028859",
+          "reason": "terminal_state:missing",
+          "tick": 8616
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_028938",
+          "reason": "terminal_state:missing",
+          "tick": 8640
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_028942",
+          "reason": "terminal_state:missing",
+          "tick": 8640
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_029021",
+          "reason": "terminal_state:missing",
+          "tick": 8664
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_029025",
+          "reason": "terminal_state:missing",
+          "tick": 8664
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_029103",
+          "reason": "terminal_state:missing",
+          "tick": 8688
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_029107",
+          "reason": "terminal_state:missing",
+          "tick": 8688
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_029185",
+          "reason": "terminal_state:missing",
+          "tick": 8712
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_029189",
+          "reason": "terminal_state:missing",
+          "tick": 8712
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_029266",
+          "reason": "terminal_state:missing",
+          "tick": 8736
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_029270",
+          "reason": "terminal_state:missing",
+          "tick": 8736
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000001",
+          "event_id": "event_029351",
+          "reason": "terminal_state:missing",
+          "tick": 8760
+        },
+        {
+          "code": "STALE_WAKEUP",
+          "entity_id": "crew_000003",
+          "event_id": "event_029355",
+          "reason": "terminal_state:missing",
+          "tick": 8760
+        }
+      ],
+      "major_plus_with_non_idle_plan": 1.0,
+      "major_plus_with_valid_next_decision_tick": 1.0,
+      "stale_wakeups": 677,
+      "system_zero_call_over_30_days": [],
+      "systems": {
+        "ai": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "director": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "economy": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "encounters": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "factions": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "heat": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "lod": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        },
+        "memory": {
+          "call_count": 365,
+          "last_fired_tick": 8760
+        }
+      },
+      "tick_range": [
+        1,
+        8760
+      ],
+      "vendettas_converted_to_action": 0,
+      "vendettas_created": 0,
+      "year": 1
+    }
+  ],
+  "zero_call_systems": []
+}

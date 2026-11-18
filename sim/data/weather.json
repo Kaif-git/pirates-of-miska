@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "persistence_bonus_weight": 12,
+  "calendar_seasons": [
+    {"id":"spring","days":91},
+    {"id":"summer","days":91},
+    {"id":"autumn","days":91},
+    {"id":"winter","days":92}
+  ],
+  "calendar_weight_multipliers": {
+    "spring":{"calm":100,"fair":105,"rough":100,"storm":95,"hurricane":90,"fog":115},
+    "summer":{"calm":120,"fair":110,"rough":90,"storm":85,"hurricane":75,"fog":90},
+    "autumn":{"calm":90,"fair":100,"rough":115,"storm":120,"hurricane":115,"fog":100},
+    "winter":{"calm":80,"fair":90,"rough":120,"storm":130,"hurricane":105,"fog":110}
+  },
+  "states": {
+    "calm": {"speed_permille": 1150, "visibility_permille": 1000, "hull_damage_per_million": 0},
+    "fair": {"speed_permille": 1000, "visibility_permille": 1000, "hull_damage_per_million": 0},
+    "rough": {"speed_permille": 800, "visibility_permille": 800, "hull_damage_per_million": 3000},
+    "storm": {"speed_permille": 550, "visibility_permille": 550, "hull_damage_per_million": 12000},
+    "hurricane": {"speed_permille": 350, "visibility_permille": 350, "hull_damage_per_million": 30000},
+    "fog": {"speed_permille": 750, "visibility_permille": 300, "hull_damage_per_million": 0}
+  },
+  "seasonal_weights": {
+    "north_current": {"calm":10,"fair":52,"rough":20,"storm":6,"hurricane":1,"fog":11},
+    "ash_winds": {"calm":12,"fair":42,"rough":22,"storm":12,"hurricane":4,"fog":8},
+    "trade_winds": {"calm":18,"fair":48,"rough":18,"storm":7,"hurricane":1,"fog":8},
+    "monsoon": {"calm":5,"fair":25,"rough":30,"storm":24,"hurricane":10,"fog":6},
+    "maelstrom": {"calm":2,"fair":12,"rough":28,"storm":30,"hurricane":22,"fog":6}
+  }
+}

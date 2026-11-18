@@ -8,9 +8,60 @@ from dataclasses import dataclass, asdict
 
 from pirates.ship_map import ORIGIN, WIDTH, HEIGHT
 
-RESOURCES = ("raw_food", "water", "planks", "shot")
-UNIT_MASS = {"raw_food": 1, "water": 1, "planks": 20, "shot": 5}
+RESOURCES = ("grain_g", "beans_g", "rice_g", "oats_g", "potatoes_g", "onions_g",
+             "salted_pork_g", "hard_cheese_g", "dried_fish_g", "fruit_g", "salted_fruit_g", "salt_g",
+             "biscuit_g", "food_waste_g",
+             "clean_water_ml", "questionable_water_ml", "firewood_g", "planks", "shot", "medicine",
+             "bandages", "soap", "lanterns", "lamp_oil_ml", "candles")
+# Values are kilograms per stored unit. Food is counted in grams and potable
+# water in milliliters, so both have a physical mass of 1 g per unit.
+UNIT_MASS = {key: 0.001 for key in ("grain_g", "beans_g", "rice_g", "oats_g", "potatoes_g",
+                                     "onions_g", "salted_pork_g", "hard_cheese_g", "dried_fish_g",
+                                     "fruit_g", "salted_fruit_g", "salt_g", "biscuit_g", "food_waste_g",
+                                     "clean_water_ml", "questionable_water_ml",
+                                     "firewood_g")}
+UNIT_MASS.update({
+             "planks": 20, "shot": 5, "medicine": 1, "bandages": 0.08, "soap": 0.1,
+             "lanterns": 1.2, "candles": 0.1, "lamp_oil_ml": 0.001}
+)
 HAUL_CAPACITY_KG = 50
+
+
+def migrate_bundle(bundle):
+    """Normalize legacy kg/serving counters into canonical physical units."""
+    if not isinstance(bundle, dict):
+        raise ValueError("Invalid supply bundle")
+    migrated = {}
+    for key, amount in bundle.items():
+        if key == "raw_food":
+            key, amount = "grain_g", amount * 1000
+        elif key == "water":
+            key, amount = "clean_water_ml", amount * 1000
+        elif key == "medicine":
+            pass
+        if key not in RESOURCES or type(amount) is not int or amount < 0:
+            raise ValueError("Invalid supply bundle")
+        migrated[key] = migrated.get(key, 0) + amount
+    return {key: amount for key, amount in migrated.items() if amount}
+
+
+def migrate_store_mapping(stores):
+    """Migrate old totals; old generic provisions become equal-mass grain."""
+    if not isinstance(stores, dict):
+        raise ValueError("Invalid hold stores")
+    migrated = migrate_bundle(stores)
+    return {key: migrated.get(key, 0) for key in RESOURCES}
+
+
+def resource_quantity(resource, amount):
+    """Format a canonical resource count with a player-facing physical unit."""
+    if resource.endswith("_g"):
+        return f"{amount / 1000:.2f} kg"
+    if resource in ("clean_water_ml", "questionable_water_ml", "lamp_oil_ml"):
+        return f"{amount / 1000:.1f} L"
+    units = {"planks": "bundles", "shot": "charges", "medicine": "doses",
+             "bandages": "rolls", "soap": "bars", "lanterns": "lanterns", "candles": "candles"}
+    return f"{amount} {units.get(resource, resource)}"
 
 
 def bundle_mass(bundle):
@@ -57,9 +108,14 @@ class Totals(MutableMapping):
     def __setitem__(self, key, value):
         if key not in RESOURCES or type(value) is not int or value < 0:
             raise ValueError("Invalid available supply total")
+        if value == 0:
+            for pile in self.storage.piles.values():
+                if pile.contents.get(key, 0):
+                    add_bundle(pile.contents, {key: pile.contents[key]}, -1)
+            return
         delta = value - self[key]
         if delta >= 0:
-            pile = self.storage.piles["water" if key == "water" else "hold"]
+            pile = self.storage.piles["water" if key in ("clean_water_ml", "questionable_water_ml") else "hold"]
             if bundle_mass(pile.contents) + UNIT_MASS[key] * delta > pile.capacity_kg:
                 raise ValueError("Stockpile capacity exceeded")
             pile.contents[key] = pile.contents.get(key, 0) + delta
@@ -96,7 +152,10 @@ class SpatialStorage:
     def position(self, pile_id, layout):
         pile = self.piles[pile_id]
         fixture = layout.get(pile.fixture_id) if layout and pile.fixture_id else None
-        return layout.world_position(fixture) if fixture else (pile.x + ORIGIN[0], pile.y + ORIGIN[1])
+        if fixture:
+            return layout.world_position(fixture)
+        at = (pile.x + ORIGIN[0], pile.y + ORIGIN[1])
+        return (*at, pile.z) if pile.z else at
 
     def available(self, pile_id, layout):
         pile = self.piles[pile_id]
@@ -117,23 +176,27 @@ class SpatialStorage:
                        if row.get("destination") == pile_id and not row.get("delivered", False))
         return bundle_mass(pile.contents) + reserved + bundle_mass(bundle) <= pile.capacity_kg
 
-    def designate(self, model, fixture_overlay, wx, wy, capacity_kg=1000):
+    def designate(self, model, fixture_overlay, wx, wy, capacity_kg=1000, z=0):
         if (type(wx) is not int or type(wy) is not int or type(capacity_kg) is not int
+                or type(z) is not int
                 or not 1 <= capacity_kg <= 100000):
             raise ValueError("Invalid stockpile designation")
         x, y = wx - ORIGIN[0], wy - ORIGIN[1]
-        if not (0 <= x < WIDTH and 0 <= y < HEIGHT):
-            raise ValueError("Stockpiles must be aboard the current deck")
-        if any(p.fixture_id is None and p.x == x and p.y == y for p in self.piles.values()):
+        if not (0 <= x < WIDTH and 0 <= y < HEIGHT and 0 <= z <= 8):
+            raise ValueError("Stockpiles must be aboard a supported deck")
+        if any(p.fixture_id is None and (p.x, p.y, p.z) == (x, y, z) for p in self.piles.values()):
             raise ValueError("A stockpile is already designated here")
-        parts = model.at(x, y, 0)
+        parts = model.at(x, y, z)
         if (not any(c.kind == "floor" for c in parts)
-                or any(c.kind in ("wall", "door") for c in parts) or (x, y) in fixture_overlay):
+                or any(c.kind in ("wall", "door") for c in parts)
+                or any(c.kind == "stair" and c.z in (z, z - 1) and c.z >= 0
+                       for c in model.components if (c.x, c.y) == (x, y))
+                or (z == 0 and (x, y) in fixture_overlay)):
             raise ValueError("Stockpiles need a clear, empty deck tile")
-        pid = f"pile:{x},{y}"
+        pid = f"pile:{x},{y}" if z == 0 else f"pile:{x},{y},{z}"
         if pid in self.piles:
             raise ValueError("Stockpile identity already exists")
-        self.piles[pid] = Stockpile(pid, x, y, 0, None, capacity_kg, {})
+        self.piles[pid] = Stockpile(pid, x, y, z, None, capacity_kg, {})
         return self.piles[pid]
 
     def und_designate(self, pile_id, jobs=()):
@@ -212,16 +275,18 @@ class SpatialStorage:
 
     @classmethod
     def restore(cls, rows, model, layout):
-        if not isinstance(rows, list) or not 2 <= len(rows) <= WIDTH * HEIGHT:
+        if not isinstance(rows, list) or not 2 <= len(rows) <= WIDTH * HEIGHT * 9:
             raise ValueError("Invalid stockpile list")
         result, occupied = cls(), set()
         for row in rows:
             if not isinstance(row, dict) or set(row) != {"id", "x", "y", "z", "fixture_id", "capacity_kg", "contents"}:
                 raise ValueError("Invalid stockpile record")
+            row = dict(row)
+            row["contents"] = migrate_bundle(row["contents"])
             pile = Stockpile(**row)
             if (not isinstance(pile.id, str) or not pile.id or pile.id in result.piles
                     or any(type(v) is not int for v in (pile.x, pile.y, pile.z, pile.capacity_kg))
-                    or pile.z != 0 or not 1 <= pile.capacity_kg <= 100000
+                    or not 0 <= pile.z <= 8 or not 1 <= pile.capacity_kg <= 100000
                     or not isinstance(pile.contents, dict)
                     or any(k not in RESOURCES or type(n) is not int or n <= 0 for k, n in pile.contents.items())
                     or bundle_mass(pile.contents) > pile.capacity_kg):
@@ -230,18 +295,28 @@ class SpatialStorage:
                 if pile.fixture_id not in ("hold", "water") or pile.id != pile.fixture_id:
                     raise ValueError("Invalid stockpile fixture binding")
                 fixture = layout.get(pile.fixture_id)
+                if fixture.z != pile.z:
+                    raise ValueError("Stockpile fixture position disagrees with equipment registry")
                 x, y = fixture.x, fixture.y
+                # Older v3 saves did not synchronize attached-pile coordinates
+                # when a fixture was relocated. Normalize their location from
+                # the stable fixture identity during migration.
+                pile.x, pile.y = x, y
             else:
-                if not pile.id.startswith("pile:"):
+                expected_id = f"pile:{pile.x},{pile.y}" if pile.z == 0 else f"pile:{pile.x},{pile.y},{pile.z}"
+                if pile.id != expected_id:
                     raise ValueError("Invalid floor-stockpile identity")
                 x, y = pile.x, pile.y
-            parts = model.at(x, y, 0)
+            parts = model.at(x, y, pile.z)
             if (not any(c.kind == "floor" for c in parts)
-                    or any(c.kind in ("wall", "door") for c in parts) or (x, y) in occupied):
+                    or any(c.kind in ("wall", "door") for c in parts)
+                    or any(c.kind == "stair" and c.z in (pile.z, pile.z - 1) and c.z >= 0
+                           for c in model.components if (c.x, c.y) == (x, y))
+                    or (x, y, pile.z) in occupied):
                 raise ValueError("Invalid stockpile geometry")
-            if pile.fixture_id is None and (x, y) in layout.overlay:
+            if pile.fixture_id is None and (x, y) in layout.overlay_for(pile.z):
                 raise ValueError("Floor stockpile overlaps equipment")
-            occupied.add((x, y))
+            occupied.add((x, y, pile.z))
             result.piles[pile.id] = pile
         if not {"hold", "water"} <= result.piles.keys():
             raise ValueError("Missing starter storage identities")

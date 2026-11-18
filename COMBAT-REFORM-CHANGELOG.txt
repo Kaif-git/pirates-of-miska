@@ -1,0 +1,128 @@
+COMBAT SPEC REFORM — IMPLEMENTATION / CONSTANT LEDGER
+Authoritative input: COMBAT SPEC.md (unchanged source copy).
+
+2026-11-17 — M0/M1 foundation
+- New independent engine package: pirates/duel_system. No live UI switch yet.
+- Numeric source: content/duel_system.json, including action/wound tables,
+  stats/resource coefficients, Ronin, AI rules, notebook, guide and balance targets.
+- No balance tuning has occurred; supplied starting constants are retained.
+- Tests: tests/test_duel_system_foundation.py (M0/M1).
+
+2026-11-17 — M2/M3/M4 engine mechanics (not live UI yet)
+- Tests first: missing scheduler/wound modules failed collection; M4's nine
+  guard tests failed before guard resolver implementation.
+- engine.py: simultaneous pre-commit decisions, locked timing/costs, eight-way
+  WALK/RUN/DASH/DASH_LIGHT, atomic rejection, guard hold/release, passive pools,
+  queued interrupts, deterministic strike-before-movement tick ordering.
+- wounds.py: exposure, accuracy drift, armor, wound table/statuses, finite
+  bandages/food/water, additive capped bleeding and exertion.
+- guard.py: raise/hold, parry strength/window, line bypass, stamina block,
+  heavy guard break, deferred stagger and one-use riposte.
+- Verified: 58 new specification tests + 205 existing combat tests = 263 passed;
+  compileall passed. No UI or balance acceptance is claimed.
+- Rule decisions: compare distance <= reach for hits (Section 2 convention);
+  guard raise blocks but cannot parry before ready (Section 7 exposure table).
+  Same-tick strikes use pre-strike defense snapshots and defer interrupts.
+- Remaining M5: full mental events/crash/fear/end-state persistence and worked
+  example reconciliation. M6 AI and all later milestones remain unimplemented.
+
+2026-11-17 — M5/M6 engine gates (not live UI yet)
+- mental.py adds anger change/history/crash, exhaustion crash, unanswered-hit
+  and circle anger, persistent one-time low-blood morale, 3-decision fear yield,
+  level/courage starting morale, explicit end/carry data. 73 M0–M5 tests passed.
+- Worked-example discrepancies now have explicit tests: zero-weight heavy
+  interruption/guard parry cases pass; zero-weight Ronin LIGHT at t3 whiffs
+  because dash movement at t3 has not occurred; real weight3 DASH_LIGHT lands t9.
+- ai.py adds delayed commitment perception, public/full buckets, legal candidates,
+  all R1–R13 scoring, fixed ties, zone selection and read-only decisions.
+- E1–E10 behavior tests initially exposed the predicted E5/E7/E8 contradictions.
+  Literal-starting-constant regression preserves the original wrong results.
+- Config tuning (behavior acceptance, not yet balance acceptance):
+  * ai.counter_heavy_dash 40 -> 50: E5 dodge must beat LIGHT base34 when light
+    cannot interrupt and defender cannot parry (35 vs 34 with reading .6).
+  * ronin.base.WAIT -50 -> -20: E7 low-vigor gap4 fatigue50 must rest instead
+    of closing (WAIT35 vs WALK_IN30).
+  * ronin.base.RUN_OUT missing in spec / initial default0 -> 6: E8 fear90
+    needs a running/walking escape, not DASH_OUT (RUN42 vs DASH41).
+  No ad-hoc tactical overrides added; argmax scoring and fixed ties retained.
+- M0–M6 new engine tests: 89 passed. M7 notebook/M8 guide/M9 UI/M10 balance
+  and live integration still remain; baseline combat engine is not switched yet.
+
+2026-11-17 — M7 notebook gate
+- notebook.py records only observed decisions, separately per named NPC and
+  archetype. Covers UNKNOWN/TENTATIVE/TENDENCY/HABIT/MIXED, habit-break
+  diagnostics with last-five private FullKeys and visibility-redacted hints.
+- Trait inference transfers at archetype level; exact-stat reveal requires
+  three observed exchanges. JSON persistence owns its input/output data.
+- Guide-facing NotebookView/PublicEntry are immutable and contain no FullKeys,
+  hidden differences or AI weights. Live recording/campaign save hooks follow
+  in M9 integration; no live-notebook claim yet.
+- Follow-up engine audit added two failing regressions then fixed both:
+  DASH_LIGHT recovery cannot be cancelled by a non-staggering hit; passive
+  anger decay is logged once, not duplicated in aggregate pool changes.
+- Current verification: 101 new-engine tests + 205 existing combat regressions
+  = 306 passed; compileall and explicit 19-file whitespace/conflict audit passed.
+- Next M8 guide simulation; M9 UI and M10 balance remain undone.
+
+2026-11-17 — M8 observation-only guide
+- guide.py whitelists visible state, strips live AI personality/weights/FullKey
+  and event history/RNG, estimates enemy stats until learned, and simulates
+  legal responses for a configured 24-tick horizon. Unknown responses use
+  worst-case aggregation, not the real AI policy. Returns confidence, risks,
+  near-equal alternatives and cause-tag explanations for OFF/HINTS/FULL.
+- Seeded strike jitter is disabled only in projected guide simulations, using
+  a public seed0; accuracy uncertainty is disclosed. Real engine jitter remains.
+- Hidden pool/weight/RNG perturbation and poison-personality tests pass;
+  live simulation and notebook remain unchanged by advice generation.
+
+2026-11-17 — M9 live RenderModel/UI integration
+- session.py owns preview/confirm, pre-choice NPC recording, fear-yield learning,
+  per-exchange stat reveal, automatic busy time, explicit guard hold/release,
+  retry, and between-duel wounds/resources/status-duration carry.
+- render_model.py creates immutable status/sheet/pools, exact committed danger,
+  future timelines, learned ghost glyph/timeline, costs/risks/zone exposure,
+  bounded logs and last-five why exchanges. No second HP pool.
+- duel_ui.py provides the native 40-column confirmed-action/zone/direction UI,
+  real tile popups/flash, mouse buttons, hover/long-press sheet, paged info
+  panels, guide/timeline toggles, automatic time and optional single stepping.
+- play.py C/F12 now opens this sword route; the legacy boarding/group adapter
+  is retained separately. World.duel_journal snapshots/resumes active duels
+  and learning. Esc pauses (not a fake flee); actual map > exits end by fleeing.
+- Native inspection caught stale/back-buffer captures: read SDL pixels before
+  present(), not after. Use renderer.shutdown(), not nonexistent close().
+  Lower SDL's inherited 640px minimum before testing actual 360px portrait.
+- Regression fix: input while busy must not open an invalid preview and halt
+  automatic time. Disabled combat buttons are dim; end states replace stale
+  movement hints. Preview warns about an out-of-reach attack before confirmation.
+- Verified: 340 combined new + legacy combat tests, compileall, scoped diff check;
+  tools/preview_duel_system.py passed 19 native captures plus real tcod KeyDown
+  modal/pause-resume dispatch, map/time unchanged, no live save touched.
+- Current phase: M10 XP/balance harness and final requirement/regression audit.
+  Unit/UI success is not a claim that Section21.3 balance targets are met.
+
+Specification discrepancies — explicitly tracked, not claimed as satisfied:
+1. Section 6 range pseudocode tests gap > reach, but Section 2 defines
+   gap = distance - reach. This permits distance 2 with a reach-1 sword.
+   Proposed interpretation: a strike requires distance <= reach (gap <= 0).
+   Resolve in M3 with explicit regression coverage.
+2. Section 21.2's zero-armor sword examples omit the sword's weight 3.
+   Sections 4/5/12 require gear speed x0.97, stamina x1.06 and fatigue x1.09.
+   The direct timing/fatigue examples are tested using weight 0 only; weighted
+   production formulas are tested separately. Worked integration is not yet met.
+3. Section 21.2 GUARD ready t3 at speed 14 conflicts with universal
+   ceil(3*10/14) = 3 only by coincidence; at higher speeds the general rule scales.
+   Section 21.2 Ronin LIGHT t3 cannot hit a Dorime still at range 2 before
+   movement updates (Section 5.2 resolves strikes before movement).
+   Need explicit M2/M5 interpretation; do not fabricate a passing example.
+4. Section 15.6 E5/E8 can disagree with the numeric scoring table and Ronin
+   base weights (e.g. fear score alone need not beat LIGHT). Verify actual
+   scores in M6 before choosing any documented constant adjustment.
+5. Section 4 fatigue coefficient k becomes negative for high-level endurance;
+   Section 5 fatigue gain can become negative above effective endurance 30.
+   Implemented zero floor for penalty/gain (no fatigue-derived buffs or free
+   debt removal). Baseline level-1 formulas unchanged. Needs audit at M10.
+6. Section 5 recovery rounding order is unspecified. Scale and weight together,
+   then ceil once; explicit formula tests will retain this convention.
+
+Acceptance status lives in the session goal plan. This file records decisions
+and tuning provenance, not a substitute for automated/native acceptance evidence.

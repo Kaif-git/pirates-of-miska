@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "name_pools": {
+    "given": ["Alden", "Anwen", "Arlen", "Bastian", "Belen", "Bram", "Brina", "Calla", "Caspian", "Cora", "Dain", "Dara", "Edda", "Elias", "Elowen", "Ember", "Evander", "Fara", "Fen", "Galen", "Hale", "Ilyra", "Iona", "Jalen", "Jessa", "Kael", "Kara", "Kellan", "Liora", "Lucan", "Mara", "Maren", "Mira", "Neris", "Nessa", "Orrin", "Pella", "Perrin", "Quillan", "Rhea", "Riven", "Rowan", "Sable", "Sella", "Tarin", "Tessa", "Thane", "Vara", "Venn", "Wren"],
+    "family": ["Ashford", "Ashen", "Bale", "Bell", "Blackwell", "Brine", "Calder", "Cairn", "Cask", "Crowe", "Darrow", "Drake", "Emberly", "Fenwick", "Ferry", "Flint", "Gannet", "Grey", "Hallow", "Harbor", "Hearth", "Hollis", "Kest", "Keel", "Kerr", "Lantern", "Lowell", "Marlow", "Mere", "Morrow", "Norr", "Orin", "Pike", "Reef", "Rill", "Sable", "Salt", "Sedge", "Shore", "Spar", "Stone", "Tide", "Vale", "Vey", "Wake", "Ward", "Wick", "Wren", "Yarrow", "Quill" ]
+  },
+  "stat_names": ["combat", "seamanship", "navigation", "leadership", "cunning", "willpower", "gunnery", "medicine", "trade"],
+  "trait_names": ["ambition", "honor", "greed", "loyalty", "cruelty", "curiosity", "pride", "paranoia", "boldness", "sociability"],
+  "default_traits": {
+    "ambition": 50, "honor": 50, "greed": 50, "loyalty": 50, "cruelty": 20,
+    "curiosity": 50, "pride": 50, "paranoia": 25, "boldness": 50, "sociability": 50
+  },
+  "rules": {
+    "initial_major_count": 12,
+    "initial_minor_count": 100,
+    "initial_major_age_min": 28,
+    "initial_major_age_max": 76,
+    "initial_minor_age_min": 18,
+    "initial_minor_age_max": 68,
+    "rookie_replacement_floor": 8,
+    "rookie_target_major_count": 12,
+    "major_population_cap": 15,
+    "age_stat_decay_start": 48,
+    "age_stat_decay_per_year": 1,
+    "death_start_age": 68,
+    "death_base_basis_points": 200,
+    "death_per_year_basis_points": 350,
+    "death_max_basis_points": 9500,
+    "generation_stat_spread": 8,
+    "generation_trait_spread": 8,
+    "age_decay_stats": ["combat", "seamanship", "gunnery"]
+  },
+  "role_profiles": {
+    "captain": {"offsets": {"leadership": 15, "combat": 8}, "values": ["glory", "freedom", "wealth"], "dream_kinds": ["reach_legend_tier", "become_title", "find_treasure"]},
+    "first_mate": {"offsets": {"leadership": 12, "seamanship": 8, "combat": 5}, "values": ["kin", "freedom", "wealth"], "dream_kinds": ["protect_entity", "become_title", "find_treasure"]},
+    "navigator": {"offsets": {"navigation": 22, "cunning": 8}, "values": ["knowledge", "freedom", "glory"], "dream_kinds": ["chart_region", "find_treasure", "find_person"]},
+    "merchant": {"offsets": {"trade": 22, "cunning": 8}, "values": ["wealth", "order", "knowledge"], "dream_kinds": ["become_wealthiest", "find_treasure", "restore_house"]},
+    "official": {"offsets": {"leadership": 12, "willpower": 8}, "values": ["order", "wealth", "glory"], "dream_kinds": ["become_title", "protect_entity", "restore_house"]},
+    "surgeon": {"offsets": {"medicine": 24, "willpower": 5}, "values": ["knowledge", "kin", "order"], "dream_kinds": ["find_person", "protect_entity", "chart_region"]},
+    "gunner": {"offsets": {"gunnery": 22, "combat": 8}, "values": ["glory", "wealth", "freedom"], "dream_kinds": ["become_title", "defeat_character", "find_treasure"]},
+    "shipwright": {"offsets": {"trade": 8, "cunning": 8, "willpower": 8}, "values": ["knowledge", "wealth", "order"], "dream_kinds": ["restore_house", "become_wealthiest", "chart_region"]},
+    "sailor": {"offsets": {"seamanship": 12, "combat": 4}, "values": ["freedom", "wealth", "kin"], "dream_kinds": ["find_treasure", "protect_entity", "reach_legend_tier"]},
+    "cook": {"offsets": {"leadership": 4, "willpower": 5}, "values": ["kin", "wealth", "knowledge"], "dream_kinds": ["find_person", "restore_house", "become_title"]},
+    "civilian": {"offsets": {"leadership": 2}, "values": ["kin", "wealth", "order"], "dream_kinds": ["protect_entity", "restore_house", "find_person"]}
+  },
+  "archetypes": [
+    {"id":"honorable_duelist","trait_modifiers":{"honor":30,"pride":15,"cruelty":-15,"boldness":10}},
+    {"id":"greedy_smuggler","trait_modifiers":{"greed":30,"honor":-15,"boldness":10,"paranoia":10}},
+    {"id":"idealistic_reformer","trait_modifiers":{"honor":20,"curiosity":15,"sociability":15,"greed":-15}},
+    {"id":"corrupt_administrator","trait_modifiers":{"greed":25,"loyalty":-15,"paranoia":10,"honor":-10}},
+    {"id":"reckless_rookie","trait_modifiers":{"ambition":20,"boldness":30,"curiosity":20,"paranoia":-10}},
+    {"id":"paranoid_warlord","trait_modifiers":{"ambition":20,"paranoia":30,"pride":20,"sociability":-15}},
+    {"id":"curious_cartographer","trait_modifiers":{"curiosity":35,"boldness":10,"greed":-10,"sociability":10}},
+    {"id":"loyal_first_mate","trait_modifiers":{"loyalty":35,"honor":15,"ambition":-10,"sociability":10}},
+    {"id":"silver_tongued_broker","trait_modifiers":{"sociability":25,"greed":15,"cruelty":-10}},
+    {"id":"quiet_survivor","trait_modifiers":{"paranoia":15,"boldness":-15,"curiosity":10}},
+    {"id":"vengeful_househeir","trait_modifiers":{"pride":25,"ambition":15,"honor":10,"sociability":-10}},
+    {"id":"merciful_medic","trait_modifiers":{"cruelty":-25,"honor":20,"sociability":10,"greed":-10}},
+    {"id":"ambitious_privateer","trait_modifiers":{"ambition":25,"loyalty":15,"greed":15,"honor":5}},
+    {"id":"superstitious_sailor","trait_modifiers":{"paranoia":15,"boldness":-5,"sociability":10,"curiosity":10}},
+    {"id":"proud_traditionalist","trait_modifiers":{"pride":30,"honor":20,"curiosity":-10,"loyalty":10}}
+  ],
+  "dream_templates": {
+    "find_treasure": {"target_required": false},
+    "become_title": {"target_required": false},
+    "destroy_entity": {"target_required": true},
+    "restore_house": {"target_required": false},
+    "chart_region": {"target_required": false},
+    "free_island": {"target_required": true},
+    "become_wealthiest": {"target_required": false},
+    "defeat_character": {"target_required": true},
+    "find_person": {"target_required": true},
+    "protect_entity": {"target_required": true},
+    "reach_legend_tier": {"target_required": false}
+  },
+  "want_kinds": ["repair_ship", "resupply", "find_safe_harbor", "sell_cargo", "heal", "lay_low", "chart_region"],
+  "initial_major_roles": ["captain", "navigator", "merchant", "official", "surgeon", "gunner", "shipwright", "captain", "merchant", "sailor", "official", "captain"],
+  "initial_minor_roles": ["sailor", "civilian", "cook", "navigator", "merchant", "surgeon", "gunner", "shipwright", "official", "captain"],
+  "rookie_roles": ["captain", "navigator", "merchant", "sailor"],
+  "rookie_age_years": 18,
+  "injuries": {
+    "scar": {"severity": 10, "hp_loss": 0, "stat_effects": {"leadership": 2}},
+    "broken_arm": {"severity": 55, "hp_loss": 25, "stat_effects": {"combat": -12, "gunnery": -10}},
+    "lost_eye": {"severity": 80, "hp_loss": 35, "stat_effects": {"gunnery": -18, "navigation": -5}},
+    "chronic_fever": {"severity": 65, "hp_loss": 20, "stat_effects": {"willpower": -8, "seamanship": -5}}
+  }
+}

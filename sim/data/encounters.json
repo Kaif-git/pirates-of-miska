@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "base_detection_basis_points": 1200,
+    "lookout_basis_points_per_point": 35,
+    "weather_detection_modifier_permille": 150,
+    "route_signal_range_permille": 350,
+    "island_detection_bonus_basis_points": 2500,
+    "encounter_cooldown_days": 7,
+    "max_gunnery_rounds": 3,
+    "gunnery_damage_base": 3,
+    "gunnery_damage_per_100_firepower": 2,
+    "gunnery_variance_percent": 25,
+    "boarding_threshold_basis_points": 4500,
+    "boarding_damage_base": 2,
+    "escape_base_basis_points": 2500,
+    "escape_mobility_basis_points_per_point": 40,
+    "surrender_morale_threshold": 20,
+    "surrender_basis_points": 7000,
+    "ship_capture_basis_points": 3500,
+    "defection_morale_threshold": 12,
+    "defection_basis_points": 2500,
+    "captain_wound_basis_points": 1800,
+    "captain_death_basis_points": 250,
+    "captain_capture_basis_points": 1200,
+    "loot_basis_points": 2500,
+    "reputation_shift": 4,
+    "ransom_base_silver": 50,
+    "failed_flee_rigging_damage": 1,
+    "failed_flee_morale_loss": 5
+  }
+}

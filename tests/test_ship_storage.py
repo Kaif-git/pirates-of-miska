@@ -54,10 +54,10 @@ def test_stockpile_transfer_physically_collects_and_delivers():
 def test_split_job_supply_sources_are_reserved_and_walked():
     world, sailor, destination = storage_world()
     storage = world.ship.storage
-    storage.piles["hold"].contents["raw_food"] = 1
+    storage.piles["hold"].contents["grain_g"] = 1000
     source2 = storage.designate(world.ship_model, world.ship_fixtures, 79, 27, 500)
-    source2.contents["raw_food"] = 1
-    job = world.ship.add_job("test:split", "cook", world.ship.stations["galley"], work=1)
+    source2.contents["grain_g"] = 1000
+    job = world.ship.add_job("cook:grain_porridge", "cook", world.ship.stations["galley"], work=1)
     job.reserved = world.ship.job_cost(job)
     sailor.labors["cook"] = 1
     allocations = storage.plan(world, sailor, job.reserved)
@@ -71,8 +71,8 @@ def test_split_job_supply_sources_are_reserved_and_walked():
         if job.phase == "work":
             break
     assert job.phase == "work"
-    assert sailor.cargo == {"raw_food": 2, "water": 1}
-    assert sum(p.contents.get("raw_food", 0) for p in storage.piles.values()) == 0
+    assert sailor.cargo == {"grain_g": 2000, "clean_water_ml": 1000}
+    assert sum(p.contents.get("grain_g", 0) for p in storage.piles.values()) == 0
     assert world.ship.check_orders() == []
 
 
@@ -95,6 +95,29 @@ def test_transfer_midhaul_save_resume_and_cancellation_returns_source(tmp_path):
     assert cancelled.ship.check_orders() == []
 
 
+def test_upper_deck_stockpile_transfer_routes_by_z_and_survives_save(tmp_path):
+    world, sailor, _ = storage_world()
+    x, y = 5, 5
+    world.ship_model.place(x, y, 1, "floor")
+    world.ship_model.place(x, y, 0, "stair")
+    world.ship_model.place(x + 1, y, 1, "floor")
+    pile = world.ship.storage.designate(world.ship_model, world.ship_fixtures,
+                                        x + 1 + 69, y + 12, z=1)
+    assert pile.id == "pile:6,5,1"
+    assert world.ship.storage.position(pile.id, world.fixtures) == (x + 1 + 69, y + 12, 1)
+    job = queue_transfer(world, "hold", pile.id, {"planks": 1})
+    until(world, lambda: bool(sailor.cargo))
+    path = tmp_path / "upper-pile.json"
+    world.save(path)
+    restored = World.load(path)
+    until(restored, lambda: restored.ship.job(job.id).state == "done")
+    upper = restored.ship.storage.piles[pile.id]
+    assert upper.contents == {"planks": 1}
+    assert upper.z == 1
+    assert restored.ship.storage.piles["hold"].contents["planks"] == 15
+    assert restored.ship.check_orders() == []
+
+
 def test_spatial_job_reservations_prevent_duplicate_claims():
     world, _, destination = storage_world()
     a = world.ship.add_job("test:a", "repair", world.ship.stations["repair"])
@@ -106,13 +129,13 @@ def test_spatial_job_reservations_prevent_duplicate_claims():
     a.state, a.worker, sailor.job_id = "claimed", sailor.id, a.id
     bb = world.ship.storage.plan(world, world.ship.crew[1], {"planks": 16})
     assert bb is None
-    aa = world.ship.storage.plan(world, sailor, {"raw_food": 30})
+    aa = world.ship.storage.plan(world, sailor, {"grain_g": 18000})
     assert aa is not None
     world.ship.storage.reserve(aa)
     a.supply_plan = aa
-    a.reserved = {"planks": 1, "raw_food": 30}
+    a.reserved = {"planks": 1, "grain_g": 18000}
     with pytest.raises(ValueError, match="unreserved"):
-        queue_transfer(world, "hold", destination.id, {"raw_food": 30})
+        queue_transfer(world, "hold", destination.id, {"grain_g": 18000})
 
 
 def test_transfer_capacity_and_weight_limits():
@@ -154,13 +177,23 @@ def test_spatial_storage_survives_save_and_legacy_v3_migrates(tmp_path):
     assert dict(loaded.ship.stores) == dict(world.ship.stores)
     data = json.loads(path.read_text())
     del data["ship"]["stockpiles"]
+    data["ship"].pop("fresh_food_lots", None)
+    data["ship"].pop("next_fresh_food_lot_id", None)
     data["ship"]["stores"] = {"raw_food": 30, "water": 60, "planks": 16, "shot": 16}
     data["ship"]["jobs"] = []
     data["ship"]["next_id"] = 1
     data["ship"]["crew"] = [dict(c, job_id=None, cargo={}) for c in data["ship"]["crew"]]
     path.write_text(json.dumps(data))
     legacy = World.load(path)
-    assert dict(legacy.ship.stores) == {"raw_food": 30, "water": 60, "planks": 16, "shot": 16}
+    assert dict(legacy.ship.stores) == {"grain_g": 30000, "beans_g": 0, "rice_g": 0, "oats_g": 0,
+                                        "potatoes_g": 0, "onions_g": 0, "salted_pork_g": 0,
+                                        "hard_cheese_g": 0, "dried_fish_g": 0, "fruit_g": 0,
+                                        "salted_fruit_g": 0, "salt_g": 0, "food_waste_g": 0,
+                                        "biscuit_g": 0, "clean_water_ml": 60000,
+                                        "questionable_water_ml": 0, "firewood_g": 0,
+                                        "planks": 16, "shot": 16, "medicine": 0,
+                                        "bandages": 0, "soap": 0, "lanterns": 0,
+                                        "lamp_oil_ml": 0, "candles": 0}
 
 
 def test_legacy_aggregate_save_places_piles_at_migrated_fixture_locations(tmp_path):

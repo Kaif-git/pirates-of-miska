@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "starting_crew_size": 8,
+    "crew_roster_min": 1,
+    "crew_roster_max": 30,
+    "starting_morale": 72,
+    "starting_cohesion": 65,
+    "starting_discipline": 55,
+    "daily_food_milli_per_member": 300,
+    "daily_water_milli_per_member": 500,
+    "daily_rum_milli_per_member": 25,
+    "morale_loss_per_shortage_day": 5,
+    "morale_recovery_per_supplied_day": 1,
+    "desertion_morale_threshold": 15,
+    "desertion_basis_points_per_day": 500,
+    "wage_per_member_per_day_silver": 1,
+    "initial_supply_days": 10,
+    "starting_silver": 300
+  },
+  "classes": {
+    "merchant_sloop": {
+      "hull_max": 100,
+      "rigging_max": 100,
+      "cannons": [{"caliber": 6, "count": 6, "condition": 100}],
+      "ammunition": 120,
+      "speed_permille": 1000,
+      "maneuverability": 75,
+      "cargo_capacity_milli": 100000,
+      "starting_supplies": {"grain": 24000, "water": 40000, "rum": 2000,
+                            "powder": 5000, "timber": 3000, "sailcloth": 3000}
+    }
+  },
+  "strength_weights": {
+    "cannon_caliber_weight": 1,
+    "gunner_skill_weight": 2,
+    "boarding_member_weight": 3,
+    "durability_component_weight": 1,
+    "speed_weight": 1,
+    "maneuverability_weight": 1,
+    "seamanship_weight": 1,
+    "leadership_weight": 1,
+    "cohesion_weight": 1,
+    "morale_penalty_per_missing": 1,
+    "empty_essential_supply_penalty": 30,
+    "damage_penalty_per_lost_point": 1,
+    "noise_max_permille": 800,
+    "noise_staleness_permille_per_day": 20,
+    "noise_skill_dampening_per_point": 2
+  },
+  "starting_roster_roles": ["first_mate", "navigator", "gunner", "cook", "surgeon", "shipwright", "sailor"],
+  "crew_name_suffixes": ["Wake", "Gull", "Fortune", "Star", "Revenant", "Lantern", "Tide", "Vow", "Crown", "Rook"]
+}

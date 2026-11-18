@@ -22,6 +22,22 @@ def test_blueprint_marks_undoes_and_roundtrips_unbuilt_edits(tmp_path):
     assert not restored.blueprint.changes
 
 
+def test_blueprint_can_plan_structural_beam_support():
+    world = World()
+    bp = world.blueprint
+    bp.set(9, 15, 0, "build", "beam")
+    assert any(c.kind == "beam" for c in bp.apply(world.ship_model).components)
+    jobs = queue_blueprint(world)
+    assert len(jobs) == 1 and jobs[0].construction["kind"] == "beam"
+    for _ in range(300):
+        if jobs[0].state == "done":
+            break
+        world.advance(100)
+    assert jobs[0].state == "done"
+    assert any(c.kind == "beam" and (c.x, c.y, c.z) == (9, 15, 0)
+               for c in world.ship_model.components)
+
+
 def test_copy_mirror_and_rotate_are_bounded_and_undoable():
     world = World()
     bp = world.blueprint
@@ -75,6 +91,30 @@ def test_blueprint_queue_becomes_physical_jobs_and_clears_plan():
     assert len(jobs) == 1 and jobs[0].construction["kind"] == "wall"
     assert not world.blueprint.changes
     assert not any(c.kind == "wall" for c in world.ship_model.at(9, 15, 0))
+
+
+def test_upper_deck_blueprint_is_z_scoped_and_queues_deck_aware_job():
+    world = World()
+    # Make a reachable upper-deck landing and adjoining build site.
+    for x in (3, 4):
+        world.ship_model.place(x, 2, 1, "floor")
+    world.ship_model.place(3, 2, 0, "stair")
+    world.blueprint.set(4, 2, 1, "build", "wall")
+    assert any(c.kind == "wall" and (c.x, c.y, c.z) == (4, 2, 1)
+               for c in world.blueprint.apply(world.ship_model).components)
+    jobs = queue_blueprint(world)
+    assert len(jobs) == 1
+    assert jobs[0].construction["z"] == 1
+    assert jobs[0].key.endswith(":1")
+
+
+def test_blueprint_can_bootstrap_first_upper_floor_from_aligned_lower_deck():
+    world = World()
+    world.blueprint.set(5, 5, 1, "build", "floor")
+    jobs = queue_blueprint(world)
+    assert len(jobs) == 1
+    assert jobs[0].construction["kind"] == "floor"
+    assert jobs[0].construction["z"] == 1
 
 
 def test_blueprint_cannot_bypass_exterior_hull_dismantle_guard():

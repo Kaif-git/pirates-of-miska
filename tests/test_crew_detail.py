@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "engine")]
 
 from pirates.game import World
-from pirates.ship import LABORS, STATIONS
+from pirates.ship import LABORS, LABELS, STATIONS
 from pirates.management import chores_menu, job_explanation, work_rows
 
 
@@ -116,7 +116,8 @@ def test_direct_order_respects_labor_off_and_urgent_needs():
     assert job.worker is None and "drink" in job_explanation(world, job)
     world.advance(12000)
     assert job.state == "done"
-    assert c.thirst < 25
+    assert c.thirst < 65
+    assert c.water_consumed_today_ml >= 500
     assert not world.ship.check_orders()
 
 
@@ -158,6 +159,83 @@ def test_practice_only_grows_while_actually_working():
     assert c.skill_xp["clean"] > 0
     assert c.skills["clean"] > 1
     assert any(r["event"] == "work_started" for r in world.ship.audit)
+
+
+def test_learning_potential_changes_only_earned_skill_growth():
+    def practice(potential):
+        world = controlled_world()
+        sailor = world.ship.crew[4]
+        sailor.learning_potential = potential
+        sailor.labors["clean"] = 1
+        job = job_of(world, "clean")
+        world.ship.assign(job.id, sailor.id)
+        world.advance(6000)
+        return sailor.skill_xp["clean"], sailor.skills["clean"]
+
+    low = practice(0)
+    ordinary = practice(50)
+    high = practice(100)
+    assert low[0] < ordinary[0] < high[0]
+    assert low[1] < ordinary[1] < high[1]
+
+
+def test_nearby_experienced_same_labor_worker_mentors_without_speed_bonus(monkeypatch, tmp_path):
+    def work_once(distance, mentor_skill=4, roundtrip=False):
+        world = controlled_world()
+        student, mentor = world.ship.crew[:2]
+        for sailor in (student, mentor):
+            sailor.traits = [trait for trait in sailor.traits if trait != "quick_learner"]
+            sailor.learning_potential = 50
+            sailor.skills["clean"] = 1
+            sailor.x, sailor.y, sailor.z = 77, 26, 0
+        mentor.skills["clean"] = mentor_skill
+        mentor.x += distance
+        student_job = world.ship.add_job("mentee-clean", "clean", (77, 26), work=1000)
+        mentor_job = world.ship.add_job("mentor-clean", "clean", (77, 26), work=1000)
+        for sailor, job in ((student, student_job), (mentor, mentor_job)):
+            sailor.labors["clean"] = 1
+            sailor.job_id = job.id
+            job.worker, job.state, job.phase = sailor.id, "claimed", "work"
+        mentor.activity = LABELS["clean"]  # mentor has already arrived and is doing real work
+        if roundtrip:
+            path = tmp_path / "mentorship.json"
+            world.save(path)
+            world = World.load(path)
+            student, mentor = world.ship.sailor(student.id), world.ship.sailor(mentor.id)
+            student_job, mentor_job = world.ship.job(student.job_id), world.ship.job(mentor.job_id)
+        monkeypatch.setattr(world.ship, "walk", lambda *_args, **_kwargs: True)
+        world.ship.work_job(world, student, student_job)
+        return (student.skill_xp["clean"], student_job.progress, student.activity,
+                [row for row in world.ship.audit if row["event"] == "mentored"])
+
+    tutored = work_once(distance=2, roundtrip=True)
+    alone = work_once(distance=4)
+    junior_peer = work_once(distance=2, mentor_skill=2)
+    assert tutored[0] == 1.25
+    assert alone[0] == junior_peer[0] == 1.0
+    assert tutored[1] == alone[1] == junior_peer[1]  # mentorship never boosts output pace
+    assert "learning from" in tutored[2]
+    assert tutored[3] and not alone[3] and not junior_peer[3]
+
+
+def test_obedient_trait_applies_only_to_direct_orders_at_low_morale():
+    world = controlled_world()
+    sailor = world.ship.crew[0]
+    sailor.labors["repair"] = 1
+    sailor.morale = 10
+    sailor.traits.append("obedient")
+    job = job_of(world, "repair")
+    job.priority = 3
+    world.ship.assign(job.id, sailor.id)
+    world.ship.claim(world, sailor)
+    assert job.worker == sailor.id
+
+    other = world.ship.crew[1]
+    other.labors["repair"] = 1
+    other.morale = 10
+    another = world.ship.add_job("test:other-repair", "repair", (78, 27), priority=3)
+    world.ship.claim(world, other)
+    assert another.worker != other.id
 
 
 def test_compliance_audit_detects_a_broken_claim_instead_of_blind_pass():

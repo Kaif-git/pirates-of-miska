@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "coarse_step_days": 7,
+    "regional_history_weeks": 104,
+    "named_background_per_year": 20,
+    "background_role_cycle": ["civilian", "sailor", "merchant", "cook"],
+    "named_history_reference_limit": 128,
+    "promotion_magnitude_permille": 700,
+    "max_promotions_per_day": 1,
+    "demotion_after_days": 30
+  }
+}

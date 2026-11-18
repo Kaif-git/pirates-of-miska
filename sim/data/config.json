@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "time": {
+    "hours_per_day": 24,
+    "days_per_year": 365,
+    "hours_per_tick": 1
+  },
+  "event_rules": {
+    "root_event_types": [
+      "WORLD_GENERATED",
+      "DIRECTOR_INJECTION",
+      "NATURAL_EVENT",
+      "STORM",
+      "HURRICANE",
+      "MONSTER_SIGHTING",
+      "PLAGUE",
+      "HARVEST_FAILURE",
+      "TREASURE_RUMOR",
+      "DISCOVERY"
+    ],
+    "class_by_type": {
+      "CHARACTER_AGED": "routine",
+      "CAPTAIN_APPOINTED": "structural",
+      "ROOKIE_PROMOTED": "structural",
+      "LEGEND_PROMOTED": "structural",
+      "RAIDER_TARGET_SELECTED": "narrative",
+      "CHARACTER_ARRIVED": "structural",
+      "BELIEF_ERROR": "routine",
+      "CREW_FUNDED": "routine",
+      "CREW_FOUNDED": "structural",
+      "CREW_RESTED": "routine",
+      "DISEASE_CONTAINED": "routine",
+      "DISEASE_SPREAD": "routine",
+      "DREAM_PLAN_CREATED": "routine",
+      "DREAM_PROGRESS": "routine",
+      "ISLAND_ECONOMY_INITIALIZED": "routine",
+      "ISLAND_ECONOMY_UPDATED": "routine",
+      "LOD_BACKGROUND_RECORDED": "routine",
+      "LOD_REGION_AGGREGATED": "routine",
+      "MARKET_TRADE": "routine",
+      "MERCHANT_ROUTE_DECISION": "routine",
+      "MONSTER_MOVED": "routine",
+      "PLAN_STEP_COMPLETED": "routine",
+      "SKILL_IMPROVED": "routine",
+      "SHIP_SUPPLIED": "routine",
+      "SHIP_SUPPLIES_CONSUMED": "routine",
+      "SHIP_ACQUIRED": "structural",
+      "STORM_DISSIPATED": "routine",
+      "STORM_PATH_UPDATED": "routine",
+      "TREASURE_CLUE_SPREAD": "routine",
+      "VOYAGE_PLAN_STEP_COMPLETED": "routine",
+      "WAGES_PAID": "routine",
+      "WAGES_UNPAID": "routine",
+      "BATTLE_ROUND": "routine",
+      "FACTION_DISSOLVED": "structural",
+      "FACTION_FOUNDED": "structural",
+      "FACTION_LEADER_CHANGED": "structural",
+      "FACTION_SUCCESSION": "structural",
+      "TERRITORY_CLAIMED": "structural",
+      "WORLD_GENERATED": "structural"
+    }
+  },
+  "director": {
+    "enabled": false,
+    "intensity_permille": 1000,
+    "check_interval_days": 30,
+    "conflict_drought_days": 180,
+    "injection_cooldown_days": 180,
+    "max_injections_per_year": 2,
+    "minimum_major_characters": 4
+  },
+  "world": {
+    "actors": {
+      "ship_bands": {
+        "merchant": {"minimum_per_island_milli": 800, "target_per_island_milli": 1500, "maximum_per_island_milli": 2000},
+        "pirate": {"minimum_per_island_milli": 300, "target_per_island_milli": 600, "maximum_per_island_milli": 900},
+        "marine": {"minimum_per_island_milli": 200, "target_per_island_milli": 400, "maximum_per_island_milli": 600},
+        "privateer": {"minimum_per_island_milli": 50, "target_per_island_milli": 150, "maximum_per_island_milli": 300}
+      },
+      "captain_bands": {
+        "major": {"minimum": 12, "target": 15, "maximum": 25},
+        "legend": {"minimum": 2, "target": 3, "maximum": 6}
+      }
+    }
+  }
+}

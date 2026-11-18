@@ -1,24 +1,1539 @@
 {
-  "grain": {"name": "Sack of grain", "category": "food", "base_price": 8, "weight_g": 4000, "bulk_ml": 5000, "supply": "raw_food", "yield": 4, "description": "Four galley ingredient portions. Cheap on fertile islands."},
-  "beans": {"name": "Dried beans", "category": "food", "base_price": 6, "weight_g": 2000, "bulk_ml": 2600, "supply": "raw_food", "yield": 2, "description": "Two galley ingredient portions; keeps well on a voyage."},
-  "fruit": {"name": "Basket of island fruit", "category": "food", "base_price": 10, "weight_g": 1500, "bulk_ml": 2200, "supply": "meals", "yield": 2, "description": "Two ready-to-eat crew portions. No spoilage model yet."},
-  "dried_fish": {"name": "Salted fish", "category": "food", "base_price": 9, "weight_g": 2000, "bulk_ml": 2400, "supply": "raw_food", "yield": 2, "description": "Two galley ingredient portions from the coastal fisheries."},
-  "biscuit": {"name": "Ship's biscuit", "category": "food", "base_price": 5, "weight_g": 100, "bulk_ml": 150, "supply": "meals", "yield": 1, "description": "One ready-to-eat portion; no cooking required."},
-  "water_cask": {"name": "Sealed water keg", "category": "water", "base_price": 12, "weight_g": 10000, "bulk_ml": 10000, "supply": "water", "yield": 10, "description": "Ten fresh-water servings. Allocate at the ship's hold."},
-  "timber": {"name": "Timber bundle", "category": "wood", "base_price": 10, "weight_g": 20000, "bulk_ml": 30000, "supply": "planks", "yield": 1, "description": "Rough repair timber: one standardized construction/patching bundle; mass follows the ship material unit."},
-  "planks": {"name": "Sawn plank bundle", "category": "wood", "base_price": 14, "weight_g": 40000, "bulk_ml": 50000, "supply": "planks", "yield": 2, "description": "Two standardized repair/construction material charges; mass follows the ship material unit."},
-  "iron": {"name": "Iron ingot", "category": "metal", "base_price": 18, "weight_g": 3000, "bulk_ml": 600, "description": "Industrial export commodity. Local metalworking recipes are not implemented yet."},
-  "coal": {"name": "Bag of coal", "category": "metal", "base_price": 8, "weight_g": 3000, "bulk_ml": 4500, "description": "Industrial fuel commodity; not yet consumed by ship stations."},
-  "shot": {"name": "Cannon shot", "category": "ammunition", "base_price": 12, "weight_g": 5000, "bulk_ml": 1000, "supply": "shot", "yield": 1, "description": "One standardized ammunition charge for cannon loading or firearm practice."},
-  "sailcloth": {"name": "Bolt of sailcloth", "category": "textile", "base_price": 18, "weight_g": 2000, "bulk_ml": 4000, "description": "Woven export commodity. Sail fabrication is not implemented yet."},
-  "rope": {"name": "Coiled rope", "category": "tools", "base_price": 14, "weight_g": 1500, "bulk_ml": 2500, "slot": "tool", "labor_bonus": {"rig": 0.12}, "description": "Issued rigging rope: 12% faster rigging work."},
-  "carpenter_tools": {"name": "Carpenter's tool roll", "category": "tools", "base_price": 55, "weight_g": 2500, "bulk_ml": 3000, "slot": "tool", "labor_bonus": {"repair": 0.20}, "description": "20% faster repair-labor work, including construction."},
-  "cookware": {"name": "Cook's knife and pot", "category": "tools", "base_price": 35, "weight_g": 2500, "bulk_ml": 3500, "slot": "tool", "labor_bonus": {"cook": 0.18}, "description": "18% faster galley cooking."},
-  "bucket": {"name": "Sturdy bailing bucket", "category": "tools", "base_price": 12, "weight_g": 1000, "bulk_ml": 3500, "slot": "tool", "labor_bonus": {"bail": 0.20}, "description": "20% faster bilge bailing."},
-  "mop": {"name": "Deck mop", "category": "tools", "base_price": 8, "weight_g": 1000, "bulk_ml": 2500, "slot": "tool", "labor_bonus": {"clean": 0.15}, "description": "15% faster swabbing."},
-  "work_shirt": {"name": "Linen work clothes", "category": "clothing", "base_price": 24, "weight_g": 800, "bulk_ml": 1500, "slot": "clothing", "fatigue_multiplier": 0.85, "description": "Comfortable working clothes: 15% less physical fatigue from work."},
-  "oilskin": {"name": "Oilskin working coat", "category": "clothing", "base_price": 42, "weight_g": 1800, "bulk_ml": 3000, "slot": "clothing", "fatigue_multiplier": 0.75, "description": "25% less work fatigue. Weather protection is not simulated yet."},
-  "boots": {"name": "Seaboots", "category": "clothing", "base_price": 30, "weight_g": 1400, "bulk_ml": 2000, "slot": "feet", "movement_multiplier": 0.65, "description": "35% less energy expenditure while walking."},
-  "cutlass": {"name": "Sailor's cutlass", "category": "weapons", "base_price": 75, "weight_g": 1500, "bulk_ml": 1800, "slot": "weapon", "readiness": 12, "description": "Arms-drill equipment; improves boredom and weapon practice. Combat is not implemented."},
-  "flintlock": {"name": "Flintlock pistol", "category": "weapons", "base_price": 110, "weight_g": 1800, "bulk_ml": 1600, "slot": "weapon", "readiness": 18, "practice_shot": 1, "description": "Firearm drills consume one ship shot charge. Combat is not implemented."}
+  "grain": {
+    "name": "Sack of grain",
+    "category": "food",
+    "base_price": 8,
+    "weight_g": 4000,
+    "bulk_ml": 5000,
+    "supply": "grain_g",
+    "yield": 4000,
+    "description": "4 kg of dry grain, measured by mass; a galley staple.",
+    "market_stock": {
+      "ada": 30
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "ada"
+      }
+    ],
+    "production": {
+      "method": "Grown and threshed on island farms",
+      "inputs": [
+        "seed grain",
+        "field labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 210
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "beans": {
+    "name": "Dried beans",
+    "category": "food",
+    "base_price": 6,
+    "weight_g": 2000,
+    "bulk_ml": 2600,
+    "supply": "beans_g",
+    "yield": 2000,
+    "description": "2 kg of dried beans; soak and cook aboard.",
+    "market_stock": {
+      "ada": 24,
+      "dara": 4
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "ada"
+      },
+      {
+        "port": "cinder",
+        "merchant": "dara"
+      }
+    ],
+    "production": {
+      "method": "Grown, dried, and sorted by farm cooperatives",
+      "inputs": [
+        "bean seed",
+        "sunlight"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 210
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "fruit": {
+    "name": "Basket of island fruit",
+    "category": "food",
+    "base_price": 10,
+    "weight_g": 1500,
+    "bulk_ml": 2200,
+    "supply": "fruit_g",
+    "yield": 1500,
+    "description": "1.5 kg of ready-to-eat island fruit; fruit lots spoil after two game-days, with mass retained as food waste.",
+    "market_stock": {
+      "ada": 16
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "ada"
+      }
+    ],
+    "production": {
+      "method": "Picked from island orchards and packed fresh",
+      "inputs": [
+        "orchard trees",
+        "seasonal harvest"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 210
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "dried_fish": {
+    "name": "Salted fish",
+    "category": "food",
+    "base_price": 9,
+    "weight_g": 2000,
+    "bulk_ml": 2400,
+    "supply": "dried_fish_g",
+    "yield": 2000,
+    "description": "2 kg of salted, dried fish; preserved and ready to eat or cook.",
+    "market_stock": {
+      "bo": 24
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "bo"
+      }
+    ],
+    "production": {
+      "method": "Caught offshore, salted, and air-dried",
+      "inputs": [
+        "fish catch",
+        "salt"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 210
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "biscuit": {
+    "name": "Ship's biscuit",
+    "category": "food",
+    "base_price": 5,
+    "weight_g": 100,
+    "bulk_ml": 150,
+    "supply": "biscuit_g",
+    "yield": 100,
+    "description": "100 g of hard ship's biscuit, ready to eat; no cooking required.",
+    "market_stock": {
+      "bo": 30,
+      "dara": 8
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "bo"
+      },
+      {
+        "port": "cinder",
+        "merchant": "dara"
+      }
+    ],
+    "production": {
+      "method": "Baked hard in a shore-side galley for long keeping",
+      "inputs": [
+        "grain",
+        "water",
+        "fuel"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 210
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "water_cask": {
+    "name": "Sealed water keg",
+    "category": "water",
+    "base_price": 12,
+    "weight_g": 10000,
+    "bulk_ml": 10000,
+    "supply": "clean_water_ml",
+    "yield": 10000,
+    "description": "10 L of clean, potable spring water in a sealed keg; allocate at the hold.",
+    "market_stock": {
+      "bo": 18,
+      "dara": 5
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "bo"
+      },
+      {
+        "port": "cinder",
+        "merchant": "dara"
+      }
+    ],
+    "production": {
+      "method": "Drawn from guarded springs and sealed into a keg",
+      "inputs": [
+        "spring water",
+        "wooden keg"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 200
+    },
+    "market_buyers": [
+      "bo",
+      "dara"
+    ]
+  },
+  "timber": {
+    "name": "Timber bundle",
+    "category": "wood",
+    "base_price": 10,
+    "weight_g": 20000,
+    "bulk_ml": 30000,
+    "supply": "planks",
+    "yield": 1,
+    "description": "Rough repair timber: one standardized construction/patching bundle; mass follows the ship material unit.",
+    "market_stock": {
+      "lina": 16
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Felled, trimmed, and bundled at island timber yards",
+      "inputs": [
+        "mature trees",
+        "logging labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 65,
+      "cinder": 200
+    },
+    "market_buyers": [
+      "lina",
+      "dara",
+      "brann"
+    ]
+  },
+  "planks": {
+    "name": "Sawn plank bundle",
+    "category": "wood",
+    "base_price": 14,
+    "weight_g": 40000,
+    "bulk_ml": 50000,
+    "supply": "planks",
+    "yield": 2,
+    "description": "Two standardized repair/construction material charges; mass follows the ship material unit.",
+    "market_stock": {
+      "lina": 12
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Sawn and seasoned from timber at a shore mill",
+      "inputs": [
+        "timber",
+        "mill labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 65,
+      "cinder": 200
+    },
+    "market_buyers": [
+      "lina",
+      "dara",
+      "brann"
+    ]
+  },
+  "iron": {
+    "name": "Iron ingot",
+    "category": "metal",
+    "base_price": 18,
+    "weight_g": 3000,
+    "bulk_ml": 600,
+    "description": "Industrial export commodity. Local metalworking recipes are not implemented yet.",
+    "market_stock": {
+      "brann": 24
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "Smelted and cast in foundry furnaces",
+      "inputs": [
+        "iron ore",
+        "coal"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 230,
+      "cinder": 60
+    },
+    "market_buyers": [
+      "ada",
+      "brann"
+    ]
+  },
+  "coal": {
+    "name": "Bag of coal",
+    "category": "metal",
+    "base_price": 8,
+    "weight_g": 3000,
+    "bulk_ml": 4500,
+    "description": "Industrial fuel commodity; not yet consumed by ship stations.",
+    "market_stock": {
+      "brann": 24
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "Mined from volcanic seams and bagged at the quay",
+      "inputs": [
+        "coal seam",
+        "mining labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 230,
+      "cinder": 60
+    },
+    "market_buyers": [
+      "ada",
+      "brann"
+    ]
+  },
+  "bluegrain": {
+    "name": "Sack of Verdant bluegrain",
+    "category": "food",
+    "base_price": 28,
+    "weight_g": 5000,
+    "bulk_ml": 6500,
+    "origin": "verdant",
+    "demand_ports": [
+      "cinder"
+    ],
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 230
+    },
+    "description": "Hardy blue kernels from Verdant's terrace farms. Cinder's furnace families buy it by the sack; islanders say the color comes from the first rain.",
+    "market_stock": {
+      "ada": 24
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "ada"
+      }
+    ],
+    "production": {
+      "method": "Terrace-grown, sun-dried, and threshed by the Verdant cooperative",
+      "inputs": [
+        "bluegrain seed",
+        "terrace fields"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "bluegrain",
+      "issuer": "ada",
+      "destination": "cinder",
+      "quantity": 6,
+      "min_reputation": 0
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "brine_pears": {
+    "name": "Cask of brine pears",
+    "category": "food",
+    "base_price": 34,
+    "weight_g": 4500,
+    "bulk_ml": 6000,
+    "origin": "verdant",
+    "demand_ports": [
+      "cinder"
+    ],
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 230
+    },
+    "description": "Orchard pears cured in spring salt. They keep through a long passage and are a welcome taste of land in Cinder's smoke-dark streets.",
+    "market_stock": {
+      "ada": 18
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "ada"
+      }
+    ],
+    "production": {
+      "method": "Orchard pears cured in spring brine and sealed in casks",
+      "inputs": [
+        "pears",
+        "spring salt"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "brine-pears",
+      "issuer": "ada",
+      "destination": "cinder",
+      "quantity": 5,
+      "min_reputation": 0
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "emberpepper": {
+    "name": "Tin of emberpepper",
+    "category": "food",
+    "base_price": 42,
+    "weight_g": 900,
+    "bulk_ml": 1200,
+    "origin": "cinder",
+    "demand_ports": [
+      "verdant"
+    ],
+    "regional_factors": {
+      "cinder": 55,
+      "verdant": 230
+    },
+    "description": "A little volcanic pepper goes a long way. Cinder cooks swear it warms the blood; Verdant's taverns prize the smoky red spice.",
+    "market_stock": {
+      "dara": 12
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "dara"
+      }
+    ],
+    "production": {
+      "method": "Cultivated in warm caldera soil, then smoked and packed",
+      "inputs": [
+        "pepper plants",
+        "volcanic heat"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "emberpepper",
+      "issuer": "dara",
+      "destination": "verdant",
+      "quantity": 5,
+      "min_reputation": 0
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "dara",
+      "petra"
+    ]
+  },
+  "mooniron": {
+    "name": "Mooniron ingot",
+    "category": "metal",
+    "base_price": 58,
+    "weight_g": 5000,
+    "bulk_ml": 900,
+    "origin": "cinder",
+    "demand_ports": [
+      "verdant"
+    ],
+    "regional_factors": {
+      "cinder": 55,
+      "verdant": 230
+    },
+    "description": "Dark ore crossed by a silver seam, dug from Cinder's old caldera tunnels. Smiths call it moon-touched; no unusual property is known.",
+    "market_stock": {
+      "brann": 16
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "Mined from old caldera seams and smelted into ingots",
+      "inputs": [
+        "moon-veined ore",
+        "foundry fuel"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "mooniron",
+      "issuer": "brann",
+      "destination": "verdant",
+      "quantity": 4,
+      "min_reputation": 0
+    },
+    "market_buyers": [
+      "ada",
+      "brann"
+    ]
+  },
+  "stormglass": {
+    "name": "Stormglass shard",
+    "category": "metal",
+    "base_price": 48,
+    "weight_g": 1800,
+    "bulk_ml": 1400,
+    "origin": "cinder",
+    "demand_ports": [
+      "verdant"
+    ],
+    "regional_factors": {
+      "cinder": 55,
+      "verdant": 230
+    },
+    "description": "Blue-green glass fused in lightning-struck rock. Verdant jewelers set it in pendants, while sailors quietly avoid keeping it near the compass.",
+    "market_stock": {
+      "brann": 12
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "Collected from lightning-fused rock and cut into stable shards",
+      "inputs": [
+        "storm-struck stone",
+        "glassworker labor"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "stormglass",
+      "issuer": "brann",
+      "destination": "verdant",
+      "quantity": 8,
+      "min_reputation": 2
+    },
+    "market_buyers": [
+      "ada",
+      "brann"
+    ]
+  },
+  "lantern_moth_silk": {
+    "name": "Spool of lantern-moth silk",
+    "category": "textile",
+    "base_price": 52,
+    "weight_g": 700,
+    "bulk_ml": 1100,
+    "origin": "verdant",
+    "demand_ports": [
+      "cinder"
+    ],
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 230
+    },
+    "description": "Fine luminous thread gathered from forest lantern-moth cocoons. Cinder's clothiers weave it into festival trim; Verdant gatherers never take the last cocoon from a tree.",
+    "market_stock": {
+      "lina": 10
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Gathered from lantern-moth cocoons and reeled by hand",
+      "inputs": [
+        "lantern-moth cocoons",
+        "weaver labor"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "lantern-silk",
+      "issuer": "lina",
+      "destination": "cinder",
+      "quantity": 4,
+      "min_reputation": 0
+    },
+    "market_buyers": [
+      "lina",
+      "dara",
+      "petra"
+    ]
+  },
+  "reef_porcelain": {
+    "name": "Crate of reef porcelain",
+    "category": "craft",
+    "base_price": 46,
+    "weight_g": 6000,
+    "bulk_ml": 9000,
+    "origin": "cinder",
+    "demand_ports": [
+      "verdant"
+    ],
+    "regional_factors": {
+      "cinder": 55,
+      "verdant": 230
+    },
+    "description": "Pale ceramics pressed with branching reef patterns in Cinder's hot kilns. Verdant houses display the cups at weddings; breakage is not simulated.",
+    "market_stock": {
+      "petra": 10
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Pressed with reef molds and kiln-fired at Cinder Quay",
+      "inputs": [
+        "clay",
+        "reef molds",
+        "kiln fuel"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "reef-porcelain",
+      "issuer": "petra",
+      "destination": "verdant",
+      "quantity": 3,
+      "min_reputation": 0
+    },
+    "market_buyers": [
+      "lina",
+      "petra"
+    ]
+  },
+  "black_kelp_ink": {
+    "name": "Bottle of black kelp ink",
+    "category": "tools",
+    "base_price": 31,
+    "weight_g": 500,
+    "bulk_ml": 700,
+    "origin": "verdant",
+    "demand_ports": [
+      "cinder"
+    ],
+    "regional_factors": {
+      "verdant": 55,
+      "cinder": 230
+    },
+    "description": "Dense ink made from deep-water kelp and soot. Cinder's clerks favor its waterproof strokes, and Verdant fishers mark each bottle with the tide it was gathered under.",
+    "market_stock": {
+      "lina": 16
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Deep-water kelp is rendered with soot into waterproof ink",
+      "inputs": [
+        "deep-water kelp",
+        "soot"
+      ],
+      "simulated": false
+    },
+    "contract_offer": {
+      "id": "kelp-ink",
+      "issuer": "lina",
+      "destination": "cinder",
+      "quantity": 8,
+      "min_reputation": 2
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "lina",
+      "brann",
+      "petra"
+    ]
+  },
+  "shot": {
+    "name": "Cannon shot",
+    "category": "ammunition",
+    "base_price": 12,
+    "weight_g": 5000,
+    "bulk_ml": 1000,
+    "supply": "shot",
+    "yield": 1,
+    "description": "One standardized ammunition charge for cannon loading or firearm practice.",
+    "market_stock": {
+      "brann": 24
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "Cast and finished in the foundry, then packed as a charge",
+      "inputs": [
+        "iron",
+        "foundry fuel"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "bo",
+      "brann"
+    ]
+  },
+  "sailcloth": {
+    "name": "Bolt of sailcloth",
+    "category": "textile",
+    "base_price": 18,
+    "weight_g": 2000,
+    "bulk_ml": 4000,
+    "description": "Woven export commodity. Sail fabrication is not implemented yet.",
+    "market_stock": {
+      "lina": 14
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Woven from island flax and finished for salt air",
+      "inputs": [
+        "flax fiber",
+        "weaver labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 90,
+      "cinder": 180
+    },
+    "market_buyers": [
+      "lina",
+      "dara",
+      "petra"
+    ]
+  },
+  "rope": {
+    "name": "Coiled rope",
+    "category": "tools",
+    "base_price": 14,
+    "weight_g": 1500,
+    "bulk_ml": 2500,
+    "slot": "tool",
+    "labor_bonus": {
+      "rig": 0.12
+    },
+    "description": "Issued rigging rope: 12% faster rigging work.",
+    "market_stock": {
+      "lina": 8,
+      "petra": 8
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      },
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Plant fibers are twisted and laid into a serviceable coil",
+      "inputs": [
+        "hemp fiber",
+        "ropewalk labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "lina",
+      "brann",
+      "petra"
+    ]
+  },
+  "carpenter_tools": {
+    "name": "Carpenter's tool roll",
+    "category": "tools",
+    "base_price": 55,
+    "weight_g": 2500,
+    "bulk_ml": 3000,
+    "slot": "tool",
+    "labor_bonus": {
+      "repair": 0.2
+    },
+    "description": "20% faster repair-labor work, including construction.",
+    "market_stock": {
+      "brann": 10
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "Forged, fitted, and wrapped by a working smith",
+      "inputs": [
+        "iron",
+        "wooden handles"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "lina",
+      "brann",
+      "petra"
+    ]
+  },
+  "cookware": {
+    "name": "Cook's knife and pot",
+    "category": "tools",
+    "base_price": 35,
+    "weight_g": 2500,
+    "bulk_ml": 3500,
+    "slot": "tool",
+    "labor_bonus": {
+      "cook": 0.18
+    },
+    "description": "18% faster galley cooking.",
+    "market_stock": {
+      "petra": 10
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Tin and iron vessels are shaped and fitted at the quay",
+      "inputs": [
+        "sheet metal",
+        "smith labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "lina",
+      "brann",
+      "petra"
+    ]
+  },
+  "bucket": {
+    "name": "Sturdy bailing bucket",
+    "category": "tools",
+    "base_price": 12,
+    "weight_g": 1000,
+    "bulk_ml": 3500,
+    "slot": "tool",
+    "labor_bonus": {
+      "bail": 0.2
+    },
+    "description": "20% faster bilge bailing.",
+    "market_stock": {
+      "petra": 12
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Coopered or riveted into a sturdy bailing bucket",
+      "inputs": [
+        "wood staves or sheet metal",
+        "rivets"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "lina",
+      "brann",
+      "petra"
+    ]
+  },
+  "mop": {
+    "name": "Deck mop",
+    "category": "tools",
+    "base_price": 8,
+    "weight_g": 1000,
+    "bulk_ml": 2500,
+    "slot": "tool",
+    "labor_bonus": {
+      "clean": 0.15
+    },
+    "description": "15% faster swabbing.",
+    "market_stock": {
+      "petra": 12
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "A wooden handle is fitted with replaceable deck fibers",
+      "inputs": [
+        "wood",
+        "cleaning fibers"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "ada",
+      "bo",
+      "lina",
+      "brann",
+      "petra"
+    ]
+  },
+  "work_shirt": {
+    "name": "Linen work clothes",
+    "category": "clothing",
+    "base_price": 24,
+    "weight_g": 800,
+    "bulk_ml": 1500,
+    "slot": "clothing",
+    "fatigue_multiplier": 0.85,
+    "description": "Comfortable working clothes: 15% less physical fatigue from work.",
+    "market_stock": {
+      "lina": 8
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Linen is cut and sewn into durable working clothes",
+      "inputs": [
+        "linen cloth",
+        "tailor labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 100,
+      "cinder": 90
+    },
+    "market_buyers": [
+      "lina",
+      "petra"
+    ]
+  },
+  "oilskin": {
+    "name": "Oilskin working coat",
+    "category": "clothing",
+    "base_price": 42,
+    "weight_g": 1800,
+    "bulk_ml": 3000,
+    "slot": "coat",
+    "fatigue_multiplier": 0.75,
+    "description": "25% less work fatigue and slower wetting in rain; it does not make a deck below it roofed.",
+    "market_stock": {
+      "petra": 8
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Cloth is treated with oil and stitched into a weather coat",
+      "inputs": [
+        "heavy cloth",
+        "oil treatment"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 100,
+      "cinder": 90
+    },
+    "market_buyers": [
+      "lina",
+      "petra"
+    ]
+  },
+  "boots": {
+    "name": "Seaboots",
+    "category": "clothing",
+    "base_price": 30,
+    "weight_g": 1400,
+    "bulk_ml": 2000,
+    "slot": "feet",
+    "movement_multiplier": 0.65,
+    "description": "35% less energy expenditure while walking.",
+    "market_stock": {
+      "petra": 10
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Leather is cut, soled, and stitched for shipboard use",
+      "inputs": [
+        "leather",
+        "sole material"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 100,
+      "cinder": 90
+    },
+    "market_buyers": [
+      "lina",
+      "petra"
+    ]
+  },
+  "sewing_kit": {
+    "name": "Shipboard sewing kit",
+    "category": "tools",
+    "base_price": 14,
+    "weight_g": 500,
+    "bulk_ml": 700,
+    "description": "Reusable needle, awl and shears required to mend issued clothing; repairs also consume one bolt of sailcloth.",
+    "market_stock": {"lina": 6, "petra": 4},
+    "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
+    "production": {"method": "Assembled by a sailmaker for shipboard canvas and clothing repairs", "inputs": ["steel needles", "shears", "small wooden case"], "simulated": false},
+    "regional_factors": {"verdant": 100, "cinder": 110},
+    "market_buyers": ["lina", "petra"]
+  },
+  "spring_water_refill": {
+    "name": "Spring-water refill (5 L)",
+    "category": "water",
+    "base_price": 7,
+    "weight_g": 5000,
+    "bulk_ml": 5000,
+    "supply": "clean_water_ml",
+    "yield": 5000,
+    "description": "5 L of potable spring water delivered loose to the ship's water stockpile; no keg is included.",
+    "market_stock": {"bo": 24, "dara": 8},
+    "found_at": [
+      {"port": "verdant", "merchant": "bo"},
+      {"port": "cinder", "merchant": "dara"}
+    ],
+    "production": {
+      "method": "Drawn from a guarded spring and delivered in the buyer's reusable vessel",
+      "inputs": ["spring water", "porter delivery"],
+      "simulated": false
+    },
+    "regional_factors": {"verdant": 60, "cinder": 185},
+    "market_buyers": ["bo", "dara", "petra"]
+  },
+  "firewood": {
+    "name": "Galley firewood",
+    "category": "wood",
+    "base_price": 6,
+    "weight_g": 3000,
+    "bulk_ml": 6000,
+    "supply": "firewood_g",
+    "yield": 3000,
+    "description": "3 kg of dry split wood reserved for fueled galley work, including boiling questionable rainwater.",
+    "market_stock": {"lina": 20, "brann": 12},
+    "found_at": [
+      {"port": "verdant", "merchant": "lina"},
+      {"port": "cinder", "merchant": "brann"}
+    ],
+    "production": {"method": "Seasoned split timber bundled for shipboard cooking", "inputs": ["dry timber", "woodcutter labor"], "simulated": false},
+    "regional_factors": {"verdant": 65, "cinder": 150},
+    "market_buyers": ["ada", "bo", "lina", "brann", "petra"]
+  },
+  "salt": {
+    "name": "Coarse curing salt",
+    "category": "food",
+    "base_price": 5,
+    "weight_g": 1000,
+    "bulk_ml": 900,
+    "supply": "salt_g",
+    "yield": 1000,
+    "description": "1 kg of coarse salt sold as a measured preserving ingredient; not a meal.",
+    "market_stock": {"bo": 18, "dara": 10},
+    "found_at": [{"port": "verdant", "merchant": "bo"}, {"port": "cinder", "merchant": "dara"}],
+    "production": {"method": "Evaporated from island seawater and screened for coarse curing", "inputs": ["salt pans", "sun and wind", "labor"], "simulated": false},
+    "regional_factors": {"verdant": 60, "cinder": 145},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "canvas_trousers": {
+    "name": "Canvas deck trousers",
+    "category": "clothing",
+    "base_price": 22,
+    "weight_g": 900,
+    "bulk_ml": 1800,
+    "slot": "trousers",
+    "fatigue_multiplier": 0.95,
+    "description": "Hard-wearing deck trousers; 5% less work fatigue.",
+    "market_stock": {
+      "lina": 7
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Cut and double-stitched from heavy canvas",
+      "inputs": ["canvas cloth", "tailor labor"],
+      "simulated": false
+    },
+    "regional_factors": {"verdant": 100, "cinder": 110},
+    "market_buyers": ["lina", "petra"]
+  },
+  "wool_cap": {
+    "name": "Wool watch cap",
+    "category": "clothing",
+    "base_price": 16,
+    "weight_g": 180,
+    "bulk_ml": 350,
+    "slot": "headwear",
+    "movement_multiplier": 0.97,
+    "description": "A close-knit watch cap; 3% less walking energy. Cold protection is not simulated.",
+    "market_stock": {
+      "lina": 10
+    },
+    "found_at": [
+      {
+        "port": "verdant",
+        "merchant": "lina"
+      }
+    ],
+    "production": {
+      "method": "Knitted from local wool and finished by a clothworker",
+      "inputs": ["washed wool", "knitting labor"],
+      "simulated": false
+    },
+    "regional_factors": {"verdant": 100, "cinder": 110},
+    "market_buyers": ["lina", "petra"]
+  },
+  "cutlass": {
+    "name": "Sailor's cutlass",
+    "category": "weapons",
+    "base_price": 75,
+    "weight_g": 1500,
+    "bulk_ml": 1800,
+    "slot": "weapon",
+    "readiness": 12,
+    "description": "Arms-drill equipment; improves boredom and weapon practice. Combat is not implemented.",
+    "market_stock": {
+      "brann": 8
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "A short blade is forged, ground, and fitted with a guard",
+      "inputs": [
+        "steel",
+        "wooden grip"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "lina",
+      "brann"
+    ]
+  },
+  "flintlock": {
+    "name": "Flintlock pistol",
+    "category": "weapons",
+    "base_price": 110,
+    "weight_g": 1800,
+    "bulk_ml": 1600,
+    "slot": "weapon",
+    "readiness": 18,
+    "practice_shot": 1,
+    "description": "Firearm drills consume one ship shot charge. Combat is not implemented.",
+    "market_stock": {
+      "brann": 5
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "brann"
+      }
+    ],
+    "production": {
+      "method": "A compact firearm is assembled and proofed by a gunsmith",
+      "inputs": [
+        "iron",
+        "lock mechanism",
+        "wooden stock"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 200,
+      "cinder": 65
+    },
+    "market_buyers": [
+      "lina",
+      "brann"
+    ]
+  },
+  "medical_kit": {
+    "name": "Ship's medical kit",
+    "category": "medical",
+    "base_price": 42,
+    "weight_g": 2000,
+    "bulk_ml": 2500,
+    "supply": "medicine",
+    "yield": 2,
+    "description": "Two treatment doses for the ship's designated infirmary.",
+    "market_stock": {
+      "petra": 8
+    },
+    "found_at": [
+      {
+        "port": "cinder",
+        "merchant": "petra"
+      }
+    ],
+    "production": {
+      "method": "Prepared and packed by a ship's surgeon",
+      "inputs": [
+        "clean bandages",
+        "antiseptic herbs",
+        "medical labor"
+      ],
+      "simulated": false
+    },
+    "regional_factors": {
+      "verdant": 115,
+      "cinder": 90
+    },
+    "market_buyers": [
+      "petra",
+      "brann"
+    ]
+  },
+  "bandage_roll": {
+    "name": "Clean bandage roll",
+    "category": "medical",
+    "base_price": 6,
+    "weight_g": 80,
+    "bulk_ml": 180,
+    "supply": "bandages",
+    "yield": 1,
+    "description": "One 80 g clean dressing roll; applying it to an existing shipboard injury consumes it and advances recovery, but does not replace infirmary medicine.",
+    "market_stock": {"petra": 20},
+    "found_at": [{"port": "cinder", "merchant": "petra"}],
+    "production": {"method": "Cut and sterilize linen dressing strips", "inputs": ["clean linen", "sterilization labor"], "simulated": false},
+    "regional_factors": {"verdant": 115, "cinder": 90},
+    "market_buyers": ["petra", "brann"]
+  },
+  "soap_bar": {
+    "name": "Shipboard soap bar",
+    "category": "supplies",
+    "base_price": 4,
+    "weight_g": 100,
+    "bulk_ml": 160,
+    "supply": "soap",
+    "yield": 1,
+    "description": "One 100 g bar for a measured personal wash; a wash also consumes 250 mL clean water and improves visible cleanliness only.",
+    "market_stock": {"lina": 18, "petra": 12},
+    "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
+    "production": {"method": "Boiled from rendered fat and island lye", "inputs": ["fat", "lye", "soap-boiler labor"], "simulated": false},
+    "regional_factors": {"verdant": 100, "cinder": 110},
+    "market_buyers": ["lina", "petra"]
+  },
+  "ship_lantern": {
+    "name": "Shielded ship lantern",
+    "category": "tools",
+    "base_price": 22,
+    "weight_g": 1200,
+    "bulk_ml": 1800,
+    "supply": "lanterns",
+    "yield": 1,
+    "description": "Reusable enclosed light source; while lit it extends the Captain's visibility radius from 18 to 24 tiles. Uses 250 mL lamp oil per lighting charge; no ignition risk is modeled.",
+    "market_stock": {"petra": 8, "brann": 6},
+    "found_at": [{"port": "cinder", "merchant": "petra"}, {"port": "cinder", "merchant": "brann"}],
+    "production": {"method": "Sheet brass and glass assembled into an enclosed ship lantern", "inputs": ["brass", "glass", "lamp wick", "glazier labor"], "simulated": false},
+    "regional_factors": {"verdant": 120, "cinder": 90},
+    "market_buyers": ["petra", "brann"]
+  },
+  "lamp_oil": {
+    "name": "Lamp oil flask (500 mL)",
+    "category": "fuel",
+    "base_price": 5,
+    "weight_g": 500,
+    "bulk_ml": 650,
+    "supply": "lamp_oil_ml",
+    "yield": 500,
+    "description": "500 mL lamp oil; lantern lighting consumes measured 250 mL charges, for about 42 minutes of light each.",
+    "market_stock": {"petra": 16, "lina": 12},
+    "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
+    "production": {"method": "Filtered rendered oil prepared for enclosed lamps", "inputs": ["rendered oil", "filter cloth", "bottling labor"], "simulated": false},
+    "regional_factors": {"verdant": 100, "cinder": 105},
+    "market_buyers": ["lina", "petra"]
+  },
+  "candles": {
+    "name": "Beeswax candles (4)",
+    "category": "supplies",
+    "base_price": 6,
+    "weight_g": 400,
+    "bulk_ml": 550,
+    "supply": "candles",
+    "yield": 4,
+    "description": "Four 100 g candles. Lighting consumes one candle for up to one hour; extinguishing preserves its remaining burn time.",
+    "market_stock": {"lina": 16, "petra": 10},
+    "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
+    "production": {"method": "Beeswax poured around braided wicks", "inputs": ["beeswax", "cotton wick", "candle-maker labor"], "simulated": false},
+    "regional_factors": {"verdant": 100, "cinder": 110},
+    "market_buyers": ["lina", "petra"]
+  },
+  "rice": {
+    "name": "Sack of rice",
+    "category": "food",
+    "base_price": 9,
+    "weight_g": 2500,
+    "bulk_ml": 3200,
+    "supply": "rice_g",
+    "yield": 2500,
+    "description": "2.5 kg dry rice for measured galley recipes.",
+    "market_stock": {"ada": 18},
+    "found_at": [{"port": "verdant", "merchant": "ada"}],
+    "production": {"method": "Harvested, dried and milled on the lowland farms", "inputs": ["rice paddy", "field labor", "milling"], "simulated": false},
+    "regional_factors": {"verdant": 60, "cinder": 190},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "oats": {
+    "name": "Rolled oats",
+    "category": "food",
+    "base_price": 7,
+    "weight_g": 2000,
+    "bulk_ml": 2800,
+    "supply": "oats_g",
+    "yield": 2000,
+    "description": "2 kg dry oats; economical breakfast porridge ingredient.",
+    "market_stock": {"ada": 20},
+    "found_at": [{"port": "verdant", "merchant": "ada"}],
+    "production": {"method": "Cut, rolled and dried from hardy island oats", "inputs": ["oat grain", "field labor", "mill work"], "simulated": false},
+    "regional_factors": {"verdant": 65, "cinder": 175},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "potatoes": {
+    "name": "Potato basket",
+    "category": "food",
+    "base_price": 5,
+    "weight_g": 4000,
+    "bulk_ml": 6000,
+    "supply": "potatoes_g",
+    "yield": 4000,
+    "description": "4 kg of fresh potatoes; cook aboard before eating.",
+    "market_stock": {"ada": 24},
+    "found_at": [{"port": "verdant", "merchant": "ada"}],
+    "production": {"method": "Dug and sorted from the island's cool soil", "inputs": ["seed potatoes", "field labor"], "simulated": false},
+    "regional_factors": {"verdant": 55, "cinder": 205},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "onions": {
+    "name": "Onion string",
+    "category": "food",
+    "base_price": 4,
+    "weight_g": 1000,
+    "bulk_ml": 1800,
+    "supply": "onions_g",
+    "yield": 1000,
+    "description": "1 kg of onions for the galley; recipe ingredient, not a meal by itself.",
+    "market_stock": {"ada": 15},
+    "found_at": [{"port": "verdant", "merchant": "ada"}],
+    "production": {"method": "Cured and braided for storage", "inputs": ["onion bulbs", "field labor"], "simulated": false},
+    "regional_factors": {"verdant": 60, "cinder": 180},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "salted_pork": {
+    "name": "Salted pork",
+    "category": "food",
+    "base_price": 14,
+    "weight_g": 1500,
+    "bulk_ml": 2400,
+    "supply": "salted_pork_g",
+    "yield": 1500,
+    "description": "1.5 kg of preserved pork for hearty stews; cook before eating.",
+    "market_stock": {"bo": 12},
+    "found_at": [{"port": "verdant", "merchant": "bo"}],
+    "production": {"method": "Pork rubbed with salt and air-cured in a cool shed", "inputs": ["pork", "salt", "curing labor"], "simulated": false},
+    "regional_factors": {"verdant": 70, "cinder": 165},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "hard_cheese": {
+    "name": "Hard island cheese",
+    "category": "food",
+    "base_price": 12,
+    "weight_g": 1000,
+    "bulk_ml": 1200,
+    "supply": "hard_cheese_g",
+    "yield": 1000,
+    "description": "1 kg of firm ready-to-eat cheese for a cold ration.",
+    "market_stock": {"bo": 10},
+    "found_at": [{"port": "verdant", "merchant": "bo"}],
+    "production": {"method": "Pressed, salted and aged from island milk", "inputs": ["milk", "salt", "dairy labor"], "simulated": false},
+    "regional_factors": {"verdant": 75, "cinder": 150},
+    "market_buyers": ["ada", "bo", "dara", "petra"]
+  },
+  "waterskin": {
+    "name": "Leather waterskin",
+    "category": "containers",
+    "base_price": 18,
+    "weight_g": 250,
+    "bulk_ml": 600,
+    "container": {"capacity_ml": 1000, "tare_g": 250, "liquid": "clean_water_ml"},
+    "description": "Reusable 1 L personal water flask; empty mass 250 g.",
+    "market_stock": {"lina": 12},
+    "found_at": [{"port": "verdant", "merchant": "lina"}],
+    "production": {"method": "Cut, waxed and stitched from treated hide", "inputs": ["leather", "wax", "leatherworker labor"], "simulated": false},
+    "regional_factors": {"verdant": 100, "cinder": 120},
+    "market_buyers": ["lina", "petra"]
+  },
+  "water_barrel": {
+    "name": "Shipboard water barrel",
+    "category": "containers",
+    "base_price": 32,
+    "weight_g": 5000,
+    "bulk_ml": 28000,
+    "container": {"capacity_ml": 20000, "tare_g": 5000, "liquid": "clean_water_ml"},
+    "description": "Reusable 20 L lidded barrel; empty mass 5 kg.",
+    "market_stock": {"bo": 6},
+    "found_at": [{"port": "verdant", "merchant": "bo"}],
+    "production": {"method": "Coopered from fitted staves and sealed with pitch", "inputs": ["oak staves", "iron hoops", "cooper labor"], "simulated": false},
+    "regional_factors": {"verdant": 100, "cinder": 135},
+    "market_buyers": ["bo", "lina", "petra"]
+  }
 }

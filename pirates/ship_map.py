@@ -26,19 +26,24 @@ def capture_starter(tiles):
     return model, fixtures
 
 
-def project(model, fixtures, game_map):
-    """Validate fully before changing tiles. Higher decks are not live yet."""
+def project(model, fixtures, game_map, z=0):
+    """Project one structural deck into the inherited two-dimensional map."""
+    if type(z) is not int or z < 0:
+        raise ValueError("Invalid active deck elevation")
     cells = {}
     for component in model.components:
         if not (0 <= component.x < WIDTH and 0 <= component.y < HEIGHT
-                and component.z == 0):
-            raise ValueError("Live ship component outside supported deck bounds")
+                and 0 <= component.z <= 8):
+            raise ValueError("Ship component outside supported deck bounds")
+        if component.z != z:
+            continue
         cells.setdefault((component.x, component.y), {})[component.kind] = component
     for at, parts in cells.items():
         if "floor" not in parts:
+            if set(parts) == {"beam"}:
+                # Beams may bridge empty cells above a lower-deck opening.
+                continue
             raise ValueError("Live components require a deck floor")
-        if "pillar" in parts or "beam" in parts:
-            raise ValueError("Live structural supports are not implemented yet")
     for at in fixtures:
         if at not in cells or "wall" in cells[at] or "door" in cells[at]:
             raise ValueError("Construction would remove or obstruct an installed fixture")
@@ -48,7 +53,8 @@ def project(model, fixtures, game_map):
     deck[:] = T.WATER
     for (x, y), parts in cells.items():
         deck[y, x] = (T.WALL_WOOD if "wall" in parts else
-                      T.DOOR if "door" in parts else fixtures.get((x, y), T.FLOOR))
+                      T.DOOR if "door" in parts else
+                      fixtures.get((x, y), T.FLOOR))
     game_map.tiles[oy:oy + HEIGHT, ox:ox + WIDTH] = deck
     doors = game_map.doors[oy:oy + HEIGHT, ox:ox + WIDTH]
     # New doors start closed; surviving doors preserve their state.

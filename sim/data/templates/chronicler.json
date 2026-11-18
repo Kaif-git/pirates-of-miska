@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "templates": {
+    "CHARACTER_DIED": {
+      "required_slots": ["actor", "place", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["death"], "text": "{actor} died at {place} after {cause}."},
+        {"tone": "tavern", "context_tags": ["death", "loss"], "text": "At {place}, {actor}'s luck finally ran out: {cause}."}
+      ]
+    },
+    "SHIP_SUNK": {
+      "required_slots": ["actor", "place", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["ship", "loss"], "text": "{actor} went down near {place} after {cause}."},
+        {"tone": "tavern", "context_tags": ["ship", "loss"], "text": "They say {actor}'s ship sleeps beneath the waters off {place}, taken by {cause}."}
+      ]
+    },
+    "ENCOUNTER_RESOLVED": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["conflict"], "text": "Near {place}, {actor} met {target}; {detail}."},
+        {"tone": "plain", "context_tags": ["mutual withdrawal", "flee"], "text": "At {place}, {actor} and {target} met; {detail}."},
+        {"tone": "tavern", "context_tags": ["conflict"], "text": "A hard meeting off {place}: {actor} faced {target}, and {detail}."}
+      ]
+    },
+    "WAR_DECLARED": {
+      "required_slots": ["actor", "target", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["politics", "conflict"], "text": "War opened between {actor} and {target} after {cause}."},
+        {"tone": "tavern", "context_tags": ["politics", "conflict"], "text": "Old grievances came due: {actor} turned against {target} over {cause}."}
+      ]
+    },
+    "TREATY_BREACHED": {
+      "required_slots": ["actor", "target", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["politics", "betrayal"], "text": "{actor} broke the agreement with {target} after {cause}."},
+        {"tone": "tavern", "context_tags": ["politics", "betrayal"], "text": "The oath between {actor} and {target} proved weaker than {cause}."}
+      ]
+    },
+    "FACTION_FOUNDED": {
+      "required_slots": ["actor", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["politics"], "text": "At {place}, {actor} formed a new faction: {detail}."},
+        {"tone": "tavern", "context_tags": ["politics"], "text": "A new flag rose at {place}: {actor}, with {detail}."}
+      ]
+    },
+    "FACTION_DISSOLVED": {
+      "required_slots": ["actor", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["politics", "loss"], "text": "{actor} dissolved after {cause}."},
+        {"tone": "tavern", "context_tags": ["politics", "loss"], "text": "The last of {actor} scattered when {cause}."}
+      ]
+    },
+    "TREASURE_FOUND": {
+      "required_slots": ["actor", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["discovery"], "text": "At {place}, {actor} found {detail}."},
+        {"tone": "tavern", "context_tags": ["discovery"], "text": "Fortune surfaced at {place}: {actor} found {detail}."}
+      ]
+    },
+    "HARVEST_FAILURE": {
+      "required_slots": ["place", "detail", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["environment", "hardship"], "text": "A failed harvest at {place} brought {detail}, following {cause}."},
+        {"tone": "tavern", "context_tags": ["environment", "hardship"], "text": "The fields at {place} gave little; {detail} followed {cause}."}
+      ]
+    },
+    "PLAGUE": {
+      "required_slots": ["place", "detail", "cause"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["environment", "hardship"], "text": "Sickness reached {place}: {detail}, after {cause}."},
+        {"tone": "tavern", "context_tags": ["environment", "hardship"], "text": "A fever took hold at {place}; folk speak of {detail} and {cause}."}
+      ]
+    },
+    "DIRECTOR_INJECTION": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["character"], "text": "At {place}, {actor} took up a vendetta against {target}: {detail}."}
+      ]
+    },
+    "TERRITORY_CLAIMED": {
+      "required_slots": ["actor", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["politics"], "text": "{actor} claimed {place}; {detail}."},
+        {"tone": "tavern", "context_tags": ["politics"], "text": "A new banner appeared over {place}, and {actor} declared: {detail}."}
+      ]
+    },
+    "BOUNTY_SET": {
+      "required_slots": ["actor", "target", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["law"], "text": "{actor} placed a bounty on {target}: {detail}."}
+      ]
+    },
+    "BOUNTY_RAISED": {
+      "required_slots": ["actor", "target", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["law"], "text": "{actor} raised the price on {target}: {detail}."},
+        {"tone": "tavern", "context_tags": ["law", "trouble"], "text": "The wanted purse for {target} grew; {actor} now offers {detail}."}
+      ]
+    },
+    "MARKET_TRADE": {
+      "required_slots": ["actor", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["market", "trade"], "text": "At {place}, merchant {actor} moved {detail}."},
+        {"tone": "tavern", "context_tags": ["market", "trade"], "text": "The quay at {place} saw {actor} trading {detail}."}
+      ]
+    },
+    "BATTLE": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["battle", "legendary_commanders"], "text": "At {place}, {actor} led the fleet against {target}: {detail}."},
+        {"tone": "tavern", "context_tags": ["battle", "legendary_commanders"], "text": "The sea filled with smoke at {place} as {actor} challenged {target}; {detail}."}
+      ]
+    },
+    "LEGEND_DUEL": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["named_legend_duel"], "text": "At {place}, {actor} crossed blades with {target}; {detail}."},
+        {"tone": "tavern", "context_tags": ["named_legend_duel"], "text": "Witnesses swear {actor} and {target} met blade to blade at {place}; {detail}."}
+      ]
+    },
+    "BATTLE_CONCLUDED": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["battle_outcome"], "text": "The battle at {place} ended with {actor} prevailing over {target}: {detail}."},
+        {"tone": "tavern", "context_tags": ["battle_outcome"], "text": "When the smoke cleared at {place}, {actor} had bested {target}; {detail}."}
+      ]
+    },
+    "LEGEND_RECOGNIZED": {
+      "required_slots": ["actor", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["legend_foundation"], "text": "At {place}, {actor} was recognized as a legend for {detail}."},
+        {"tone": "tavern", "context_tags": ["legend_foundation"], "text": "The old hands at {place} began calling {actor} a legend for {detail}."}
+      ]
+    },
+    "BATTLE_MORALE_CHANGED": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["battle", "aftermath"], "text": "After the battle at {place}, {actor} led {target}; {detail}."}
+      ]
+    },
+    "BATTLE_CASUALTY": {
+      "required_slots": ["actor", "target", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["battle", "casualty"], "text": "At {place}, {actor} was wounded in the battle commanded by {target}: {detail}."}
+      ]
+    },
+    "FACTION_POWER_VACUUM": {
+      "required_slots": ["actor", "target", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["politics", "succession"], "text": "After {actor} lost standing, {target} took command: {detail}."}
+      ]
+    },
+    "LOD_PROMOTED": {
+      "required_slots": ["actor", "place", "detail"],
+      "variants": [
+        {"tone": "plain", "context_tags": ["promotion", "notability"], "text": "At {place}, {actor} was drawn into the wider story: {detail}."}
+      ]
+    }
+  },
+  "significance": {
+    "threshold": 0.7,
+    "rarity_floor": 0.55,
+    "rarity_ceiling": 2.5,
+    "reach_per_child": 0.08,
+    "reach_cap": 1.8,
+    "novelty_floor": 0.45,
+    "recent_window_events": 100,
+    "collapse_types": ["MARKET_TRADE", "ISLAND_ECONOMY_UPDATED", "SHIP_SUPPLIES_CONSUMED", "DISEASE_CONTAINED", "STORM_PATH_UPDATED", "BATTLE_ROUND", "BATTLE_REINFORCEMENT", "FLEET_COMMAND_SET", "BATTLE_MORALE_CHANGED", "BATTLE_CASUALTY"]
+  },
+  "reputation": {
+    "fame_weight_by_tier": {"BACKGROUND": 0.75, "MINOR": 1.0, "MAJOR": 1.45, "LEGEND": 2.0},
+    "epithet_rules": [
+      {"event_types": ["TREATY_BREACHED"], "minimum_count": 1,
+       "epithet": "Oathbreaker", "reason": "a recorded treaty breach"},
+      {"event_types": ["SHIP_SUNK", "SHIP_CAPTURED"], "minimum_count": 5,
+       "epithet": "the Hull-Breaker", "reason": "five recorded ship sinkings or captures"}
+    ]
+  }
+}

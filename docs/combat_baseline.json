@@ -1,0 +1,1821 @@
+{
+  "ruleset": "pre-combat-rework",
+  "seed_start": 2026,
+  "matches_per_archetype": 10,
+  "bots": {
+    "kiter": {
+      "bot": "kiter",
+      "matches_per_archetype": 10,
+      "seed": 2026,
+      "archetypes": {
+        "duelist": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 982.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            }
+          ]
+        },
+        "brawler": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 1082.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 1082,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 8
+            }
+          ]
+        },
+        "spearman": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 0,
+          "timeouts": 10,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 50000.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2027,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2028,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2029,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2030,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2031,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2032,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2033,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2034,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2035,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            }
+          ]
+        },
+        "gunman": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 1882.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 1882,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 13
+            }
+          ]
+        },
+        "sniper": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 800.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            }
+          ]
+        },
+        "charger": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 800.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            }
+          ]
+        },
+        "shield": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 982.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 982,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 7
+            }
+          ]
+        },
+        "pack_hunter": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 1841.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 1841,
+              "damage_taken": 0,
+              "damage_dealt": 13,
+              "commands": 17
+            }
+          ]
+        },
+        "shotgunner": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 330.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 5
+            }
+          ]
+        },
+        "mixed": {
+          "matches": 10,
+          "wins": 10,
+          "losses": 0,
+          "timeouts": 0,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 800.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2027,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2028,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2029,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2030,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2031,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2032,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2033,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2034,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            },
+            {
+              "seed": 2035,
+              "winner": "captain",
+              "ticks": 800,
+              "damage_taken": 0,
+              "damage_dealt": 20,
+              "commands": 5
+            }
+          ]
+        }
+      }
+    },
+    "runner": {
+      "bot": "runner",
+      "matches_per_archetype": 10,
+      "seed": 2026,
+      "archetypes": {
+        "duelist": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 1701.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 1701,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            }
+          ]
+        },
+        "brawler": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 1434.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 1434,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 15
+            }
+          ]
+        },
+        "spearman": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 0,
+          "timeouts": 10,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 50000.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2027,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2028,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2029,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2030,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2031,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2032,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2033,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2034,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2035,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            }
+          ]
+        },
+        "gunman": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 1202.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 1202,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 13
+            }
+          ]
+        },
+        "sniper": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 0,
+          "timeouts": 10,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 50000.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2027,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2028,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2029,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2030,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2031,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2032,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2033,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2034,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2035,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            }
+          ]
+        },
+        "charger": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 2402.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 2402,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 25
+            }
+          ]
+        },
+        "shield": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 0,
+          "timeouts": 10,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 50000.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2027,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2028,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2029,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2030,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2031,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2032,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2033,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2034,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2035,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            }
+          ]
+        },
+        "pack_hunter": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 0,
+          "timeouts": 10,
+          "mean_damage_taken": 0.0,
+          "mean_ticks": 50000.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2027,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2028,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2029,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2030,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2031,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2032,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2033,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2034,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            },
+            {
+              "seed": 2035,
+              "winner": null,
+              "ticks": 50000,
+              "damage_taken": 0,
+              "damage_dealt": 0,
+              "commands": 500
+            }
+          ]
+        },
+        "shotgunner": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 330.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 330,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 4
+            }
+          ]
+        },
+        "mixed": {
+          "matches": 10,
+          "wins": 0,
+          "losses": 10,
+          "timeouts": 0,
+          "mean_damage_taken": 20.0,
+          "mean_ticks": 1710.0,
+          "samples": [
+            {
+              "seed": 2026,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2027,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2028,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2029,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2030,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2031,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2032,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2033,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2034,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            },
+            {
+              "seed": 2035,
+              "winner": "enemy",
+              "ticks": 1710,
+              "damage_taken": 20,
+              "damage_dealt": 0,
+              "commands": 18
+            }
+          ]
+        }
+      }
+    }
+  }
+}

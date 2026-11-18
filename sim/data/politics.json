@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "relation_min": 0,
+    "relation_max": 100,
+    "trade_dependence_per_volume": 1,
+    "trade_dependence_cap": 40,
+    "max_trade_volume": 1000000000,
+    "faction_month_days": 30,
+    "expansion_base_basis_points": 700,
+    "expansion_ambition_basis_points": 20,
+    "max_faction_territories": 6,
+    "coup_base_basis_points": 20,
+    "coup_ambition_basis_points": 30,
+    "coup_success_base_basis_points": 2500,
+    "coup_success_leadership_basis_points": 50,
+    "marine_officer_slots": 3,
+    "marine_challenge_base_basis_points": 30,
+    "marine_challenge_ambition_basis_points": 25,
+    "marine_challenge_success_base_basis_points": 2000,
+    "government_starting_budget_silver": 5000,
+    "heat_bounty_threshold": 30,
+    "heat_hunter_threshold": 80,
+    "heat_fleet_threshold": 160,
+    "heat_per_hostile_combat": 35,
+    "heat_per_ship_sunk": 30,
+    "heat_daily_decay": 1,
+    "bounty_base_silver": 250,
+    "bounty_per_heat_silver": 10,
+    "monthly_patrol_cost_silver": 125,
+    "monthly_hunter_cost_silver": 300,
+    "monthly_fleet_cost_silver": 600,
+    "monthly_diplomacy_basis_points": 1800
+  },
+  "relation_weights": {
+    "trust": {"opinion_trust": 700, "institutional": 300},
+    "fear": {"opinion_fear": 700, "institutional": 300},
+    "grievance": {"opinion_grievance": 700, "institutional": 300},
+    "kinship": {"shared_house": 1000},
+    "trade_dependence": {"trade_volume": 1000}
+  },
+  "treaty_states": ["none", "nonaggression", "trade_pact", "alliance", "vassalage", "war"],
+  "transitions": {
+    "none": {
+      "nonaggression": {"min_trust": 20, "max_grievance": 75},
+      "trade_pact": {"min_trust": 25, "max_grievance": 70},
+      "alliance": {"min_trust": 70, "max_grievance": 60},
+      "vassalage": {"min_trust": 35, "max_grievance": 60},
+      "war": {"min_trust": 0, "max_grievance": 100}
+    },
+    "nonaggression": {
+      "trade_pact": {"min_trust": 25, "max_grievance": 70},
+      "alliance": {"min_trust": 70, "max_grievance": 60},
+      "war": {"min_trust": 0, "max_grievance": 100}
+    },
+    "trade_pact": {
+      "nonaggression": {"min_trust": 0, "max_grievance": 100},
+      "alliance": {"min_trust": 70, "max_grievance": 60},
+      "war": {"min_trust": 0, "max_grievance": 100}
+    },
+    "alliance": {
+      "nonaggression": {"min_trust": 0, "max_grievance": 100},
+      "trade_pact": {"min_trust": 0, "max_grievance": 100},
+      "vassalage": {"min_trust": 35, "max_grievance": 60},
+      "war": {"min_trust": 0, "max_grievance": 100}
+    },
+    "vassalage": {
+      "alliance": {"min_trust": 0, "max_grievance": 100},
+      "war": {"min_trust": 0, "max_grievance": 100}
+    },
+    "war": {
+      "nonaggression": {"min_trust": 0, "max_grievance": 100},
+      "trade_pact": {"min_trust": 0, "max_grievance": 100},
+      "alliance": {"min_trust": 70, "max_grievance": 60}
+    }
+  },
+  "terms": {
+    "none": [],
+    "nonaggression": ["no_hostile_action"],
+    "trade_pact": ["no_hostile_action", "honor_trade_access"],
+    "alliance": ["mutual_defense", "no_hostile_action"],
+    "vassalage": ["provide_overlord_aid", "pay_tribute"],
+    "war": ["hostilities_permitted"]
+  }
+}

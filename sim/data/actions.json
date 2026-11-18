@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "top_k": 3,
+    "recency_window_ticks": 720,
+    "recency_penalty_per_repeat": 12,
+    "noise_max_points": 8,
+    "selection_temperature_base": 30000,
+    "selection_temperature_boldness": 5,
+    "loop_max_sequence_length": 3,
+    "loop_repeat_limit": 2,
+    "loop_penalty": 1000,
+    "debug_history_limit": 500
+  },
+  "actions": {
+    "pursue_dream_step": {
+      "precondition": "living_character_with_dream",
+      "handler": "advance_dream",
+      "time_cost_ticks": 24,
+      "silver_cost": 0,
+      "risk_permille": 0,
+      "expected_gain": 35,
+      "expected_loss": 0,
+      "want_alignment": {"chart_region": 700, "heal": 250, "repair_ship": 350},
+      "dream_kinds": ["find_treasure", "become_title", "destroy_entity", "restore_house", "chart_region", "free_island", "become_wealthiest", "defeat_character", "find_person", "protect_entity", "reach_legend_tier"],
+      "plan_steps": ["gather_clue", "travel_to_region", "survive_hazard", "claim_treasure", "return_home", "build_reputation", "complete_service", "petition_authority", "locate_target", "prepare_for_confrontation", "confront_target", "find_financing", "acquire_property", "rebuild_house", "prepare_vessel", "survey_routes", "record_chart", "gather_allies", "reach_island", "challenge_authority", "secure_island", "acquire_capital", "trade_route", "grow_wealth", "protect_assets", "gather_leads", "travel_to_last_known_place", "locate_person", "locate_protected_target", "defend_target", "survive_major_trial", "earn_recognition"],
+      "trait_weights": {"ambition": 18, "curiosity": 10, "boldness": 6},
+      "grudge_weight": 0,
+      "recency_penalty": 8
+    },
+    "rest_with_crew": {
+      "precondition": "crew_at_island_below_full_morale",
+      "handler": "rest_crew",
+      "time_cost_ticks": 24,
+      "silver_cost": 0,
+      "risk_permille": 0,
+      "expected_gain": 18,
+      "expected_loss": 0,
+      "want_alignment": {"heal": 400, "find_safe_harbor": 500, "resupply": 250},
+      "dream_kinds": [],
+      "plan_steps": [],
+      "trait_weights": {"honor": 2, "loyalty": 8},
+      "grudge_weight": 0,
+      "recency_penalty": 12
+    },
+    "trade_run": {
+      "precondition": "captain_with_profitable_trade_route",
+      "handler": "dispatch_trade",
+      "time_cost_ticks": 24,
+      "silver_cost": 0,
+      "risk_permille": 100,
+      "expected_gain": 30,
+      "expected_loss": 8,
+      "want_alignment": {"sell_cargo": 1000, "resupply": 150, "pay_debt": 300},
+      "dream_kinds": ["become_wealthiest", "find_treasure", "restore_house"],
+      "plan_steps": ["acquire_capital", "trade_route", "grow_wealth"],
+      "trait_weights": {"greed": 16, "curiosity": 3, "honor": -2},
+      "grudge_weight": 0,
+      "recency_penalty": 15
+    },
+    "hunt_rival": {
+      "precondition": "living_character_with_grudge",
+      "handler": "pursue_grudge",
+      "time_cost_ticks": 24,
+      "silver_cost": 0,
+      "risk_permille": 250,
+      "expected_gain": 28,
+      "expected_loss": 8,
+      "want_alignment": {"revenge": 1000, "heal": 100},
+      "dream_kinds": ["defeat_character", "destroy_entity"],
+      "plan_steps": ["locate_target", "prepare_for_confrontation", "confront_target", "gather_allies"],
+      "trait_weights": {"pride": 8, "ambition": 8, "boldness": 5},
+      "grudge_weight": 100,
+      "recency_penalty": 6
+    }
+  }
+}

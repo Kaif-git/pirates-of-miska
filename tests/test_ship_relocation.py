@@ -54,6 +54,36 @@ def test_pickup_haul_install_real_geometry_and_identity():
     assert world.ship.check_orders() == []
 
 
+def test_equipment_can_be_physically_relocated_to_upper_deck_and_resume(tmp_path):
+    world, sailor = relocation_world()
+    for x in range(3, 9):
+        world.ship_model.place(x, 2, 1, "floor")
+    world.ship_model.place(3, 2, 0, "stair")
+    world.player.x, world.player.y = 72, 14
+    assert world.move_vertical(1)
+    world.player.x = 77  # clear the stair-connected work corridor
+    target = (69 + 5, 12 + 2)
+    job = queue(world, "galley", target)
+    assert job.target == (*target, 1)
+    until(world, lambda: job.relocation["stage"] == "haul")
+    save_path = tmp_path / "upper-fixture-haul.json"
+    world.save(save_path)
+    world = World.load(save_path)
+    job = world.ship.job(job.id)
+    until(world, lambda: job.state == "done")
+    fixture = world.fixtures.get("galley")
+    assert (fixture.x, fixture.y, fixture.z) == (5, 2, 1)
+    assert world.ship.stations["galley"] == (*target, 1)
+    assert world.game_map.tile_id(*target) == T.HEARTH
+    assert world.ship.check_orders() == []
+    installed = tmp_path / "upper-fixture-installed.json"
+    world.save(installed)
+    loaded = World.load(installed)
+    assert loaded.fixtures.get("galley").z == 1
+    assert loaded.ship.stations["galley"] == (*target, 1)
+    assert loaded.game_map.tile_id(*target) == T.HEARTH
+
+
 def test_midhaul_save_continues_or_returns_on_cancel(tmp_path):
     world, sailor = relocation_world()
     job = queue(world, "bunk:0", (78, 38))
@@ -89,13 +119,13 @@ def test_moving_equipment_is_not_usable():
     job = queue(world, "water", (78, 27))
     until(world, lambda: job.relocation["stage"] == "haul")
     other = world.ship.crew[1]
-    before = world.ship.stores["water"]
+    before = world.ship.stores["clean_water_ml"]
     other.x, other.y = 74, 29
     other.thirst = 90
     for _ in range(8):
         world.ship.satisfy(world, other, "drink")
     assert "Waiting for relocated equipment" in other.activity
-    assert world.ship.stores["water"] == before
+    assert world.ship.stores["clean_water_ml"] == before
     assert other.thirst == 90
 
 
@@ -131,6 +161,8 @@ def test_labor_off_returns_equipment_before_releasing_claim(tmp_path):
 def test_active_station_job_retargets_after_relocation(tmp_path):
     world, _ = relocation_world()
     world.ship.meals = 0
+    for key in ("fruit_g", "dried_fish_g", "biscuit_g"):
+        world.ship.stores[key] = 0
     world.ship.generate_jobs()
     cook = next(j for j in world.ship.jobs if j.kind == "cook")
     move = queue(world, "galley", (78, 27))
@@ -221,6 +253,8 @@ def test_need_pause_returns_equipment_before_using_it():
 def test_terminal_job_history_survives_later_equipment_moves(tmp_path):
     world, _ = relocation_world()
     world.ship.meals = 0
+    for key in ("fruit_g", "dried_fish_g", "biscuit_g"):
+        world.ship.stores[key] = 0
     world.ship.generate_jobs()
     cook = next(j for j in world.ship.jobs if j.kind == "cook")
     # Terminal history is read-only and retains the original work position.

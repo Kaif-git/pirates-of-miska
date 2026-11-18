@@ -159,12 +159,29 @@ def report_rows(world, wx, wy):
         rows.append("No purpose assigned. Existing stations still function.")
     for purpose in labels:
         if purpose == "berths":
-            rows.append(f"Berths: {bunks} actual assigned bunk(s); a label creates no beds.")
+            occupants = sum(c.bunk < len(world.ship.bunks)
+                           and world.ship.bunks[c.bunk] in cells for c in world.ship.crew)
+            rows.append(f"Berths: {bunks} installed bunk(s) | {occupants} crew assigned; sleep uses each sailor's actual bunk.")
         elif purpose in required:
             key = required[purpose]
             rows.append(f"{purpose.title()}: " + ("installed station present" if key in stations else "MISSING installed station"))
-        elif purpose in ("infirmary", "magazine", "brig"):
-            rows.append(f"{purpose.title()}: designation only; dedicated equipment/workflows not implemented.")
+        elif purpose == "infirmary":
+            present = "medicine_chest" in stations
+            patients = sum(c.health < 95 and c.intent == "infirmary" for c in world.ship.crew)
+            rows.append(f"Infirmary: {'medicine chest installed' if present else 'MISSING medicine chest'}; "
+                        f"injured crew seek care here when health is below 80 ({patients} receiving care); "
+                        f"{world.ship.stores['medicine']} medicine dose(s) aboard.")
+        elif purpose == "magazine":
+            cannons = [key for key in world.ship.ammo if key in stations]
+            loaded = sum(world.ship.ammo[key] for key in cannons)
+            rows.append(f"Magazine: {len(cannons)} cannon station(s) | {loaded} loaded charge(s); "
+                        "crew load orders haul shot from spatial storage to installed cannon stations.")
+        elif purpose == "brig":
+            cage = "brig_cage" in stations
+            secured = world.ship.brig_ready(world)
+            rows.append(f"Brig: {'restraint cage installed' if cage else 'MISSING restraint cage'} | "
+                        f"{len(world.ship.captives)}/3 captive berths | "
+                        f"{'secured; can receive surrendered boarders' if secured else 'INSECURE: designate this space, install the cage and lock every boundary door'}.")
         else:
             rows.append("Working deck: usable space follows actual obstacles and access.")
     if len(labels) > 1:

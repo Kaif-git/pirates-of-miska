@@ -4,7 +4,7 @@ from copy import deepcopy
 from pirates.ship_model import ShipModel
 from pirates.ship_map import WIDTH, HEIGHT
 
-KINDS = {"floor", "wall", "door"}
+KINDS = {"floor", "wall", "door", "stair", "beam", "pillar"}
 ACTIONS = {"build", "dismantle"}
 
 
@@ -59,11 +59,11 @@ class ShipBlueprint:
                 error += dx
                 y1 += sy
 
-    def draw_line(self, model, start, end, action, kind, *, symmetry=False):
+    def draw_line(self, model, start, end, action, kind, *, symmetry=False, z=0):
         points = self._line_points(*start, *end)
-        return self._draw_points(model, points, action, kind, symmetry)
+        return self._draw_points(model, points, action, kind, symmetry, z)
 
-    def draw_rectangle(self, model, start, end, action, kind, *, symmetry=False):
+    def draw_rectangle(self, model, start, end, action, kind, *, symmetry=False, z=0):
         x1, y1 = start
         x2, y2 = end
         points = set()
@@ -71,23 +71,23 @@ class ShipBlueprint:
             points.update(((x, y1), (x, y2)))
         for y in range(min(y1, y2), max(y1, y2) + 1):
             points.update(((x1, y), (x2, y)))
-        return self._draw_points(model, sorted(points), action, kind, symmetry)
+        return self._draw_points(model, sorted(points), action, kind, symmetry, z)
 
-    def _draw_points(self, model, points, action, kind, symmetry):
+    def _draw_points(self, model, points, action, kind, symmetry, z=0):
         expanded = set(points)
         if symmetry:
             expanded.update((WIDTH - 1 - x, y) for x, y in points)
-        return self._commit([{"x": x, "y": y, "z": 0, "action": action, "kind": kind}
+        return self._commit([{"x": x, "y": y, "z": z, "action": action, "kind": kind}
                              for x, y in sorted(expanded)], model)
 
-    def flood_fill(self, model, start, action, kind):
+    def flood_fill(self, model, start, action, kind, z=0):
         """Fill a same-kind occupancy region within the current deck bounds.
 
         The deck bounding box is an intentional safety boundary: an empty-cell
         fill cannot accidentally spread over the entire ship grid into the sea.
         """
         final = self.apply(model)
-        floors = [(c.x, c.y) for c in final.components if c.z == 0 and c.kind == "floor"]
+        floors = [(c.x, c.y) for c in final.components if c.z == z and c.kind == "floor"]
         if not floors:
             raise ValueError("Flood fill needs an existing deck footprint")
         xmin, xmax = min(x for x, _ in floors), max(x for x, _ in floors)
@@ -96,7 +96,7 @@ class ShipBlueprint:
         if not (xmin <= sx <= xmax and ymin <= sy <= ymax):
             raise ValueError("Flood fill cursor is outside the deck bounds")
         def occupied(x, y):
-            return any(c.kind == kind for c in final.at(x, y, 0))
+            return any(c.kind == kind for c in final.at(x, y, z))
         target = occupied(sx, sy)
         todo, region, seen = [(sx, sy)], set(), {(sx, sy)}
         while todo:
@@ -108,7 +108,7 @@ class ShipBlueprint:
                 if xmin <= at[0] <= xmax and ymin <= at[1] <= ymax and at not in seen:
                     seen.add(at)
                     todo.append(at)
-        return self._draw_points(model, sorted(region), action, kind, False)
+        return self._draw_points(model, sorted(region), action, kind, False, z)
 
     def undo(self):
         if not self.history:
@@ -132,7 +132,7 @@ class ShipBlueprint:
     def _validate_change(cls, row):
         if (not isinstance(row, dict) or set(row) != {"x", "y", "z", "action", "kind"}
                 or any(type(row[k]) is not int for k in ("x", "y", "z"))
-                or not 0 <= row["x"] < WIDTH or not 0 <= row["y"] < HEIGHT or row["z"] != 0
+                or not 0 <= row["x"] < WIDTH or not 0 <= row["y"] < HEIGHT or not 0 <= row["z"] <= 8
                 or row["action"] not in ACTIONS or row["kind"] not in KINDS):
             raise ValueError("Invalid unbuilt blueprint change")
 
@@ -154,7 +154,7 @@ class ShipBlueprint:
                 result.place(row["x"], row["y"], row["z"], row["kind"])
         return result
 
-    def transform_selection(self, model, x1, y1, x2, y2, destination, *, mirror_x=False, rotate=0):
+    def transform_selection(self, model, x1, y1, x2, y2, destination, *, mirror_x=False, rotate=0, z=0):
         """Copy actual-plus-planned structural components into a translated selection."""
         if any(type(v) is not int for v in (x1, y1, x2, y2, *destination)):
             raise ValueError("Selection coordinates must be integers")
@@ -165,7 +165,7 @@ class ShipBlueprint:
         if rotate not in (0, 90, 180, 270):
             raise ValueError("Rotation must be a quarter turn")
         final = self.apply(model)
-        source = [c for c in final.components if lo_x <= c.x <= hi_x and lo_y <= c.y <= hi_y and c.z == 0]
+        source = [c for c in final.components if lo_x <= c.x <= hi_x and lo_y <= c.y <= hi_y and c.z == z]
         if not source:
             raise ValueError("Selection contains no built or planned structure")
         width, height = hi_x - lo_x + 1, hi_y - lo_y + 1
@@ -194,7 +194,7 @@ class ShipBlueprint:
             elif rotate == 270:
                 dx, dy = dy, width - 1 - dx
             copied.append({"x": destination[0] + dx, "y": destination[1] + dy,
-                           "z": component.z, "action": "build", "kind": component.kind})
+                           "z": z, "action": "build", "kind": component.kind})
         old_changes = deepcopy(self.changes)
         self.history.append(old_changes)
         self.history = self.history[-100:]

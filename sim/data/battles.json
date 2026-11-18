@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "starting_legend_captain_count": 4,
+    "battle_cooldown_days": 180,
+    "max_battles_per_year": 3,
+    "rounds": 3,
+    "reinforcement_round": 2,
+    "round_variance_permille": 120,
+    "morale_swing_per_round": 8,
+    "morale_cascade_threshold": 20,
+    "morale_cascade_loss": 12,
+    "defeat_hull_damage_base": 6,
+    "defeat_rigging_damage_base": 4,
+    "defeat_casualty_chance_basis_points": 1800,
+    "power_vacuum_morale_threshold": 20,
+    "minimum_active_ships_per_side": 1
+  },
+  "doctrines": {
+    "balanced": {"power_permille": 1000, "morale_permille": 1000, "description": "adapt to the fight"},
+    "aggressive": {"power_permille": 1080, "morale_permille": 900, "description": "press for a decisive engagement"},
+    "defensive": {"power_permille": 950, "morale_permille": 1150, "description": "hold formation and preserve the fleet"}
+  },
+  "legend_traits": [
+    {"id": "storm_reader", "name": "Storm-Reader", "round_power_permille": 1050, "duel_bonus": 4,
+     "description": "reads wind and sea before committing the fleet"},
+    {"id": "iron_command", "name": "Iron Command", "round_power_permille": 1000, "duel_bonus": 7,
+     "description": "keeps the crew steady when a battle turns"},
+    {"id": "quick_broadsides", "name": "Quick Broadsides", "round_power_permille": 1100, "duel_bonus": 3,
+     "description": "strikes before an opponent can settle into formation"},
+    {"id": "unyielding", "name": "Unyielding", "round_power_permille": 1000, "duel_bonus": 5,
+     "description": "refuses to yield ground under pressure"}
+  ]
+}

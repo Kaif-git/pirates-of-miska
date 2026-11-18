@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "source": "existing generated NPC society in pirates.game/pirates.society",
+  "method": "World.new_generated(seed, {history_days: 365}) with society news intercepted before its 120-row display cap",
+  "seed": "m1-baseline-2026",
+  "days": 365,
+  "clock_hour": 8768,
+  "total_society_news": 324,
+  "retained_society_news": 120,
+  "society_news_by_kind": {
+    "agreement_expiry": 1,
+    "agreement_fulfillment": 4,
+    "alliance": 20,
+    "diplomacy": 16,
+    "npc_clash": 38,
+    "npc_market_event": 164,
+    "petty_feud": 19,
+    "port_arrival": 61,
+    "rivalry": 1
+  },
+  "npc_clash_outcomes": {
+    "disengagement": 9,
+    "victory": 29
+  },
+  "nontrivial_event_day_definition": "all society news except npc_market_event and port_arrival",
+  "nontrivial_event_count": 99,
+  "nontrivial_event_days": 64,
+  "max_gap_between_nontrivial_event_days": 34,
+  "nontrivial_events_on_days_1_and_2": 3,
+  "nontrivial_first_two_day_share": 0.030303030303030304,
+  "alliance_news_count": 20,
+  "distinct_alliance_organization_pairs": 5,
+  "alliance_pairs_with_multiple_news_rows": 2,
+  "max_alliance_news_rows_for_one_pair": 10,
+  "death_events": 0,
+  "ship_sinking_events": 0,
+  "birth_or_recruitment_events": 0,
+  "events_with_structured_caused_by_ids": 0,
+  "notable_people": 24,
+  "unique_notable_names": 24,
+  "organizations": 4,
+  "vessels": 8,
+  "sea_nodes": 6,
+  "population_ledger_total": 72,
+  "limitations": [
+    "The historical 365-day/302-event log cited by the spec is not present in the repository.",
+    "This is a reproducible one-seed capture of the current old-game NPC layer, not that missing historical log.",
+    "The old layer retains only the newest 120 society news rows and 80 legacy fleet strings; the capture intercepted society news before truncation.",
+    "Repeated alliance news rows do not prove duplicate active treaties; the old system ended with one expired agreement record.",
+    "The current old-game system has evolved beyond several original findings, so findings are not assumed to reproduce identically."
+  ]
+}

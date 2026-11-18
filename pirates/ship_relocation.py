@@ -6,23 +6,39 @@ from pirates.ship_building import validate_access
 
 
 def destination_layout(world, fid, target):
-    if any((e.x, e.y) == tuple(target) for e in world.entities()):
+    target = tuple(target)
+    z = target[2] if len(target) == 3 else 0
+    if len(target) not in (2, 3) or not 0 <= z <= 8:
+        raise ValueError("Invalid equipment destination")
+    xy = target[:2]
+    if any((e.x, e.y) == xy and getattr(e, "z", 0) == z
+           for e in world.all_entities()):
         raise ValueError("An actor occupies the installation tile; waiting for it to clear")
-    layout = world.fixtures.relocated(fid, *target)
-    lx, ly = target[0] - ORIGIN[0], target[1] - ORIGIN[1]
-    if any(p.x == lx and p.y == ly and p.fixture_id != fid for p in world.ship.storage.piles.values()):
+    layout = world.fixtures.relocated(fid, *xy, z)
+    lx, ly = xy[0] - ORIGIN[0], xy[1] - ORIGIN[1]
+    if any((p.x, p.y, p.z) == (lx, ly, z) and p.fixture_id != fid
+           for p in world.ship.storage.piles.values()):
         raise ValueError("Destination is reserved by a stockpile")
-    validate_access(world, world.ship_model, layout)
+    parts = world.ship_model.at(lx, ly, z)
+    if (not any(c.kind == "floor" for c in parts)
+            or any(c.kind in ("wall", "door", "stair") for c in parts)):
+        raise ValueError("Equipment needs a clear, built floor on the destination deck")
+    if any((at[:2] == xy and (at[2] if len(at) == 3 else 0) == z and items)
+           for at, items in world.ground_items.items()):
+        raise ValueError("Move ground items before installing equipment")
+    validate_access(world, world.ship_model, layout, z)
     # Also protect the fixed repair/bilge work sites from equipment occupation.
-    if tuple(target) in world.fixtures.reference_points.values():
+    if z == 0 and tuple(xy) in world.fixtures.reference_points.values():
         raise ValueError("Destination is reserved for damage-control access")
     return layout
 
 
 def queue(world, fid, target):
-    if not isinstance(target, (list, tuple)) or len(target) != 2:
+    if not isinstance(target, (list, tuple)) or len(target) not in (2, 3):
         raise ValueError("Invalid equipment destination")
     target = tuple(target)
+    if len(target) == 2 and world.player.z > 0:
+        target = (*target, world.player.z)
     fixture = world.fixtures.get(fid)
     if fixture is None:
         raise ValueError("Unknown equipment")
@@ -75,7 +91,10 @@ def work(world, sailor, job):
         sailor.activity = "Unfastening " + fixture.id
         if not ship.walk(world, sailor, plan["source"]):
             return
-        if any((e.x, e.y) == tuple(plan["source"]) for e in world.entities()):
+        source = tuple(plan["source"])
+        if any((e.x, e.y) == source[:2]
+               and getattr(e, "z", 0) == (source[2] if len(source) == 3 else 0)
+               for e in world.all_entities()):
             job.reason = "Equipment is occupied; waiting for it to clear"
             return
         job.state = "claimed"
@@ -143,14 +162,17 @@ def validate_job(job, layout):
             or job.key != "relocate:" + plan["fixture_id"]
             or plan["stage"] not in ("lift", "haul")
             or type(plan["move_wait"]) is not int or not 0 <= plan["move_wait"] <= 100
-            or not isinstance(plan["source"], (list, tuple)) or len(plan["source"]) != 2
-            or len(job.target) != 2
+             or not isinstance(plan["source"], (list, tuple)) or len(plan["source"]) not in (2, 3)
+             or len(job.target) not in (2, 3)
             or any(type(v) is not int for v in (*plan["source"], *job.target))):
         raise ValueError("Invalid equipment relocation job")
     from pirates.ship_map import WIDTH, HEIGHT
-    for x, y in (plan["source"], job.target):
+    for at in (plan["source"], job.target):
+        x, y = at[:2]
         if not (ORIGIN[0] <= x < ORIGIN[0] + WIDTH and ORIGIN[1] <= y < ORIGIN[1] + HEIGHT):
             raise ValueError("Equipment relocation site outside ship")
+        if len(at) == 3 and not 0 <= at[2] <= 8:
+            raise ValueError("Equipment relocation deck outside supported range")
 
 
 def invariant_errors(ship):

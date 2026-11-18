@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "belief_rules": {
+    "daily_confidence_decay_permille": 12,
+    "share_base_basis_points": 150,
+    "share_sociability_basis_points_per_point": 28,
+    "share_confidence_loss_permille": 150,
+    "distortion_basis_points": 700,
+    "max_distortion_permille": 250,
+    "belief_error_threshold_permille": 200,
+    "minimum_confidence_permille": 50,
+    "max_beliefs_per_agent": 100
+  },
+  "plan_templates": {
+    "find_treasure": ["gather_clue", "travel_to_region", "survive_hazard", "claim_treasure", "return_home"],
+    "become_title": ["build_reputation", "complete_service", "petition_authority"],
+    "destroy_entity": ["locate_target", "prepare_for_confrontation", "confront_target"],
+    "restore_house": ["find_financing", "acquire_property", "rebuild_house"],
+    "chart_region": ["prepare_vessel", "travel_to_region", "survey_routes", "record_chart"],
+    "free_island": ["gather_allies", "reach_island", "challenge_authority", "secure_island"],
+    "become_wealthiest": ["acquire_capital", "trade_route", "grow_wealth", "protect_assets"],
+    "defeat_character": ["locate_target", "prepare_for_confrontation", "confront_target"],
+    "find_person": ["gather_leads", "travel_to_last_known_place", "locate_person"],
+    "protect_entity": ["locate_protected_target", "reach_target", "defend_target"],
+    "reach_legend_tier": ["build_reputation", "survive_major_trial", "earn_recognition"]
+  },
+  "wake_event_types": [
+    "VOYAGE_ARRIVED", "ROUTE_HAZARD", "SHIP_DAMAGED", "ENCOUNTER_DETECTED",
+    "ENCOUNTER_RESOLVED", "COMBAT_MEMORY_HOOK", "PRISONER_FATE",
+    "CREW_SUPPLIES_EXHAUSTED",
+    "WAGES_UNPAID", "DESERTION", "RECRUITED", "RUMOR_SHARED"
+  ]
+}

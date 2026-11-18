@@ -1,0 +1,9 @@
+{
+  "salted_fruit": {
+    "name": "Salted fruit",
+    "input": {"fruit_g": 1000, "salt_g": 100},
+    "output": {"salted_fruit_g": 900, "food_waste_g": 200},
+    "work": 30,
+    "description": "1.00 kg fresh fruit + 0.10 kg salt → 0.90 kg salted fruit + 0.20 kg brine/trim waste"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "source": "MISKA_SIM_IMPLEMENTATION_SPEC.md section 2",
+  "baseline_fixture": "legacy_baseline.json",
+  "contract_policy": "The named behavioral cases are tracked here and implemented with their owner milestone; M1 locks down the baseline and prevents F1-F14 coverage gaps.",
+  "findings": [
+    {"id":"F1","test":"test_F01_liveness_no_gap_over_three_days","milestone":"M9","baseline_status":"reproduced","target":"Across 10 years, no gap over 3 days without a nontrivial event."},
+    {"id":"F2","test":"test_F02_event_density_is_stationary","milestone":"M9","baseline_status":"historical_only_current_capture_not_reproduced","target":"Event density is roughly stationary after warmup."},
+    {"id":"F3","test":"test_F03_encounter_outcomes_include_death_capture_and_sinking","milestone":"M6","baseline_status":"reproduced","target":"Deaths, sinkings, captures, and ransoms occur at measurable rates."},
+    {"id":"F4","test":"test_F04_population_turnover_replaces_lost_agents","milestone":"M4","baseline_status":"reproduced","target":"Births/recruits, deaths, retirements, rookies, and factions turn over."},
+    {"id":"F5","test":"test_F05_strength_is_derived_from_components","milestone":"M4","baseline_status":"partially_addressed_in_legacy","target":"Strength changes with ship components, crew, supplies, and readiness."},
+    {"id":"F6","test":"test_F06_upset_events_record_explanatory_factors","milestone":"M6","baseline_status":"reproduced","target":"Upsets cite explicit causal factors in structured event data."},
+    {"id":"F7","test":"test_F07_action_history_avoids_clockwork_sequences","milestone":"M5","baseline_status":"historical_only","target":"Repeated-sequence detector rejects fixed ritual loops."},
+    {"id":"F8","test":"test_F08_reconciled_offenses_compound_grudges","milestone":"M7","baseline_status":"partially_addressed_in_legacy","target":"Repeated offense after reconciliation is worse and can escalate to violence."},
+    {"id":"F9","test":"test_F09_entity_location_matches_spatial_graph","milestone":"M2","baseline_status":"historical_only","target":"Every entity has one consistent location on an island/route graph."},
+    {"id":"F10","test":"test_F10_goods_and_silver_are_conserved","milestone":"M3","baseline_status":"partially_addressed_in_legacy","target":"Goods and silver have explicit finite sources, transfers, and sinks."},
+    {"id":"F11","test":"test_F11_names_are_unique_and_templates_use_roles","milestone":"M4","baseline_status":"partially_addressed_in_legacy","target":"Names are unique; rendered outputs never leak IDs or self-reference."},
+    {"id":"F12","test":"test_F12_treaty_pair_has_valid_single_active_transition","milestone":"M8","baseline_status":"ambiguous_legacy_news","target":"One treaty state machine per faction pair; no duplicate alliance transitions."},
+    {"id":"F13","test":"test_F13_every_cause_id_resolves_to_a_parent_event","milestone":"M0","baseline_status":"reproduced","target":"All non-root event causes resolve to real earlier event IDs."},
+    {"id":"F14","test":"test_F14_world_reaches_required_population_and_geography_scale","milestone":"M2_M4","baseline_status":"reproduced","target":"At least 30 islands, 5–8 factions, hundreds of minor characters, and 8–15 major named figures."}
+  ]
+}

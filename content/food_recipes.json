@@ -1,0 +1,74 @@
+{
+  "grain_porridge": {
+    "name": "Grain porridge",
+    "output_food_id": "grain_porridge",
+    "ingredients": {
+      "grain_g": 2000,
+      "clean_water_ml": 1000
+    },
+    "output_g": 3000,
+    "description": "2.00 kg grain + 1.0 L clean water → 3.00 kg porridge"
+  },
+  "bean_stew": {
+    "name": "Bean stew",
+    "output_food_id": "bean_stew",
+    "ingredients": {
+      "beans_g": 1000,
+      "clean_water_ml": 1000
+    },
+    "output_g": 2000,
+    "description": "1.00 kg dried beans + 1.0 L clean water → 2.00 kg stew"
+  },
+  "fish_chowder": {
+    "name": "Fish chowder",
+    "output_food_id": "fish_chowder",
+    "ingredients": {
+      "dried_fish_g": 1000,
+      "clean_water_ml": 1000
+    },
+    "output_g": 2000,
+    "description": "1.00 kg salted fish + 1.0 L clean water → 2.00 kg chowder"
+  },
+  "oat_porridge": {
+    "name": "Oat porridge",
+    "output_food_id": "oat_porridge",
+    "ingredients": {"oats_g": 1500, "clean_water_ml": 1000},
+    "output_g": 2500,
+    "description": "1.50 kg oats + 1.0 L clean water → 2.50 kg porridge"
+  },
+  "rice_porridge": {
+    "name": "Rice porridge",
+    "output_food_id": "rice_porridge",
+    "ingredients": {"rice_g": 1500, "clean_water_ml": 1000},
+    "output_g": 2500,
+    "description": "1.50 kg rice + 1.0 L clean water → 2.50 kg porridge"
+  },
+  "fish_rice": {
+    "name": "Fish and rice",
+    "output_food_id": "fish_rice",
+    "ingredients": {"rice_g": 1500, "dried_fish_g": 500, "clean_water_ml": 1000},
+    "output_g": 3000,
+    "description": "1.50 kg rice + 0.50 kg salted fish + 1.0 L clean water → 3.00 kg fish and rice"
+  },
+  "fish_potato_stew": {
+    "name": "Fish and potato stew",
+    "output_food_id": "fish_potato_stew",
+    "ingredients": {"potatoes_g": 1500, "dried_fish_g": 500, "clean_water_ml": 1000},
+    "output_g": 3000,
+    "description": "1.50 kg potatoes + 0.50 kg salted fish + 1.0 L clean water → 3.00 kg stew"
+  },
+  "bean_pork_stew": {
+    "name": "Bean and pork stew",
+    "output_food_id": "bean_pork_stew",
+    "ingredients": {"beans_g": 1000, "salted_pork_g": 1000, "clean_water_ml": 1000},
+    "output_g": 3000,
+    "description": "1.00 kg beans + 1.00 kg salted pork + 1.0 L clean water → 3.00 kg stew"
+  },
+  "onion_bean_pork_stew": {
+    "name": "Onion, bean and pork stew",
+    "output_food_id": "onion_bean_pork_stew",
+    "ingredients": {"beans_g": 1000, "salted_pork_g": 1000, "onions_g": 250, "clean_water_ml": 1000},
+    "output_g": 3250,
+    "description": "1.00 kg beans + 1.00 kg salted pork + 0.25 kg onions + 1.0 L clean water → 3.25 kg stew"
+  }
+}

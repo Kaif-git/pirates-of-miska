@@ -9,6 +9,7 @@ from pirates.ship import LABORS
 from pirates.ship_storage import bundle_mass, UNIT_MASS
 from pirates.trading_ui import merchant_menu, cargo_menu, port_menu
 from pirates.management import context_menu
+from pirates.provisioning import forecast_provisions
 from omnisim.world import tile as T
 
 
@@ -152,19 +153,64 @@ def test_allocate_real_food_water_wood_and_ammunition_once():
     world = quiet_world()
     e = world.economy
     at_hold(world)
-    e.cargo = {"grain": 1, "water_cask": 1, "timber": 1, "shot": 1, "biscuit": 1}
+    e.cargo = {"grain": 1, "water_cask": 1, "timber": 1, "shot": 1, "biscuit": 1, "medical_kit": 1}
     before = dict(world.ship.stores)
-    meals = world.ship.meals
+    biscuit = world.ship.stores["biscuit_g"]
     for key in list(e.cargo):
         e.allocate(world, key, 1)
     assert not e.cargo
-    assert world.ship.stores["raw_food"] == before["raw_food"] + 4
-    assert world.ship.stores["water"] == before["water"] + 10
+    assert world.ship.stores["grain_g"] == before["grain_g"] + 4000
+    assert world.ship.stores["clean_water_ml"] == before["clean_water_ml"] + 10000
     assert world.ship.stores["planks"] == before["planks"] + 1
     assert world.ship.stores["shot"] == before["shot"] + 1
-    assert world.ship.meals == meals + 1
+    assert world.ship.stores["medicine"] == before["medicine"] + 2
+    assert world.ship.stores["biscuit_g"] == biscuit + 100
     with pytest.raises(ValueError):
         e.allocate(world, "grain", 1)
+
+
+def test_allocating_reusable_container_moves_its_mass_out_of_trade_cargo():
+    world = quiet_world()
+    at_hold(world)
+    world.economy.cargo = {"waterskin": 2}
+    mass_before, bulk_before = world.economy.load()
+    world.economy.allocate(world, "waterskin", 1)
+    assert world.economy.cargo["waterskin"] == 1
+    assert len(world.ship.containers) == 1
+    assert world.ship.containers[0]["capacity_ml"] == 1000
+    assert world.ship.containers[0]["tare_g"] == 250
+    mass_after, bulk_after = world.economy.load()
+    assert mass_after == mass_before - 250
+    assert bulk_after == bulk_before - 600
+
+
+def test_finite_potable_refill_is_paid_and_capacity_checked():
+    world = quiet_world()
+    e = world.economy
+    world.ship.stores["clean_water_ml"] = 0
+    shortage = forecast_provisions(world)
+    assert shortage["water_days"] == 0
+    assert any("drinking reserve" in reason for reason in shortage["blockers"])
+    at_merchant(world, "bo")
+    before_money = e.money
+    before_stock = e.markets["bo"]["stock"]["spring_water_refill"]
+    paid = e.trade(world, "bo", "spring_water_refill", 1, True)
+    assert paid > 0 and e.money == before_money - paid
+    assert e.markets["bo"]["stock"]["spring_water_refill"] == before_stock - 1
+    assert e.cargo["spring_water_refill"] == 1
+
+    at_hold(world)
+    before_water = world.ship.stores["clean_water_ml"]
+    e.allocate(world, "spring_water_refill", 1)
+    assert world.ship.stores["clean_water_ml"] == before_water + 5000
+    assert "spring_water_refill" not in e.cargo
+    assert forecast_provisions(world)["water_days"] > shortage["water_days"]
+
+    e.cargo["spring_water_refill"] = 1
+    world.ship.stores["clean_water_ml"] = 250000
+    with pytest.raises(ValueError, match="capacity"):
+        e.allocate(world, "spring_water_refill", 1)
+    assert e.cargo["spring_water_refill"] == 1
 
 
 def test_supply_allocation_respects_actual_stockpile_capacity():
@@ -185,12 +231,15 @@ def test_allocation_leaves_space_for_both_incoming_transfers_and_job_returns():
     at_hold(world)
     c = world.ship.crew[0]
     c.labors["cook"] = 1
+    for key in ("fruit_g", "dried_fish_g", "biscuit_g"):
+        world.ship.stores[key] = 0
+    world.ship.generate_jobs(world)
     world.ship.claim(world, c)
     assert world.ship.job(c.job_id).kind == "cook"
     storage = world.ship.storage
     source = storage.designate(world.ship_model, world.ship_fixtures, 78, 27, 100)
-    source.contents["raw_food"] = 5
-    storage.transfer_job(world, source.id, "hold", {"raw_food": 5})
+    source.contents["grain_g"] = 5000
+    storage.transfer_job(world, source.id, "hold", {"grain_g": 5000})
     pile = storage.piles["hold"]
     pile.capacity_kg = bundle_mass(pile.contents) + 10  # return 2 + transfer 5 + new grain 4 = 11
     world.economy.cargo["grain"] = 1
@@ -238,6 +287,69 @@ def test_equipment_replaces_returns_and_never_duplicates():
     assert e.bonus("mara", "movement_multiplier") == 0.65
 
 
+def test_individual_garment_condition_scales_effect_and_blocks_fungible_laundering(tmp_path):
+    world = quiet_world()
+    at_hold(world)
+    economy = world.economy
+    economy.cargo = {"work_shirt": 2, "oilskin": 1}
+    economy.equip(world, "mara", "work_shirt")
+    garment_id = economy.gear_ids["mara"]["clothing"]
+    economy.gear_condition["mara"]["clothing"] = 50
+    assert economy.bonus("mara", "fatigue_multiplier") == 0.925
+    with pytest.raises(ValueError, match="Repair the worn garment"):
+        economy.equip(world, "mara", "work_shirt")
+    assert economy.cargo == {"work_shirt": 1, "oilskin": 1}
+    assert economy.gear["mara"]["clothing"] == "work_shirt"
+    path = tmp_path / "garment-condition.json"
+    world.save(path)
+    restored = World.load(path)
+    assert restored.economy.gear_condition["mara"]["clothing"] == 50
+    assert restored.economy.gear_ids["mara"]["clothing"] == garment_id
+    legacy = json.loads(path.read_text())
+    legacy["economy"].pop("gear_condition")
+    legacy["economy"].pop("gear_ids")
+    legacy["economy"].pop("next_gear_id")
+    path.write_text(json.dumps(legacy))
+    migrated = World.load(path)
+    assert migrated.economy.gear_condition["mara"]["clothing"] == 100
+    assert migrated.economy.gear_ids["mara"]["clothing"] == "legacy-mara-clothing"
+
+
+def test_mending_consumes_real_cloth_and_restores_effect_without_item_duplication():
+    world = quiet_world()
+    at_hold(world)
+    economy = world.economy
+    economy.cargo = {"work_shirt": 1, "sewing_kit": 1, "sailcloth": 1}
+    economy.equip(world, "mara", "work_shirt")
+    economy.gear_condition["mara"]["clothing"] = 40
+    before_load = economy.load()
+    before_id = economy.gear_ids["mara"]["clothing"]
+    economy.mend_garment(world, "mara", "clothing")
+    assert economy.gear_condition["mara"]["clothing"] == 100
+    assert economy.gear_ids["mara"]["clothing"] == before_id
+    assert economy.cargo == {"sewing_kit": 1}
+    assert economy.bonus("mara", "fatigue_multiplier") == 0.85
+    assert economy.load()[0] == before_load[0] - 2000
+    assert any("consumed one bolt of sailcloth" in row for row in economy.history)
+
+
+def test_distinct_garment_layers_coexist_and_keep_independent_condition():
+    world = quiet_world()
+    at_hold(world)
+    economy = world.economy
+    economy.cargo = {"work_shirt": 1, "oilskin": 1, "canvas_trousers": 1,
+                     "wool_cap": 1, "boots": 1}
+    for item in tuple(economy.cargo):
+        economy.equip(world, "mara", item)
+    assert set(economy.gear["mara"]) == {"clothing", "coat", "trousers", "headwear", "feet"}
+    assert len(set(economy.gear_ids["mara"].values())) == 5
+    economy.gear_condition["mara"]["coat"] = 70
+    economy.gear_condition["mara"]["headwear"] = 40
+    assert economy.gear_condition["mara"]["clothing"] == 100
+    assert economy.bonus("mara", "fatigue_multiplier") == 0.825
+    assert economy.bonus("mara", "movement_multiplier") == 0.65
+
+
 def test_equipped_tools_and_clothing_have_real_work_effects():
     a, b = quiet_world(), quiet_world()
     at_hold(b)
@@ -256,6 +368,17 @@ def test_equipped_tools_and_clothing_have_real_work_effects():
     jb = next(j for j in b.ship.jobs if j.kind == "clean")
     assert jb.progress > ja.progress
     assert b.ship.crew[0].fatigue < a.ship.crew[0].fatigue
+
+
+def test_existing_cookware_has_a_condition_scaled_real_cook_labor_effect():
+    world = quiet_world()
+    economy = world.economy
+    economy.gear["mara"] = {"tool": "cookware"}
+    economy.gear_ids["mara"] = {"tool": "legacy-mara-tool"}
+    economy.gear_condition["mara"] = {"tool": 100}
+    assert economy.bonus("mara", "labor", "cook") == 1.18
+    economy.gear_condition["mara"]["tool"] = 50
+    assert economy.bonus("mara", "labor", "cook") == 1.09
 
 
 def test_pack_and_cargo_transfers_respect_weight_and_preserve_stacks():

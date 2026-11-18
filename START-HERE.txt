@@ -2,12 +2,14 @@ PIRATES OF MISKA - SHIP LIFE
 
 Launch: double-click Play Pirates.bat, or run python play.py from this folder.
 Install dependencies if needed: python -m pip install -r requirements.txt
-Fresh game: python play.py --new
+Fresh generated world: python play.py --new
+Repeatable generation: python play.py --new --seed "your-seed"
+Configure generated NPCs: python play.py --new --seed "your-seed" --npc-people 32 --npc-organizations 5 --npc-vessels 10 --history-days 30
 
 Controls
   Arrows / HJKL     Move; hold a direction to repeat
   . / keypad 5     Wait
-  Enter            Nearby crew conversation / door / ship interactions
+   Enter            Nearby crew, doors, ship interactions, door locks / lockdown
   O                Open or close an adjacent door
   G                Pick up supplies under your feet
   I                View inventory
@@ -69,8 +71,9 @@ Clothing: linen work clothes reduce work fatigue 15%; oilskins reduce it 25%;
 boots reduce walking energy expenditure 35%. Weather/armor protection is not simulated.
 Weapons: issue cutlasses/pistols and run arms drills with a rested, unoccupied sailor.
 Sailors walk to the workshop and gain practice only while actually training; urgent
-needs interrupt. Pistol practice consumes a standardized ammunition charge. Combat
-is not implemented. Iron, coal and sailcloth are trade commodities, not new recipes.
+needs interrupt. Pistol practice consumes a standardized ammunition charge. Shipboard
+boarding fights are available at pirate-voyage sightings. Iron, coal and sailcloth are
+trade commodities, not new recipes.
 Crew kit appears in F2 profiles. Issuing/replacing kit takes ten seconds; old items
 return to cargo rather than being deleted. Trade goods are standard undamaged items.
 
@@ -97,8 +100,12 @@ Use V > Watch / advance the voyage for 10 minutes, 1 hour or 6 hours. Sailing le
 are strategic, abstract time steps, not continuous ship steering. The ordinary
 ShipLife simulation still runs each second: crew needs, chores, fatigue, stores,
 repairs and wear continue while the player watches the chart or walks the ship.
-Arrival and nearby-vessel sightings interrupt a long watch. The captain is returned
-to the normal playable ship map; there is no tactical combat/boarding system yet.
+Arrival and nearby-vessel sightings interrupt a long watch. At a pirate sighting,
+V > Resolve nearby-ship sighting > Repel a pirate boarding party stages a raid on
+the built lower deck. Raiders open a real outer-hull breach, route toward the captain,
+and force locked doors only when no unlocked alternate route exists. Victory resumes
+the voyage; defeat or withdrawal orders a retreat. The breach, flooding, destroyed
+doors and lockdown remain ship state. Other sightings still offer hold-course/turn-back.
 
 V > Captain free-time action: rest (reduces captain fatigue), study charts (chart
 notes improve the next voyage estimate), inspect the ship, or talk with crew.
@@ -108,18 +115,23 @@ Participants still go to work or satisfy urgent needs; free-time practice never
 overrides a job or need. Practice is abstract deck activity, not combat training
 with a tactical resolution. F2/A/F4/F6 work as usual while underway.
 
-NPC SHIPS / REGIONAL ACTIVITY
-Three persistent rival vessels (Syndicate trader, Government marine patrol and
-rogue pirate brig) move on charted lanes. Their cargo, silver, routes and events
-persist. The trader buys/sells regional goods; the brig hunts ships, including
-government tenders and merchants; patrols move through their lane. Close chart-node
-encounters pause the voyage and return control to the ship. Tactical outcomes are
-not yet simulated. The prototype also models an NPC-only coercive slave market at
+NPC SOCIETY / SEA NEWS
+Five persistent NPC vessels move on charted lanes: the Blackwake pirate fleet's
+flagship and escort, two independent crews, and a Marine patrol. Named captains have
+ambitions and reputations; organizations have leaders, relationships, alliances and
+rivalries. Offscreen meetings can build trust or trigger abstract clashes. A clash
+can damage a ship, alter reputations/relationships and force a retreat; this is
+strategic NPC simulation, not player tactical combat. Named ships, their activity,
+and recent causal news appear in V > sea chart / recent world news. The society,
+relationships and news persist through saves. The trader buys/sells regional goods;
+pirates hunt vessels and Marines pursue their rivals.
+
+The prototype also models an NPC-only coercive slave market at
 Freeport: raider-held captives can be sold and rival crews can buy from a finite
 market pool. These transfers conserve tracked headcount; the player cannot trade,
 own, or command enslaved people in this slice. This is a fictional system record,
-not an endorsement. NPC ship incidents are summarized in V > sea chart/history.
-NPC trade and movement continue during normal in-game time, in port or at sea.
+not an endorsement. NPC trade and movement continue during normal in-game time,
+in port or at sea.
 
 CREW LIFE
 Six named sailors have individual labor preferences, skill levels, assigned
@@ -145,9 +157,19 @@ Sailors seek companionship, develop friendships, relax and enjoy the sea view.
 You can speak with nearby crew to ease loneliness and improve morale.
 
 CHORES
-Hull repair, bilge bailing, meal preparation, swabbing, rigging and cannon loading.
+Hull repair, bilge bailing, fire suppression, meal preparation, swabbing, rigging and cannon loading.
 Wear and low stocks create work automatically. No two sailors claim the same job.
-Supplies are reserved in the hold, physically collected, then carried to the site.
+Supplies are reserved in spatial stockpiles, physically collected, then carried to the site.
+Fire suppression uses repair labor: workers haul one water unit to an active fire. Flames
+damage actual wooden structure; smoke diffuses through open passages and stairs. Map markers
+show `*` fire and `:` smoke, while the ship ledger lists active hazard counts.
+The starter ship has movable medicine and brig fixtures. Crew below 80 health seek care only if the
+medicine chest is accessible inside a room designated Infirmary; they walk to it and recover gradually.
+Magazine reports inspect actual cannon stations and loaded charges; cannon-loading chores haul shot
+as usual. Berths use real assigned bunks. Defeated boarders can be interned only if the brig is
+designated, its cage installed, and all room boundary doors are locked; capacity is three. Enter >
+Room designation / report offers captive release when prisoners are aboard. Feeding and negotiation
+are not modeled yet.
 Cancellation returns carried supplies by walking them back, not teleportation.
 Cancelled chores have a two-minute requeue delay. Labor priorities are 0 = off,
 1 = preferred through 5 = last resort; board priorities take precedence.
@@ -182,10 +204,10 @@ Enter -> Room designation / report inspects or labels the space you stand in.
 Walls and doors determine room boundaries; opening a door does not erase its room.
 Labels are saved per tile, so splitting/merging spaces preserves their intended uses.
 Assign berths, mess, galley, hold, workshop, infirmary, magazine, brig or working deck.
-Reports show actual area, walkable tiles, bunks, stations, boundary doors and supply
-walking distances. Distances ignore bodies and door-opening time; they are not reload times.
-Labels never create equipment or grant bonuses. Infirmary/magazine/brig are designation-only
-until their dedicated equipment/jobs exist. Spaces are not yet watertight/roofed compartments.
+Reports show actual area, walkable tiles, bunks, stations, boundary doors and static hold-route
+distances. Labels never create equipment or grant bonuses. Infirmary requires the movable medical
+chest; magazine status reports actual cannon stations/ammo; brig captures defeated boarders only
+with its cage, designation and locked boundary doors. Spaces are not watertight/roofed compartments.
 Existing saves without designations start with undesignated spaces; equipment still works.
 
 STOCKPILES / HAULING
@@ -200,6 +222,14 @@ Recipe inputs can be reserved from multiple reachable piles. Available totals ex
 and carried goods; F6 audit reports double/missing allocations. Saves retain piles and mid-haul work.
 Floor piles can be removed only empty and unreserved; fixtures and active-job routes are protected.
 
+LOGISTICS / TRAFFIC INSPECTION
+Enter -> Logistics / traffic inspector estimates active crew routes, door-opening and carried-load
+travel costs, shared route tiles, occupied route cells, recent completed-job throughput, and nearest
+repair-labor travel to fires/breaches. It is a snapshot, not a path reservation or guarantee: it ignores
+future needs, changing traffic and work duration. Enable shared-route `;` marks to display projected
+congestion on the current deck; hazard and lock markers take precedence. Clear the overlay from the
+same menu. The inspector does not alter time or job state.
+
 CONSTRUCTION / BLUEPRINTS
 Enter -> Construction orders -> North/East/South/West selects an adjacent tile.
 Build a connected deck floor, oak wall or door, or dismantle an interior barrier/floor.
@@ -211,18 +241,48 @@ Menus and designations do not advance time. Save/load retains work and carried s
 An occupied tile blocks completion until clear; blocked work retains its supplies.
 Stations, bunks, essential access and the outer hull are protected in this slice.
 Dismantling currently recovers no materials. F8 opens the ship-local blueprint editor;
-arrows move the cursor, B cycles floor/wall/door build/dismantle, Space marks/unmarks, T sets
+arrows move the cursor, B cycles floor/wall/door/stair/beam/pillar build/dismantle, Space marks/unmarks, T sets
 a drawing anchor, L draws a line, G a rectangle, F flood-fills within current deck bounds, and
 Y toggles vertical-centerline symmetry. [ and ] set selection corners, D sets copy destination,
 C copies, M mirrors, R rotates, Z undoes one gesture, Backspace clears all proposed edits, Enter
 queues physical jobs, and Esc exits. Purple structural marks are nonphysical proposals until queued.
 Copy/mirror/rotation and all proposed edits can be undone before job queueing. Floor removal
-at the outer-hull edge or beneath walls is deliberately rejected: flooding-aware hull opening,
-upper/lower decks and sailing physics remain future work.
+at the outer-hull edge or beneath walls is deliberately rejected. Flood-aware hull opening remains
+future work. The F8 editor works on the selected deck; floors, barriers and
+stair connectors can be planned and built as physical jobs. PageUp/PageDown changes the captain's
+deck at a built stair, and crew can haul materials through stairs to upper-deck construction. Spatial
+stockpiles and dropped supplies now retain their deck and can be hauled, picked up and saved upstairs.
+Equipment can also be physically carried through stairs and installed on a clear upper-deck floor;
+crew use the installed fixture's real elevated location. Some room reporting and ship-wide logistics
+remain deck-zero, so multi-deck operations are still a partial simulation.
 Blueprint jobs reject tiles crews cannot physically reach; connected floor extensions are queued
 from the current deck outward and each section requires its own plank haul.
 The ship ledger reports actual deck-zero floor area, exposed contour edges, enclosed cutouts,
-connected sections, structural mass and center of mass; these derive from built model geometry.
+connected sections, structural and categorized carried mass, center of mass, estimated displacement,
+draft, freeboard, loading margin, trim, list and vertical stability. Geometry and actual cargo, stores,
+actors, equipment, meals, ammunition and bilge load the estimate. It also flags unsupported floors,
+beam spans and estimated overloads. Oak beams span up to four tiles; pillars strengthen vertical bearings.
+Unsupported/overloaded structure fatigues over time and can fail; clear people, equipment, stockpiles
+and dropped items from critically damaged floor sections so a collapse can detach them safely. These
+are prototype ratings, not naval engineering calculations. Buoyancy uses a provisional 0.4 m map tile,
+2 m design draft and seawater density. During a chart voyage, wind, rigging condition, sail drive,
+resistance, mass-sensitive acceleration and rudder steering affect speed and route tracking. Choose
+V > Set rudder angle to steer relative to the navigator's leg; the sea chart shows estimated speed,
+heading, forces and cross-track drift. Voyage routes remain strategic chart legs; this is not direct
+tile-by-tile sailing or a naval engineering simulator. Local breach (`!`), flood (`~`), fire (`*`)
+and smoke (`:`) markers appear on deck. Water spreads slowly over unblocked nearby floors and through
+open doors; crew bilge work pumps reachable water from the bilge station. Queue a wall build at a
+breached hull tile for a physical patch. Fires damage wooden components and generate repair-labor
+suppression jobs that haul real water. Rates are coarse prototype rules, not pressure, compartment,
+combustion or ventilation physics.
+
+Enter -> Toggle lock on nearby door / Engage ship lockdown bars doors across all built decks and
+crew routes respect the locks. `L` marks a locked door. At a pirate-vessel sighting, V -> Resolve
+nearby-ship sighting -> Repel a pirate boarding party starts a tactical fight on a projection of the
+current built deck. Boarders breach a real outer hull wall, route toward the captain, and force/destroy
+locked doors only when no alternate route is available. These changes and resulting flooding persist.
+Win to continue the voyage; withdraw or be defeated to retreat. Boarding combat itself pauses ship time;
+it does not yet track persistent wounds, captures or crew tactical allies.
 
 Implemented: copied windowed SDL/tcod renderer, smooth movement and repeat,
 camera follow, zoom, minimap, visibility/exploration memory, mouse inspection,
@@ -230,12 +290,98 @@ scrollable menus, capacity-aware inventory, load-adjusted movement, doors,
 clock, atomic saving, validated loading, automatic resume and save on quit.
 Also implemented: autonomous crew, finite ship stores, jobs, needs and wants.
 Also implemented: regional trading, merchant dialogue, crew equipment and abstract passage.
-Not implemented in this slice: naval sailing, combat, recruitment, wages or the wider GDD.
-Cannons can be loaded but not fired. The helm does not sail the ship yet.
+SWORD DUEL (COMBAT SPEC.md)
+  C / F12 opens or resumes the new 40-column sword duel. Ship map/time stay untouched.
+  Choose an action, read its preview, then Enter/Confirm to commit. Esc cancels menus
+  or pauses the duel from the main screen; C resumes. Walk to > to actually flee.
+  Space Light / F Heavy -> H head, T torso, A arm, X hand, L leg.
+  Arrows preview Walk. D then direction: Dash; J: Dash + Light. 1/2/3 sets distance.
+  G previews Guard; while held G releases, Enter holds one turn. Blood is your life.
+  C More | K notebook | L log/why | H help | I guide OFF/HINTS/FULL | Tab timeline.
+  N steps one tick; A resumes auto time. Backspace retries; V starts the next duel
+  with injuries/resources carried forward. Dead/unconscious results are explicit.
+  Hover/long-press enemy for its sheet. ~ means prediction, ! committed danger.
+  Engine + UI are integrated; final XP/balance acceptance is still in progress.
+
+LEGACY BOARDING / HISTORICAL COMBAT ARENA (controls below are not the C/F12 sword UI)
+  Rebuilt around combat-rework-plan.md: deterministic attacks, elapsed-tick movement,
+  exact locked threat tiles and shared player/NPC action definitions. No hit rolls.
+  C enters a closed one-enemy duel with pillars; Esc/F11 restores the original world.
+  Normal ship time, crew, stores and saves are untouched. Saving mid-arena is blocked.
+  GUIDED CLOSE-RANGE DUEL (adjacent, exactly one melee opponent): the action bar
+   switches to exactly five kernel-backed actions: Light (Space), Heavy (F), Parry (G),
+   ordinary Dash (D then direction), and contextual high-risk Dash-strike (J). The
+   enemy caption shows its actual committed action/ETA or Waiting/Observing/Recovering;
+   above the captain, parry-window and first-dash-tile advice is conditional, not a
+   promise of success. Outcome text reports first contact, control vs evasion, force vs
+   parry capacity, counter timing/speed, stamina/fatigue and attack-control penalties;
+    missed Dash-strikes show exposed recovery. All combat resolution and tactical AI
+    now use deterministic rules/tie-breaks without RNG; the guided model's normalized
+    vitality is not full campaign injury parity. Versioned guided snapshots/replay tails
+    restore only onto a matching active arena, not as a general campaign save loader.
+   Outside guided contact, the bottom bar switches to clearly labeled legacy controls:
+    GROUP/MELEE: Space Attack, F Heavy, G Guard, D+direction Dash, C More.
+    RANGED: R Aim, Space/F Fire, T Reload, G Guard, C More. Fire requires an aimed
+    line and loaded ammunition; disabled buttons reflect current legality.
+    Esc cancels an armed dash, otherwise leaves the arena.
+  Arrows: walk a tile (or sprint while sprint mode is toggled on). Tap Shift to toggle
+  sprint; ` / Caps are alternate toggles. D then arrow arms dash; Ctrl+arrow dashes.
+  Numpad 1/3/7/9 dash diagonally; Shift-click or D+click selects a landing tile.
+  Each tile resolves on its own tick.
+  Skill, carried load, fatigue and leg wounds affect movement time. Running/dashing
+  costs stamina and adds fatigue; wait to catch breath. NPC pursuit uses these rules.
+   Hover shows route, simulated time, stamina and enemy-first risk. Status strip shows
+   wait/resolve state, sprint ON/OFF, shock, stamina, balance, aim, enemy action/speed band/
+   technique, a spatial body diagram and next events. Outcomes rise above combatants.
+   . or Enter: wait (advances combat time). E: bandage. 1/2/3/4 select head/torso/arms/legs; Z or 5 cycles body part.
+    C/More/right-click: context menu for aim, reload, weapon, door, smoke, bottle, body part,
+   bandage and safe sidestep. Press 6 for the hand target; it currently maps to the left arm.
+  Click a foe to inspect/select; click again to attack. Click a cardinal tile to walk/run;
+  Shift-click or arm D to dash, including diagonally. X, Tab and I provide free look,
+  target cycling and help.
+  Attacks can target all eight directions, including diagonals; sweep coverage and
+  telegraph tiles are the same locked geometry, and the selected body part stays committed.
+  ! marks locked attack tiles; ?/dot shows aiming, o shows recovery/stagger. Threat
+  footprints do not track movement. Leave them before resolution; attacks lock YOU into
+   windup and recovery too. Timeline countdowns are simulated seconds, not real-time reaction timers.
+  Targeted head hits are vital; arm wounds restrict two-handed weapons/aim/reload and
+  leg wounds slow movement. Threatened damaging attacks always telegraph for >100 ticks.
+   Combat resolves through blood loss, shock, wounds, arm/leg severing, stagger, bleeding,
+   cripple, conditional paralysis, suppression and armor severity. No HP number/bar is shown,
+   but the core still retains its internal blood/survival compatibility pool.
+  Old saved skills remain compatible but do not decide hit chance.
+   F12: choose archetype, enemy count, pillar cover, doors/hazards and squad mix. “Customize
+   enemy stats / equipment / condition” opens categorized shared-profile drafts with presets,
+   resolved-value review, validation, apply/restart, reset-to-inherited and discard. It sets
+   the runtime arena profile (not persistent campaign NPCs): weapons, personality,
+  tactics, speed, movement skill, strength, armor/shield, stamina, balance, fatigue, morale,
+  perception, carried load/capacity, target part, starting wounds/severed limbs, ammo,
+  smoke and glyph. Values apply to every enemy spawned when the arena starts/resets.
+  Smoke, spike and fire
+  tiles have deterministic LOS, damage and movement effects.
+  Archetypes: duelist, brawler, spear, gunman, sniper, charger, shield, pack hunter,
+  shotgunner, mixed cutlass/pistol. The default remains one opponent.
+  F10 DEBUG: show utilities/state, toggle overlays/monochrome/single-event pause,
+  heal, kill, spawn, give a bottle, dump replay. N advances one tick; Shift+N
+  fast-forwards up to 100 ticks, stopping at player-ready.
+  Backspace resets the same seed/configuration. Debug mutations invalidate normal replays.
+  Headless: python tools/combat_headless.py --archetype duelist --prove-counter
+  Fairness gate: python tools/combat_headless.py --fairness-audit
+  AI matches: python tools/combat_headless.py --ai-vs-ai --matches 90 --seed 2026
+  AI matchup override: python tools/combat_headless.py --ai-vs-ai --same-matchup --archetype duelist --opponent brawler
+  Replay: python tools/combat_headless.py --replay PATH_TO_REPLAY_JSON
+  Reports include per-actor damage, kills, whiffs, punish counters, kill/flee outcomes,
+  and time-to-resolution. Tactical AI varies seeded near-ties and adapts to recent retreat/
+  brace habits; this is not persistent player profiling or campaign-wide learning.
+
+Not implemented yet: continuous naval combat, persistent boarding casualties/captures,
+recruitment, wages or the wider GDD. Cannons can be loaded but not fired. Chart sailing remains abstract.
 No original campaign data, artwork, or save slots were copied.
 
 Local save slot: saves/captain.json (independent of Tales of Miska).
---new ignores the slot and replaces it only when saving or quitting.
+--new creates a seeded generated NPC society, ignores the existing slot, and replaces
+it only when saving or quitting. --seed selects a reproducible generated society;
+without it, a fresh random seed is used. Existing saves keep their current NPC cast.
 If a save is invalid, startup reports the error without overwriting it.
 
 Verification
@@ -245,8 +391,11 @@ Verification
   python play.py --smoke-render --screenshot preview.png
   python tools/preview_ship.py --reveal --output "C:/Users/Warp/AppData/Local/Temp/opencode/pirates-ship-life"
   python tools/preview_trading.py --output "C:/Users/Warp/AppData/Local/Temp/opencode/pirates-trading"
+  python tools/preview_combat.py --output "C:/Users/Warp/AppData/Local/Temp/opencode/pirates-combat"
+  python tools/preview_boarding.py --output "C:/Users/Warp/AppData/Local/Temp/opencode/pirates-boarding"
 Smoke mode never loads or writes a save.
 The ship preview is also save-free; --reveal is developer-only visibility.
+The combat preview is save-free and writes native SDL screenshots plus verification.json.
 
 Source snapshot: engine-origin.json records hashes of copied Python files.
 engine/ is the unmodified engine snapshot from E:/Tales Of Mizka.

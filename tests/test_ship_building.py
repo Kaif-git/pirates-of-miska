@@ -136,6 +136,65 @@ def test_occupancy_blocks_completion_without_losing_supplies():
     run_until(world, lambda: job.state == "done")
 
 
+def test_upper_deck_wall_build_uses_stairs_and_persists(tmp_path):
+    world, sailor = carpenter_world()
+    for x in range(3, 6):
+        world.ship_model.place(x, 2, 1, "floor")
+    world.ship_model.place(3, 2, 0, "stair")
+    target = (ORIGIN[0] + 5, ORIGIN[1] + 2)
+    job = queue(world, target, "build", "wall", z=1)
+    run_until(world, lambda: bool(sailor.cargo))
+    save_path = tmp_path / "upper-construction.json"
+    world.save(save_path)
+    world = World.load(save_path)
+    job = world.ship.job(job.id)
+    sailor = world.ship.sailor("mara")
+    run_until(world, lambda: job.state == "done")
+    assert any(c.kind == "wall" and (c.x, c.y, c.z) == (5, 2, 1)
+               for c in world.ship_model.components)
+    world.set_active_deck(1)
+    assert world.game_map.tile_id(*target) == T.WALL_WOOD
+
+
+def test_upper_deck_work_order_requires_stair_reachability():
+    world, _ = carpenter_world()
+    world.ship_model.place(3, 2, 1, "floor")
+    world.ship_model.place(4, 2, 1, "floor")
+    target = (ORIGIN[0] + 4, ORIGIN[1] + 2)
+    with pytest.raises(ValueError, match="stair-connected"):
+        queue(world, target, "build", "wall", z=1)
+
+
+def test_stair_is_a_physical_job_and_opens_saved_cross_deck_path(tmp_path):
+    world, sailor = carpenter_world()
+    world.ship_model.place(3, 2, 1, "floor")
+    target = (ORIGIN[0] + 3, ORIGIN[1] + 2)
+    job = queue(world, target, "build", "stair", z=0)
+    run_until(world, lambda: job.state == "done")
+    assert any(c.kind == "stair" and (c.x, c.y, c.z) == (3, 2, 0)
+               for c in world.ship_model.components)
+    path = tmp_path / "stair-build.json"
+    world.save(path)
+    restored = World.load(path)
+    assert any(c.kind == "stair" and (c.x, c.y, c.z) == (3, 2, 0)
+               for c in restored.ship_model.components)
+
+
+def test_first_upper_floor_can_be_raised_from_lower_landing_then_staired():
+    world, sailor = carpenter_world()
+    x, y = 5, 5
+    target = (ORIGIN[0] + x, ORIGIN[1] + y)
+    job = queue(world, target, "build", "floor", z=1)
+    run_until(world, lambda: job.state == "done")
+    assert any(c.kind == "floor" and (c.x, c.y, c.z) == (x, y, 1)
+               for c in world.ship_model.components)
+    stair_job = queue(world, target, "build", "stair", z=0)
+    run_until(world, lambda: stair_job.state == "done")
+    assert any(c.kind == "stair" and (c.x, c.y, c.z) == (x, y, 0)
+               for c in world.ship_model.components)
+    assert world.ship.path(world, sailor, (target[0] + 1, target[1], 1)) is not None
+
+
 def test_no_entombment_by_combined_orders():
     world, _ = carpenter_world()
     # Restrict the captain's only two exits using existing corner walls.
@@ -144,3 +203,33 @@ def test_no_entombment_by_combined_orders():
     run_until(world, lambda: first.state == "done")
     with pytest.raises(ValueError, match="strand"):
         queue(world, (70, 22), "build")
+
+
+def test_beam_is_a_physical_construction_order_with_live_projection():
+    world, _ = carpenter_world()
+    before = world.ship.stores["planks"]
+    job = queue(world, (78, 27), "build", "beam")
+    run_until(world, lambda: job.state == "done")
+    beam = next(c for c in world.ship_model.components
+                if c.kind == "beam" and (c.x, c.y, c.z) == (9, 15, 0))
+    assert beam.material == "oak"
+    assert world.game_map.is_walkable(78, 27)
+    assert world.ship.stores["planks"] == before - 1
+    job = queue(world, (78, 27), "dismantle", "beam")
+    run_until(world, lambda: job.state == "done")
+    assert not any(c.kind == "beam" for c in world.ship_model.components)
+
+
+def test_beam_can_bridge_an_empty_lower_cell_but_needs_a_bearing():
+    world, _ = carpenter_world()
+    model = ShipModel()
+    model.place(5, 5, 0, "floor")
+    world.ship_model = model
+    target = (ORIGIN[0] + 6, ORIGIN[1] + 5, 0)
+    result = candidate(world, target,
+                       {"action": "build", "kind": "beam", "component_id": None})
+    assert any(c.kind == "beam" and (c.x, c.y, c.z) == (6, 5, 0)
+               for c in result.components)
+    with pytest.raises(ValueError, match="connect"):
+        candidate(world, (ORIGIN[0] + 10, ORIGIN[1] + 5, 0),
+                  {"action": "build", "kind": "beam", "component_id": None})

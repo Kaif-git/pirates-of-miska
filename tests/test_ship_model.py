@@ -84,3 +84,23 @@ def test_deck_geometry_measures_irregular_contours_holes_and_components():
     assert geometry["components"] == 2
     assert geometry["perimeter"] == 20
     assert ship.deck_geometry(1)["tiles"] == 0
+
+
+def test_cached_geometry_tracks_component_edits_and_does_not_leak_report_mutations():
+    ship = ShipModel()
+    floor = ship.place(0, 0, 0, "floor")
+    first = ship.navigation_geometry()
+    assert first["floor"] == frozenset({(0, 0, 0)})
+    first["floor"] = frozenset()
+    assert ship.navigation_geometry()["floor"] == frozenset({(0, 0, 0)})
+
+    report = ship.deck_geometry()
+    report["tiles"] = -1
+    assert ship.deck_geometry()["tiles"] == 1
+    ship.place(1, 0, 0, "floor")
+    assert ship.navigation_geometry()["floor"] == frozenset({(0, 0, 0), (1, 0, 0)})
+    assert ship.deck_geometry()["tiles"] == 2
+    ship.set_condition(floor.id, 50)
+    assert ship.components[0].condition == 50
+    ship.remove(floor.id)
+    assert ship.navigation_geometry()["floor"] == frozenset({(1, 0, 0)})

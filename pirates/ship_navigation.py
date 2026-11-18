@@ -2,7 +2,7 @@
 from collections import deque
 
 
-def route(model, start, goal):
+def route(model, start, goal, blocked=()):
     """Find a shortest walking route through built floors and stair connectors.
 
     Positions are ship-local ``(x, y, z)`` coordinates. Ordinary doors are
@@ -14,12 +14,13 @@ def route(model, start, goal):
             or any(type(v) is not int for v in (*start, *goal))):
         raise ValueError("Navigation positions must be integer (x, y, deck) triples")
     start, goal = tuple(start), tuple(goal)
-    floors = {(c.x, c.y, c.z) for c in model.components if c.kind == "floor"}
+    geometry = model.navigation_geometry()
+    floors = geometry["floor"]
     if start not in floors or goal not in floors:
         return None
-    walls = {(c.x, c.y, c.z) for c in model.components if c.kind == "wall"}
-    doors = {(c.x, c.y, c.z) for c in model.components if c.kind == "door"}
-    stairs = {(c.x, c.y, c.z) for c in model.components if c.kind == "stair"}
+    walls = geometry["wall"]
+    stairs = geometry["stair"]
+    blocked = set(blocked) - {start}
     parent = {start: None}
     todo = deque([start])
     while todo:
@@ -38,7 +39,7 @@ def route(model, start, goal):
         if (x, y, z - 1) in stairs:
             neighbors.append((x, y, z - 1))
         for at in neighbors:
-            if at not in parent and at in floors and at not in walls:
+            if at not in parent and at not in blocked and at in floors and at not in walls:
                 parent[at] = (x, y, z)
                 todo.append(at)
     return None
@@ -46,11 +47,11 @@ def route(model, start, goal):
 
 def traversed_doors(model, path):
     """Return door coordinates on a route, preserving route order."""
-    doors = {(c.x, c.y, c.z) for c in model.components if c.kind == "door"}
+    doors = model.navigation_geometry()["door"]
     return tuple(at for at in path or () if at in doors)
 
 
-def route_to_worksite(model, start, target):
+def route_to_worksite(model, start, target, blocked=()):
     """Route to a reachable cardinal work position beside a 3D target tile."""
     if (not isinstance(target, (tuple, list)) or len(target) != 3
             or any(type(v) is not int for v in target)):
@@ -58,5 +59,49 @@ def route_to_worksite(model, start, target):
     x, y, z = target
     candidates = [(x + dx, y + dy, z) for dx, dy in
                   ((0, -1), (1, 0), (0, 1), (-1, 0))]
-    paths = [path for at in candidates if (path := route(model, start, at)) is not None]
-    return min(paths, key=lambda path: (len(path), path[-1])) if paths else None
+    geometry = model.navigation_geometry()
+    floors, walls, stairs = geometry["floor"], geometry["wall"], geometry["stair"]
+    start = tuple(start)
+    if start not in floors:
+        return None
+    blocked = set(blocked) - {start}
+    goals = {at for at in candidates if at in floors and at not in walls and at not in blocked}
+    if not goals:
+        return None
+
+    parent = {start: None}
+    distances = {start: 0}
+    todo = deque([start])
+    found = []
+    found_distance = None
+    while todo:
+        current = todo.popleft()
+        distance = distances[current]
+        if found_distance is not None and distance > found_distance:
+            break
+        if current in goals:
+            found_distance = distance
+            found.append(current)
+            continue
+        x, y, z = current
+        neighbors = [(x + dx, y + dy, z) for dx, dy in
+                     ((0, -1), (1, 0), (0, 1), (-1, 0))]
+        if current in stairs:
+            neighbors.append((x, y, z + 1))
+        if (x, y, z - 1) in stairs:
+            neighbors.append((x, y, z - 1))
+        for at in neighbors:
+            if at not in parent and at not in blocked and at in floors and at not in walls:
+                parent[at] = current
+                distances[at] = distance + 1
+                todo.append(at)
+
+    if not found:
+        return None
+    endpoint = min(found)
+    path = []
+    current = endpoint
+    while current is not None:
+        path.append(current)
+        current = parent[current]
+    return list(reversed(path))

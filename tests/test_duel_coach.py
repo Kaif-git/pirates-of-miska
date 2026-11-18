@@ -1,0 +1,181 @@
+from dataclasses import replace
+
+from pirates.duel_coach import coach
+from pirates.duel_system.engine import Choice, commit_action, advance_one_tick
+from pirates.duel_system.model import ActionKind, Zone
+from pirates.duel_system.session import DuelSession
+from pirates.duel_ui import DuelUI
+
+
+def test_coach_toggle_has_no_effect_on_combat_rng_or_guide_xp_setting():
+    ui = DuelUI(DuelSession.new(guide_mode='off'), rounds=True)
+    before = ui.session.to_data()
+    ui.activate('Coach')
+    assert ui.coach_enabled
+    ui.activate('Strategy')
+    assert ui.sidebar_rows(ui.model())[0] == 'STRATEGY COACH'
+    ui.activate('Back')
+    assert ui.session.to_data() == before
+    assert ui.session.guide_mode == 'off'
+
+
+def test_first_advice_uses_only_own_visible_strengths_and_unknown_opponent():
+    ui = DuelUI(DuelSession.new(guide_mode='off'), rounds=True)
+    model = ui.model()
+    assert not model.enemy_readout and not model.enemy_observed
+    hint = coach(model)
+    assert hint.action == 'Move'
+    assert 'not learned' in hint.evidence
+    assert 'unknown' in ' '.join(hint.cautions)
+    assert hint.confidence.startswith('Unknown')
+
+
+def test_grounded_coach_chooses_only_a_visible_legal_recovery_action():
+    session = DuelSession.new(guide_mode='off')
+    session.player.stability, session.player.grounded, session.player.grounded_since = 0, True, 0
+    ui = DuelUI(session, rounds=True)
+    model = ui.model()
+    hint = coach(model)
+    assert hint.action in {option.label for option in model.actions if option.enabled}
+    assert hint.action == 'Rise'
+    assert 'exposed' in hint.headline.lower() and 'grounded' in ' '.join(hint.cautions).lower()
+    assert 'no attack' in ' '.join(hint.cautions).lower()
+
+
+def test_coach_confidence_uses_only_named_npc_observations_for_current_public_conditions():
+    from pirates.duel_coach import strategy_rows
+    from pirates.duel_system.ai import FullKey
+    from pirates.duel_system.guide import _public_key
+
+    session = DuelSession.new(guide_mode='off')
+    key = _public_key(session.state, session.enemy)
+    full = FullKey(key, 'OK', 'BOLD', 'LOW')
+    for tick in range(5):
+        session.notebook.record('brute', session.enemy.id, key, 'HEAVY',
+                                tick=tick, full_key=full)
+    model = DuelUI(session, rounds=True).model()
+    advice = coach(model)
+    rows = strategy_rows(model, advice)
+    assert advice.confidence.startswith('Strong tendency, not certainty')
+    assert any(row.startswith('CONDITIONAL OPTION:') for row in rows)
+    assert any(row.startswith('EVIDENCE:') for row in rows)
+    assert any(row.startswith('CONFIDENCE:') for row in rows)
+    assert 'RISKS' in rows
+
+
+def test_coach_cannot_change_when_only_hidden_ai_or_rng_changes():
+    session = DuelSession.new(guide_mode='off')
+    ui = DuelUI(session, rounds=True)
+    first = coach(ui.model())
+    session.enemy.personality.base['HEAVY'] = 999999
+    session.enemy.personality.traits = dict.fromkeys(session.enemy.personality.traits, 0)
+    session.enemy.personality.score_bias = dict.fromkeys(session.enemy.personality.score_bias, 999999)
+    session.enemy.ai_current_category = 'HEAVY'
+    session.enemy.ai_experience = [{'category': 'LIGHT', 'outcome': 'COUNTERED'}] * 12
+    session.enemy.morale, session.enemy.pain = 0, 100
+    session.state.rng_seed = 98765
+    assert coach(ui.model()) == first
+
+
+def test_degradation_shows_consequences_not_just_a_percentage():
+    ui = DuelUI(DuelSession.new(guide_mode='off'), rounds=True)
+    ui.session.player.fatigue = 75
+    ui.session.player.pain = 30
+    model = ui.model()
+    values = dict(model.own_readout)
+    assert values['light_ticks'] > values['fresh_light_ticks']
+    assert values['Accuracy'] < values['fresh_Accuracy']
+    assert any('windup' in alert for alert in model.functional_alerts)
+    assert any('aim:' in alert for alert in model.functional_alerts)
+
+
+def test_trade_compares_both_actual_hits_and_deep_cutoff():
+    session = DuelSession.new(guide_mode='off')
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    # Freeze the NPC choice for this controlled example, not a live AI promise.
+    session._npc_choice = lambda: Choice(ActionKind.LIGHT, Zone.TORSO)
+    ui = DuelUI(session, rounds=True)
+    ui.activate('Light')
+    ui.activate('Torso')
+    reason = ui.round_summary[2]
+    assert reason.startswith('Trade:')
+    assert 'You 14.0 cut' in reason and 'Ronin 22.1 deep' in reason and 'deep ≥ 16' in reason
+
+
+def test_observed_light_generates_conditional_parry_not_future_certainty():
+    session = DuelSession.new(guide_mode='off')
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    session._npc_choice = lambda: Choice(ActionKind.LIGHT, Zone.TORSO)
+    ui = DuelUI(session, rounds=True)
+    ui.activate('Wait')
+    hint = coach(ui.model())
+    assert hint.action == 'Guard'
+    assert 'if light repeats' in hint.headline
+    assert 'bypass' in ' '.join(hint.cautions)
+
+
+def test_successful_parry_teaches_the_real_riposte_opportunity():
+    session = DuelSession.new(guide_mode='off')
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    session._npc_choice = lambda: Choice(ActionKind.LIGHT, Zone.TORSO)
+    ui = DuelUI(session, rounds=True)
+    ui.activate('Guard')
+    hint = coach(ui.model())
+    assert hint.action == 'Light' and 'riposte' in hint.headline
+    from pirates.duel_system.render_model import preview_action
+    preview = preview_action(session.state, Choice(ActionKind.LIGHT, Zone.TORSO))
+    assert preview.strike_tick-session.state.tick == dict(ui.model().own_readout)['light_ticks']
+
+
+def test_unlearned_coach_uses_recorded_evidence_not_secret_current_stats():
+    session = DuelSession.new(guide_mode='off')
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    session._npc_choice = lambda: Choice(ActionKind.LIGHT, Zone.TORSO)
+    ui = DuelUI(session, rounds=True)
+    ui.activate('Wait')
+    before = coach(ui.model())
+    session.enemy.strength = session.enemy.speed = session.enemy.accuracy = 999
+    assert not ui.model().enemy_readout
+    assert coach(ui.model()) == before
+
+
+def test_heavy_target_picker_displays_the_extra_accuracy_requirement():
+    ui = DuelUI(DuelSession.new(guide_mode='off'), rounds=True)
+    ui.activate('Light')
+    light = {z.zone: z.difficulty for z in ui.model().zones}
+    ui.activate('Back')
+    ui.activate('Heavy')
+    for zone in ui.model().zones:
+        assert zone.difficulty == light[zone.zone]+2
+
+
+def test_fresh_reference_and_readout_never_mutate_state():
+    session = DuelSession.new(guide_mode='off')
+    session.player.pain, session.player.fatigue = 40, 70
+    before = session.to_data()
+    model = DuelUI(session, rounds=True).model()
+    assert model.functional_alerts
+    assert session.to_data() == before
+
+
+def test_coach_never_promises_a_disabling_cut_when_armor_prevents_it():
+    from pirates.duel_system.model import ArmorPiece
+    session = DuelSession.new(guide_mode='off')
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    session.enemy.equipment.armor[Zone.ARM] = ArmorPiece(value=100, weight=0)
+    hint = coach(DuelUI(session, rounds=True).model())
+    assert 'cannot cause a disabling arm cut' in hint.headline
+    assert hint.action != 'Light'
+
+
+def test_coach_preference_survives_real_world_save_load(tmp_path):
+    from pirates.game import World
+    world = World()
+    session = DuelSession.new(guide_mode='off')
+    world.duel_journal = session.to_data()
+    world.duel_journal['coach_enabled'] = True
+    path = tmp_path/'coach-save.json'
+    world.save(path)
+    restored = World.load(path)
+    assert restored.duel_journal['coach_enabled'] is True
+    assert DuelSession.from_data(restored.duel_journal).state.to_data() == session.state.to_data()

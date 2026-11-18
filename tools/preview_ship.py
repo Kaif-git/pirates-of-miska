@@ -1,6 +1,7 @@
 """Save-free native SDL walkthrough with optional developer visibility reveal."""
 from pathlib import Path
 import argparse
+from copy import deepcopy
 import json
 import sys
 
@@ -37,7 +38,8 @@ def main():
             verification["frames"].append({"name": name, "second": world.ship.seconds,
                 "crew": [{"name": c.name, "x": c.x, "y": c.y, "activity": c.activity,
                           "completed": c.completed} for c in world.ship.crew],
-                "hull": world.ship.hull, "bilge": world.ship.bilge, "meals": world.ship.meals})
+                "hull": world.ship.hull, "bilge": world.ship.bilge,
+                "food_kg": world.ship.food_stock_g() / 1000})
         capture("00-ship")
         for second in (10, 30, 60, 180, 600):
             world.advance((second - world.ship.seconds) * 100)
@@ -51,6 +53,18 @@ def main():
         capture("work-audit", "Recorded work transitions", [
             f"{r['second']}s {r['crew'] or '-'} #{r['job'] or '-'} {r['event']}: {r['reason']}"
             for r in world.ship.audit[-22:]])
+        # Isolated display-only profile: exercise lifecycle labels without making
+        # the working walkthrough's sailor ill, elderly, or disloyal.
+        display_sailor = deepcopy(world.ship.crew[0])
+        display_sailor.age = 65
+        display_sailor.retirement_notice_day = world.clock.day
+        display_sailor.grievance = 92
+        display_sailor.betrayal_warning_tick = world.clock.total_ticks
+        display_sailor.health = 0
+        display_sailor.critical_since_tick = world.clock.total_ticks
+        display_sailor.critical_cause = "critical burn injury caused by preview fire"
+        capture("crew-lifecycle-profile", f"{display_sailor.name}: lifecycle warnings",
+                profile_rows(display_sailor, world))
         observe(renderer, world, seconds=3, frame_delay=0)
         assert world.ship.hull == 100 and world.ship.bilge < 3
         assert all(world.ship.ammo.values())

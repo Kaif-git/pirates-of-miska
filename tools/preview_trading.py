@@ -22,7 +22,7 @@ def walk_to(world, target):
         if route is None:
             world.advance(100)
             continue
-        x, y = route[0]
+        x, y = route[0][:2]
         if world.game_map.tile_id(x, y) == T.DOOR and not world.game_map.doors[y, x]:
             world.toggle_door()
             continue
@@ -81,11 +81,11 @@ def main():
         walk_to(world, MERCHANTS["lina"]["at"])
         e.trade(world, "lina", "carpenter_tools", 1, False)
         walk_to(world, world.ship.stations["hold"])
-        before_water = world.ship.stores["water"]
+        before_water = world.ship.stores["clean_water_ml"]
         before_planks = world.ship.stores["planks"]
         e.allocate(world, "water_cask", 1)
         e.allocate(world, "timber", 1)
-        assert world.ship.stores["water"] >= before_water + 9
+        assert world.ship.stores["clean_water_ml"] >= before_water + 9000
         assert world.ship.stores["planks"] >= before_planks + 1
         for key in ("carpenter_tools", "cutlass", "oilskin", "boots"):
             e.equip(world, "mara", key)
@@ -94,7 +94,7 @@ def main():
         capture("13-trade-history", "The two-island trading run", e.history)
         assert world.ship_model.snapshot() == geometry
         assert not world.ship.check_orders()
-        assert set(e.gear["mara"]) == {"tool", "clothing", "weapon", "feet"}
+        assert set(e.gear["mara"]) == {"tool", "coat", "weapon", "feet"}
         manifest.update({"passed": True, "final_money": e.money, "islands": list(PORTS),
                          "gear": e.gear, "history": e.history, "geometry_unchanged": True})
         (args.output / "verification.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

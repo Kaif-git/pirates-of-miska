@@ -63,7 +63,7 @@ def test_report_checks_actual_equipment_not_label():
     assert any("MISSING installed station" in row for row in rows)
     assert any("Hold ->" in row for row in rows)
     world.spaces.designate(world, 76, 25, "infirmary")
-    assert any("not implemented" in row for row in report_rows(world, 76, 25))
+    assert any("MISSING medicine chest" in row for row in report_rows(world, 76, 25))
 
 
 def test_actual_room_changes_after_wall_removed():
