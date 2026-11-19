@@ -1,7 +1,7 @@
 # First Expansion — Consequential Voyages
 
-Date: 2026-11-18
-Status: implementation in progress under the voyage-expansion goal.
+Date: 2026-11-19
+Status: implementation complete; repository-wide suite was stopped at the user's request at approximately 85% and has no final result.
 Parent: `PIRATES-OF-MISKA-MASTER-PLAN.md`.
 
 ## Initial Phase 0 audit notes (Nov 18, 2026)
@@ -39,11 +39,13 @@ Parent: `PIRATES-OF-MISKA-MASTER-PLAN.md`.
 
 ### Integration verification in progress
 
-- `python -m py_compile pirates/voyage.py pirates/management.py pirates/game.py pirates/economy.py tests/test_voyage.py tests/test_trade_expansion.py tools/preview_voyage.py` passed after the latest edits.
-- `git diff --check -- pirates/voyage.py pirates/management.py pirates/game.py pirates/economy.py tests/test_voyage.py tests/test_trade_expansion.py tools/preview_voyage.py VOYAGE-OPPORTUNITIES-EXPANSION-PLAN.md` reports no whitespace errors; Git prints only its existing LF→CRLF conversion warnings.
-- The server restart detached the shell waiting for the pre-edit `python -m pytest -q`; with user authorization, verified command PID 20324 was stopped and no result was recovered. The earlier 10-year simulation PID 4836 is also gone without a result. A later process audit found unrelated concurrent pytest PID 9568 and 3-year simulation PID 15028; both are left untouched. Fresh focused voyage pytest and native preview still need an idle window to avoid overlapping these workloads.
-- `tools/preview_voyage.py` now captures route choice, departure review, passage choices, underway/chart, ordinary arrival/report, nearby-ship contact, blocked aid, feasible aid and squall decision/outcome. Controlled aid/squall fixtures assert exact time, cargo and condition deltas into `verification.json`; ordinary passage suppresses the synthetic squall. Native capture and visual inspection remain pending.
-- Fresh focused run (`python -m pytest -q` over voyage, trade, economy, provisioning, storage, crew, NPC, combat-NPC, harbor-navigation and voyage-save suites): **261 passed in 159.44s**. The first run's two real failures exposed encounter-action time truncation: `World.advance(6000)` stopped after one second while a sighting remained pending. `VoyageSystem.advance_encounter_action_time()` now permits that explicit action cost through canonical ship/world hooks while preserving the ordinary passage interruption; hail/aid tests assert 60 ship seconds. The other two failures were stale test assumptions; the same-tick sighting fixture now passes the existing 30-minute eligibility gate and the UI test checks the current `Review voyage order` title. The final combat-action guard and its regression then passed targeted verification (2 tests, 2.19s). Ignored/missing-contact and contract-route UI integration regressions have since been added; their execution is pending.
+- `python -m py_compile pirates/voyage.py pirates/management.py pirates/game.py pirates/economy.py tests/test_voyage.py tests/test_trade_expansion.py tools/preview_voyage.py` passed after the latest implementation/test edits.
+- Scoped tracked `git diff --check` and `git diff --no-index --check` against untracked `tests/test_trade_expansion.py` and this plan report no whitespace errors. Git emits only LF→CRLF notices for tracked source files; no-index check exit is normalized after inspecting its output.
+- The earlier full-repository run was canceled by a server restart and yielded no result. On Nov 19 a fresh `python -m pytest -q` was launched with no Python processes found beforehand. At the user's request, the verified pytest PID 18236 was stopped after output reached the 85% progress marker (20 more tests displayed); the shell exited code 1 without a pytest summary, so this attempt has no final pass/fail result. No unrelated workload was stopped or altered.
+- `tools/preview_voyage.py --output C:/Users/Warp/AppData/Local/Temp/opencode/voyage-expansion-final-verification` passed with 14 native captures and `verification.json`; it touched no save. It covers route/departure (including an accepted Bluegrain objective and 30% low-confidence watch), passage choices, underway/chart, arrival/report, sighting, blocked/available aid and squall choice/outcome. I inspected route, departure, sighting, blocked aid, aid, squall, and arrival-report frames at the native 1280×800 output; text fits and the report distinguishes arrival from office settlement. Controlled aid and squall assertions record exact time/cargo/condition effects.
+- Matched ordinary route measurements are saved at `C:/Users/Warp/AppData/Local/Temp/opencode/voyage-expansion-final-verification/balance-scenarios.json`. Same initial day, ship, Bluegrain delivery, and one-hour canonical `World.advance()` chunks: Government Patrol Lane (5.84 chart units) arrived in 6h21m vs 4h04m estimate, 0 encounter/storm interrupts, Marks 481→481, hull unchanged, rigging 62→39 from passage wear, prepared food -1,000g, dried fish -250g, 0 completed jobs, contract still active/unpaid; runtime 92.982s. Glass Shoals (same 5.84 units) arrived in 7h18m, 0 encounter/1 squall interrupt, press-on severe damage hull -10 and rigging total 62→20 (includes passage wear), prepared food -1,000g, dried fish -250g, fruit -500g, biscuit -500g, 0 completed jobs, funds unchanged and contract active/unpaid; runtime 121.672s. This is one matched pair, not a frequency or balance estimate; keep the 30% authored eligibility and damage tuning provisional pending larger ordinary samples.
+- Final focused command over voyage/trade/economy/provisioning/storage/crew/NPC/combat-NPC/harbor-navigation/voyage-save suites passed **265 tests in 220.37s**. Repository-wide `python -m pytest -q` was attempted twice: the first attempt detached on server restart; the fresh Nov 19 run reached the 85% marker plus 20 tests and was stopped at the user's request (shell code 1, no pytest summary). Repository-wide status is **incomplete / no final result**, not a classified test failure.
+- Earlier focused runs exposed encounter-action time truncation and stale test assumptions; these were corrected. `VoyageSystem.advance_encounter_action_time()` now advances explicit hail/aid cost through canonical ship/world hooks while preserving ordinary passage interruption. The final focused integration set, including ignored/missing contact and contract-route UI regressions, passed **265 tests in 220.37s**; targeted combat-action guard checks passed 2/2. The earlier 261-test/159.44s result is historical and superseded.
 
 ## 1. Objective
 
@@ -260,16 +262,16 @@ Record runtime, simulated time, interruptions per voyage/day, spending, supplies
 
 ### Completion checklist
 
-- [ ] Existing authorities and baseline documented.
-- [ ] Accelerated travel stops correctly and preserves simulation equivalence.
-- [ ] A finite delivery and two meaningful route choices work end to end.
-- [ ] Ship contacts and aid create real decisions and persistent outcomes.
-- [ ] Storm warnings and responses work through supported systems.
-- [ ] Arrival settles once and carries outcomes into future opportunities.
-- [ ] Save migration, pending-event reload and deterministic continuation pass.
-- [ ] Costs, information boundaries, NPC identity and conservation pass negative tests.
-- [ ] Matched balance scenarios and native UI evidence recorded.
-- [ ] Focused/full-suite status, remaining limitations and handoff documented.
+- [x] Existing authorities and baseline documented.
+- [x] Accelerated travel stops correctly and preserves simulation equivalence.
+- [x] A finite delivery and two meaningful route choices work end to end; measured routes and existing office-settlement behavior are documented.
+- [x] Ship contacts and aid create real decisions and persistent outcomes.
+- [x] Storm warnings and responses work through supported systems.
+- [x] Arrival reporting preserves outcomes and existing settlement is once-only at the destination office.
+- [x] Save migration, pending-event reload and deterministic continuation pass in the focused suites.
+- [x] Costs, information boundaries, NPC identity and conservation pass focused negative tests.
+- [x] Matched balance scenarios and native UI evidence recorded.
+- [x] Focused suite passed (265); full-suite attempt status, limitations and handoff documented. The repository-wide run was stopped at the user's request after the 85% marker plus 20 tests; shell exited code 1 without a pytest summary.
 
 ## 12. Decisions to settle during Phase 0, not silently assume
 

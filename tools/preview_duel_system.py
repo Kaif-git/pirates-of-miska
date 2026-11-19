@@ -48,6 +48,9 @@ def main():
                            "columns": max(map(len, rows)), "rows": len(rows)})
 
         capture("01-start")
+        if args.game_display:
+            labels = {label for _, label in display.buttons}
+            assert {"Defend", "Thrust", "Feint", "Shove", "Disarm", "Disengage"} <= labels
         ui.handle_key(KeySym.SPACE)
         capture("02-zone-menu")
         ui.handle_key(KeySym.T)
@@ -73,13 +76,14 @@ def main():
         commit_action(ui.session.state, "ronin", Choice(ActionKind.HEAVY, Zone.TORSO))
         capture("10-heavy-tell-danger")
         ui.handle_key(KeySym.G)
+        capture("11-defend-preview")
+        assert ui.session.selected is not None
+        assert ui.message.startswith("Defend")
         ui.handle_key(KeySym.RETURN)
         ui.session.run_to_player()
-        capture("11-guard-held")
-        assert ui.session.holding_guard
-        ui.handle_key(KeySym.G)
-        ui.session.run_to_player()
-        capture("12-guard-released")
+        capture("12-defend-response")
+        assert ui.session.inputs and ui.session.inputs[-1]["choice"]["kind"] in {
+            "WALK", "RUN", "DASH", "GUARD"}
 
         for condition in ("unconscious", "dead", "victory"):
             ui = DuelUI(DuelSession.new(guide_mode="off"))
@@ -109,6 +113,17 @@ def main():
         capture("16-guide-unknown-hints")
         ui.session.guide_mode = "full"
         capture("17-guide-full")
+
+        ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+        ui.activate("Light")
+        ui.activate("Torso")
+        display.round_summary = ui.round_summary
+        recap_text = " ".join(ui.round_summary).lower()
+        assert "you:" in recap_text and "ronin:" in recap_text
+        assert "effects:" in recap_text
+        assert not any(token in recap_text for token in ("net damage", "damage trade", "power", "armor"))
+        capture("18-consequence-recap")
+        display.round_summary = ()
         # Exercise the actual modal loop and tcod KeyDown dispatch, not just helpers.
         import tcod.event
         from pirates.duel_ui import run_sword_duel

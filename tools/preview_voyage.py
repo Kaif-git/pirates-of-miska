@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 import play
 from PIL import Image
+from pirates.economy import CATALOG, MERCHANTS
 from pirates.management import sea_map_rows
 from pirates.ship import LABORS
 from pirates.voyage import SEA_NODES
@@ -33,6 +34,15 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     world = quiet_world()
     geometry = world.ship_model.snapshot()
+    world.player.x, world.player.y = 42, 23
+    world.refresh()
+    delivery = next(row for row in world.economy.contract_offers("verdant", world.clock.day)
+                    if row["item"] == "bluegrain" and row["destination"] == "cinder")
+    world.economy.accept_contract(world, delivery["offer_id"])
+    issuer = MERCHANTS[delivery["issuer"]]
+    world.player.x, world.player.y = issuer["at"][0] + 1, issuer["at"][1]
+    world.refresh()
+    world.economy.trade(world, delivery["issuer"], delivery["item"], delivery["quantity"], True)
     renderer = play.PiratesRenderer(settings=play.RenderSettings(
         world_font_size=20, world_cell_width=20, world_cell_height=24))
     report = {"frames": [], "start_port": world.economy.port}
@@ -63,6 +73,12 @@ def main():
             "Navigator's route: " + " → ".join(SEA_NODES[node]["name"] for node in plan["route"]),
             f"Estimated {plan['duration_hours']} hours; wind: {plan['wind']['name']}.",
             f"Quartermaster: {plan['water_liters']} L clean water, {plan['food_kg']} kg food.",
+            f"DELIVERY OBJECTIVE: {delivery['quantity']} {CATALOG[delivery['item']]['name']} due by "
+            f"day {delivery['deadline_day']}; {delivery['reward']} Marks escrowed.",
+            "Arrival is not settlement; visit Cinder Quay's harbor office.",
+            *([f"Low-confidence squall eligibility: {plan['storm_forecast']['chance_percent']}% near "
+               f"{SEA_NODES[plan['storm_forecast']['node']]['name']}; no storm is guaranteed."]
+              if plan["storm_forecast"] else []),
             "Confirm to sail. Daily ship work and needs continue."])
         plan = world.voyages.confirm(world, "cinder")
         # Keep this walkthrough focused on ordinary arrival; dedicated tests
@@ -196,9 +212,13 @@ def main():
                        "npc_event_sample": world.npcs.events[-8:],
                        "route_options": [{"route": row["route"], "distance": row["distance"]}
                                          for row in route_options],
-                       "passage": {"actual_seconds": world.voyages.voyage["elapsed_seconds"],
+                        "passage": {"actual_seconds": world.voyages.voyage["elapsed_seconds"],
                                    "estimate_seconds": world.voyages.voyage["initial_estimate_seconds"],
                                    "ship_seconds": world.ship.seconds},
+                        "delivery": {"offer_id": delivery["offer_id"], "quantity": delivery["quantity"],
+                                     "deadline_day": delivery["deadline_day"], "reward": delivery["reward"],
+                                     "status_at_arrival": next(row["status"] for row in world.economy.contracts
+                                                                if row["offer_id"] == delivery["offer_id"])},
                        "decision_scenarios": {
                            "contact_id": target["id"], "hail_ticks": hail_ticks,
                            "hail_ship_seconds": hail_ship_seconds,

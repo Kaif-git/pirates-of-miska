@@ -5,6 +5,7 @@ or advanced. Terrain, light, camera and sprite textures use the game engine.
 """
 import time
 import bisect
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,16 +13,22 @@ from PIL import Image
 
 
 class ExchangePlayback:
-    def __init__(self, frames, *, started=None, movement_seconds=.095):
+    def __init__(self, frames, *, started=None, movement_seconds=.095, reduced_motion=False):
         self.frames = tuple(frames)
         self.started = time.monotonic() if started is None else started
+        self.reduced_motion = reduced_motion
         self.tell = .22
         self.step = min(.045, 1.2/max(1, len(frames)-1))
         self.boundaries = [0.0]
         for first, second in zip(self.frames, self.frames[1:]):
             finish = {actor.actor_id: actor.pos for actor in second.actors}
             moving = any(actor.pos != finish.get(actor.actor_id, actor.pos) for actor in first.actors)
-            self.boundaries.append(self.boundaries[-1]+(max(self.step, movement_seconds) if moving else self.step))
+            impact_pause = (.08 if not reduced_motion and any(
+                popup.tick == second.tick and "· impact" in popup.text
+                for popup in second.popups) else 0)
+            self.boundaries.append(self.boundaries[-1]
+                                   +(max(self.step, movement_seconds) if moving else self.step)
+                                   +impact_pause)
         self.duration = self.tell + self.boundaries[-1] + .25
 
     def offset(self, index, progress=0):
@@ -41,6 +48,19 @@ class ExchangePlayback:
         positions = tuple(movement_frame(progress, actor.pos,
                                          finish.get(actor.actor_id, actor.pos), (0, 0), (0, 0))[0]
                           for actor in model.actors)
+        if not self.reduced_motion and segment > 0:
+            # Flinch is a short sprite offset inside the occupied tile, never a
+            # simulated move. Key it to the actual witnessed reaction event.
+            flinch_pops = {popup.pos for popup in end.popups
+                           if popup.text == "Flinched" and popup.tick == end.tick}
+            impacts = {popup.pos: popup.direction for popup in end.popups
+                       if "· impact" in popup.text and popup.tick == end.tick}
+            if flinch_pops or impacts:
+                pulse = math.sin(progress * math.pi) * .16
+                positions = tuple((pos[0] + (impacts[actor.pos][0]*pulse if actor.pos in impacts else
+                                              pulse if actor.pos in flinch_pops else 0),
+                                   pos[1] + (impacts[actor.pos][1]*pulse if actor.pos in impacts else 0))
+                                  for actor, pos in zip(model.actors, positions))
         return model, positions, elapsed >= self.duration, (model, end, progress)
 
 

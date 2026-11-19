@@ -33,7 +33,7 @@ def stability_band(fighter, config):
     return "STUMBLING"
 
 
-def _interrupt_if_unresolved(state, fighter):
+def interrupt_unresolved_action(state, fighter):
     action = fighter.action
     if not action:
         return
@@ -68,7 +68,7 @@ def apply_stability_loss(state, fighter, source, base_loss, *, details=None):
         state.emit(EventType.FALL, fighter.id,
                    deltas={"source": source, "from_band": prior_band,
                            "position": fighter.pos}, cause_tags=("STABILITY_ZERO", source))
-        _interrupt_if_unresolved(state, fighter)
+        interrupt_unresolved_action(state, fighter)
     return loss
 
 

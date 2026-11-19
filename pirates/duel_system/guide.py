@@ -286,6 +286,7 @@ CAUSE_LINES = {
     "WALK_DEFENSELESS": "Walking in reach leaves you defenseless.",
     "ZONE_DRIFT": "Accuracy or exposure forces the strike to a safer fallback zone.",
     "OUT_OF_REACH": "An attack misses because its target is out of reach.",
+    "OUTSIDE_LOCKED_ATTACK_GEOMETRY": "The target moved outside the attack's locked direction before impact.",
     "OVEREXTENDED_HEAVY_WHIFF": "An out-of-reach heavy overextends and costs stability.",
     "SHARP_FAST_TURN": "A sharp turn during successful fast movement costs stability.",
     "STABILITY_ZERO": "Stability reached zero; the fighter fell and is grounded.",

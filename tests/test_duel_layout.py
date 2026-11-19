@@ -39,6 +39,8 @@ def test_context_controls_track_real_round_controller():
     def labels():
         return context_labels(ui.sidebar_rows(ui.model()))
     assert labels()[0] == "Light"
+    assert {"Defend", "Thrust", "Dash+Light", "Feint", "Shove", "Disarm",
+            "Disengage", "Move", "Run"} <= set(labels())
     ui.activate("Light")
     assert labels() == ["Eye", "Head", "Torso", "Arm", "Hand", "Leg", "Back"]
     ui.activate("Back")
@@ -61,6 +63,17 @@ def test_tactical_menu_adds_a_third_control_row_without_overlapping_panels(size)
     ix, iy, iw, ih = layout["info"]
     cx, cy, cw, ch = layout["controls"]
     assert ay+ah <= iy and iy+ih <= cy and cy+ch <= height
+
+
+@pytest.mark.parametrize("size", [(640, 600), (960, 700), (1280, 800)])
+def test_direct_tactical_controls_fit_without_hiding_tactics_in_more(size):
+    width, height = size
+    labels = context_labels((), DuelSession.new(guide_mode="off").render_model())
+    assert {"Defend", "Feint", "Shove", "Disengage", "Thrust", "Disarm"} <= set(labels)
+    layout = dashboard_geometry(width, height, len(labels))
+    assert layout["controls"][1] + layout["controls"][3] <= height
+    assert layout["arena"][1] + layout["arena"][3] <= layout["info"][1]
+    assert layout["info"][1] + layout["info"][3] <= layout["controls"][1]
 
 
 def test_retry_clears_previous_exchange_feedback():

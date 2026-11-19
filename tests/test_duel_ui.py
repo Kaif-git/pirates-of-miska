@@ -82,16 +82,66 @@ def test_notebook_log_and_help_are_read_only_and_escape_returns():
     assert session.state.to_data() == before
 
 
-def test_dash_light_direction_and_zone_are_both_explicit():
+def test_dash_light_single_target_automatically_approaches_and_only_asks_for_hit_zone():
     session = DuelSession.new(guide_mode="off")
-    ui = DuelUI(session)
+    ui = DuelUI(session, rounds=True)
+    before = session.player.pos
+
     ui.handle_key(KeySym.J)
-    assert ui.panel == "direction"
-    ui.handle_key(KeySym.RIGHT)
+
     assert ui.panel == "zones"
+    assert ui.target_id == session.enemy.id
+    choice = ui._dash_light_choices[session.enemy.id]
+    assert choice.direction == (1, 0) and choice.tiles == 3
+    assert session.player.pos == before and not session.inputs
+    zone_text = " ".join(ui.sidebar_rows(ui.model())).lower()
+    assert "approach path is automatic" in zone_text
+    assert "choose hit zone" in zone_text
+    assert "choose direction" not in zone_text and "1/2/3 changes" not in zone_text
     ui.handle_key(KeySym.X)
-    assert ui.panel == "preview" and session.selected is not None
-    assert session.state.tick == 0
+    assert len(session.inputs) == 1
+    assert session.inputs[0]["choice"]["kind"].value == "DASH_LIGHT"
+    assert session.inputs[0]["choice"]["direction"] == (1, 0)
+    assert session.inputs[0]["choice"]["tiles"] == 3
+
+
+def test_dash_light_multiple_targets_lists_only_reachable_hostiles():
+    from test_duel_system_foundation import bare_fighter
+
+    player = bare_fighter("player", pos=(2, 3), team_id="players")
+    near_a = bare_fighter("near-a", pos=(6, 2), team_id="raiders")
+    near_b = bare_fighter("near-b", pos=(6, 4), team_id="raiders")
+    far = bare_fighter("far", pos=(9, 3), team_id="raiders")
+    session = DuelSession.new_group([player, near_a, near_b, far], guide_mode="off", seed=13)
+    ui = DuelUI(session, rounds=True)
+
+    ui.activate("Dash+Light")
+
+    assert ui.panel == "targets"
+    assert set(ui._dash_light_choices) == {"near-a", "near-b"}
+    rows = "\n".join(ui.sidebar_rows(ui.model())).lower()
+    assert "near-a" in rows and "near-b" in rows and "far" not in rows
+    assert "direction" in rows.lower()  # explained as automatic, never prompted
+    ui.activate("Target 2")
+    assert ui.panel == "zones" and ui.target_id == "near-b"
+    assert ui._dash_light_choices["near-b"].tiles <= 3
+
+
+def test_dash_light_out_of_range_returns_to_actions_without_direction_or_distance_prompt():
+    from test_duel_system_foundation import bare_fighter
+
+    player = bare_fighter("player", pos=(1, 3), team_id="players")
+    hostile = bare_fighter("hostile", pos=(8, 3), team_id="raiders")
+    session = DuelSession.new_group([player, hostile], guide_mode="off", seed=14)
+    ui = DuelUI(session, rounds=True)
+    before = session.state.to_data()
+
+    ui.activate("Dash+Light")
+
+    assert ui.panel == "main" and not ui._dash_light_choices
+    assert "Out of range" in ui.message or "clear Dash+Light approach" in ui.message
+    assert "direction" not in ui.message.lower() and "tile" not in ui.message.lower()
+    assert session.state.to_data() == before and not session.inputs
 
 
 def test_repeated_dash_direction_confirms_dash_not_walk():

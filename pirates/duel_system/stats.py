@@ -67,12 +67,11 @@ def effective_stats(fighter, config, tick=0):
                  / blood_rule["penalty_mid"] * blood_rule["penalty_last"])
     anger = fighter.anger / pool
     exhaustion = config["stamina"]["exhaust_mult"] if fighter.exhausted else 1
-    speed_status = strength_status = accuracy_status = 1
+    speed_status = strength_status = 1
     for status in fighter.statuses:
         if status.active(tick):
             speed_status *= status.speed_mult
             strength_status *= status.strength_mult
-            accuracy_status *= status.accuracy_mult
     gear_speed = max(gear["speed_floor"], 1 - gear["speed_per_weight"] * fighter.equipment.total_weight)
     weapon_speed = fighter.equipment.weapon.speed_mod if fighter.equipment.weapon is not None else 1
     speed = (fighter.speed * lvl * (1-rule["fatigue_speed"]*fatigue)
@@ -82,17 +81,11 @@ def effective_stats(fighter, config, tick=0):
     strength = (fighter.strength * lvl * (1-rule["fatigue_strength"]*fatigue)
                 * (1-rule["pain_strength"]*pain) * (1-blood)
                 * (1+config["anger"]["str_bonus"]*anger) * strength_status * exhaustion)
-    eye_rule = config["weapon_integrity"]
-    eye_penalty = min(eye_rule["eye_accuracy_penalty_max"],
-                      fighter.permanent_injuries.eyes_damaged * eye_rule["eye_accuracy_penalty_per_eye"])
-    accuracy = (fighter.accuracy * lvl * (1-rule["fatigue_accuracy"]*fatigue)
-                * (1-rule["pain_accuracy"]*pain) * (1-blood)
-                * (1-config["anger"]["acc_penalty"]*anger)
-                * (1-rule["fear_accuracy"]*fear(fighter, config)/pool)
-                * (1-fighter.nervousness) * accuracy_status * (1-eye_penalty))
-    floor = rule["floor_pct"]
-    return EffStats(max(fighter.speed * floor, speed), max(fighter.strength * floor, strength),
-                    max(fighter.accuracy * floor, accuracy), endurance, fatigue, pain, blood)
+    # Accuracy is authored permanent skill. Physical condition changes timing,
+    # force and available actions; it never rewrites this stat.
+    return EffStats(max(fighter.speed * rule["floor_pct"], speed),
+                    max(fighter.strength * rule["floor_pct"], strength),
+                    fighter.accuracy, endurance, fatigue, pain, blood)
 
 
 def phase_ticks(base, speed, config, *, recovery_weight=0):

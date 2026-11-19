@@ -55,11 +55,56 @@ def test_feint_only_disrupts_an_in_reach_committed_guard_and_consumes_riposte():
     event = events(state, EventType.FEINT, player.id)[0]
     assert event.deltas["outcome"] == "GUARD_DISRUPTED"
     assert event.deltas["riposte_consumed"]
+    assert event.deltas["opening_until_tick"] > state.tick
     assert not enemy.riposte
     assert enemy.stamina < 100
-    assert enemy.action and enemy.action.kind == ActionKind.GUARD
+    assert enemy.action is None
+    assert enemy.stagger_until == event.deltas["opening_until_tick"]
     assert sum(event.type == EventType.ACTION_START and event.actor == player.id
                for event in state.event_log) == 1
+
+
+def test_successful_feint_creates_light_sized_but_not_heavy_sized_followup_window():
+    for kind, expected_fit in ((ActionKind.LIGHT, True), (ActionKind.HEAVY, False)):
+        state = tactic_state()
+        player, enemy = state.fighters
+        commit_action(state, enemy.id, Choice(ActionKind.GUARD))
+        feint = commit_action(state, player.id, Choice(ActionKind.FEINT))
+        advance_to(state, feint.end_tick)
+        effect = events(state, EventType.FEINT, player.id)[0]
+        followup = commit_action(state, player.id, Choice(kind, Zone.TORSO, target_id=enemy.id))
+        assert (followup.strike_tick < enemy.stagger_until) is expected_fit
+        if expected_fit:
+            advance_to(state, followup.strike_tick)
+            assert events(state, EventType.HIT, player.id)
+
+
+def test_parry_opening_fits_riposte_disarm_but_keeps_it_inside_stagger_window():
+    from pirates.duel_system.defense import choose_defend
+
+    session = DuelSession.new(seed=68, guide_mode="off")
+    player, enemy = session.player, session.enemy
+    player.pos, enemy.pos = (4, 3), (5, 3)
+    player.strength, player.accuracy = 14, 100
+    light = commit_action(session.state, enemy.id,
+                          Choice(ActionKind.LIGHT, Zone.TORSO, target_id=player.id))
+    commit_action(session.state, player.id, choose_defend(session.state, player.id).choice)
+    advance_to(session.state, light.strike_tick)
+    parry = events(session.state, EventType.PARRY, player.id)[0]
+    while player.action is not None:
+        advance_one_tick(session.state)
+    assert player.riposte and session.state.tick == parry.tick + 1
+    disarm_option = next(option for option in session.render_model().actions
+                         if option.label == "Disarm")
+    assert "Observed parry opening" in disarm_option.details
+    assert "contact fits" in disarm_option.details
+    disarm = commit_action(session.state, player.id,
+                           Choice(ActionKind.DISARM, Zone.HAND, target_id=enemy.id))
+    assert disarm.strike_tick < enemy.stagger_until
+    advance_to(session.state, disarm.strike_tick)
+    result = events(session.state, EventType.DISARM, player.id)[0]
+    assert result.deltas["outcome"] == "DISARMED"
+    assert enemy.disarmed
 
 
 def test_feint_at_range_costs_action_but_does_not_change_guard_or_riposte():
@@ -91,7 +136,21 @@ def test_shove_wins_strength_balance_contest_pushes_one_tile_and_costs_stability
     assert events(state, EventType.MOVE, enemy.id)[0].deltas["forced"]
 
 
-def test_shove_blocked_by_edge_or_guard_has_no_push_or_stability_loss():
+def test_equal_novice_shove_can_move_a_genuinely_unsteady_target():
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength = enemy.strength = 10
+    enemy.stability = 50
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    advance_to(state, shove.end_tick)
+    event = events(state, EventType.SHOVE, player.id)[0]
+    assert event.deltas["outcome"] == "SUCCESS"
+    assert event.deltas["actual_steps"] == 1
+    assert enemy.pos == (2, 0)
+    assert enemy.stability < 50
+
+
+def test_shove_blocked_by_edge_still_transfers_impact():
     state = tactic_state(walkable={(0, 0), (1, 0)})
     player, enemy = state.fighters
     player.strength = 40
@@ -99,7 +158,124 @@ def test_shove_blocked_by_edge_or_guard_has_no_push_or_stability_loss():
     commit_action(state, player.id, Choice(ActionKind.SHOVE))
     advance_to(state, player.action.end_tick)
     assert events(state, EventType.SHOVE, player.id)[0].deltas["outcome"] == "BLOCKED"
-    assert enemy.pos == (1, 0) and enemy.stability == 100
+    assert enemy.pos == (1, 0) and enemy.stability < 100
+    assert events(state, EventType.STABILITY, enemy.id)[0].deltas["source"] == "SHOVE_IMPACT"
+
+
+@pytest.mark.parametrize(
+    "attacker_strength,defender_strength,expected_outcome,expected_steps",
+    [(10, 10, "RESISTED", 0), (20, 10, "OFF_BALANCE", 0),
+     (40, 1, "SUCCESS", 1), (70, 10, "SUCCESS", 2)],
+)
+def test_shove_pressure_grades_resistance_and_bounded_displacement(
+        attacker_strength, defender_strength, expected_outcome, expected_steps):
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength, enemy.strength = attacker_strength, defender_strength
+    commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    advance_to(state, player.action.end_tick)
+    event = events(state, EventType.SHOVE, player.id)[0]
+    assert event.deltas["outcome"] == expected_outcome
+    assert event.deltas["actual_steps"] == expected_steps
+    assert event.deltas["requested_steps"] == expected_steps
+    assert enemy.pos == (1 + expected_steps, 0)
+    assert enemy.stability < 100
+    assert len(events(state, EventType.MOVE, enemy.id)) == expected_steps
+
+
+def test_exceptional_shove_stops_before_body_blocker_without_chain_push():
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength, enemy.strength = 70, 10
+    blocker = bare_fighter("blocker", pos=(3, 0))
+    blocker.team_id = player.team_id
+    state.fighters.append(blocker)
+    commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    advance_to(state, player.action.end_tick)
+    event = events(state, EventType.SHOVE, player.id)[0]
+    assert event.deltas["outcome"] == "PARTIAL_BLOCKED"
+    assert event.deltas["actual_steps"] == 1
+    assert enemy.pos == (2, 0) and blocker.pos == (3, 0)
+    assert events(state, EventType.STABILITY, enemy.id)
+
+
+def test_reengaged_pressure_can_cause_a_fall_without_a_forced_chain_attack():
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength, enemy.strength = 40, 1
+    enemy.stability = 25
+    first = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    advance_to(state, first.end_tick)
+    assert not enemy.grounded and enemy.stability > 0
+    gap = max(abs(player.pos[0]-enemy.pos[0]), abs(player.pos[1]-enemy.pos[1]))
+    close = commit_action(state, player.id, Choice(ActionKind.DASH if gap > 1 else ActionKind.WALK,
+                                                   direction=(1, 0), tiles=gap-1 if gap > 1 else 1))
+    advance_to(state, close.end_tick)
+    second = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    advance_to(state, second.end_tick)
+    assert enemy.grounded and enemy.stability == 0
+    assert len(events(state, EventType.SHOVE, player.id)) == 2
+    assert events(state, EventType.FALL, enemy.id)[0].deltas["source"] == "SHOVE_IMPACT"
+
+
+def test_forced_displacement_interrupts_stale_run_path():
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength, enemy.strength = 70, 10
+    enemy.speed = 4  # keep the runner adjacent until the committed shove resolves
+    commit_action(state, enemy.id, Choice(ActionKind.RUN, direction=(0, 1), tiles=3))
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    advance_to(state, shove.end_tick)
+    assert enemy.pos == (3, 3)
+    assert enemy.action is None
+    interruption = events(state, EventType.INTERRUPT, enemy.id)[0]
+    assert interruption.deltas["kind"] == "RUN"
+    assert all(move.deltas["to"] != (1, 2)
+               for move in events(state, EventType.MOVE, enemy.id)
+               if move.tick > next(e.tick for e in events(state, EventType.SHOVE, player.id)))
+
+
+def test_simultaneous_shoves_contending_for_same_tile_block_both_routes():
+    left_attacker = bare_fighter("left_attacker", pos=(0, 1), team_id="attackers")
+    left_target = bare_fighter("left_target", pos=(1, 1), team_id="targets")
+    right_target = bare_fighter("right_target", pos=(3, 1), team_id="targets")
+    right_attacker = bare_fighter("right_attacker", pos=(4, 1), team_id="attackers")
+    state = CombatState([left_attacker, left_target, right_target, right_attacker])
+    left_attacker.strength = right_attacker.strength = 70
+    left_target.strength = right_target.strength = 10
+    left_action = commit_action(state, left_attacker.id,
+                                Choice(ActionKind.SHOVE, target_id=left_target.id))
+    right_action = commit_action(state, right_attacker.id,
+                                 Choice(ActionKind.SHOVE, target_id=right_target.id))
+    advance_to(state, max(left_action.end_tick, right_action.end_tick))
+    shove_events = events(state, EventType.SHOVE)
+    assert len(shove_events) == 2
+    assert all(event.deltas["outcome"] == "BLOCKED"
+               and event.deltas["blocker"] == "DESTINATION_CONFLICT"
+               for event in shove_events)
+    assert left_target.pos == (1, 1) and right_target.pos == (3, 1)
+    assert len({fighter.pos for fighter in state.fighters}) == len(state.fighters)
+
+
+def test_v7_active_session_migrates_legacy_shove_tuning_and_deadline():
+    session = DuelSession.new(seed=74, guide_mode="off")
+    session.select(Choice(ActionKind.RUN, direction=(0, 1), tiles=2))
+    assert session.confirm()
+    data = session.to_data()
+    fighter_data = next(row for row in data["state"]["fighters"] if row["id"] == session.player.id)
+    deadline = fighter_data["action"]["end_tick"]
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 7
+    data["notebook"]["version"] = 7
+    tactics = data["state"]["config"]["tactics"]
+    for key in ("shove_move_margin", "shove_two_step_margin", "shove_min_stability_loss",
+                "shove_max_stability_loss", "shove_margin_for_max_loss",
+                "shove_braced_impact_mult", "shove_blocked_impact_mult"):
+        tactics.pop(key)
+    tactics["shove_stability_loss"] = 23
+    restored = DuelSession.from_data(data)
+    assert restored.state.config["schema_version"] == 18
+    assert restored.state.config["tactics"]["shove_max_stability_loss"] == 23
+    assert restored.player.action.end_tick == deadline
 
 
 def test_committed_shove_misses_if_target_disengages_before_resolution():
@@ -121,7 +297,7 @@ def test_committed_shove_misses_if_target_disengages_before_resolution():
     advance_to(state, player.action.end_tick)
     event = events(state, EventType.SHOVE, player.id)[0]
     assert event.deltas["outcome"] == "RESISTED" and event.deltas["braced"]
-    assert enemy.pos == (1, 0) and enemy.stability == 100
+    assert enemy.pos == (1, 0) and enemy.stability < 100
 
 
 def test_same_tick_strike_resolves_before_forced_shove_movement():
@@ -142,7 +318,7 @@ def test_thrust_uses_standard_strike_pipeline_and_rejects_blunt_weapons():
     player, _ = state.fighters
     player.equipment.weapon.damage_type = "PIERCING"
     commit_action(state, player.id, Choice(ActionKind.THRUST, Zone.TORSO))
-    assert player.action.strike_tick == 7
+    assert player.action.strike_tick == 4
     advance_to(state, player.action.strike_tick)
     hit = events(state, EventType.HIT, player.id)[0]
     assert hit.deltas["damage_type"] == "PIERCING"
@@ -266,8 +442,8 @@ def test_v4_config_and_session_migrate_to_v7_without_changing_active_deadlines()
             fighter_data.pop(key, None)
     data["notebook"]["version"] = 4
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 7
-    assert restored.to_data()["version"] == 7
+    assert restored.state.config["schema_version"] == 18
+    assert restored.to_data()["version"] == 18
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_end
 
@@ -288,7 +464,7 @@ def test_tactics_panel_exposes_legal_preview_and_thrust_target_controls():
     assert ui.panel == "preview" and ui.session.selected.kind == ActionKind.THRUST
     model = ui.model()
     assert model.preview.valid
-    assert "slower than Light" in next(option.details for option in model.actions if option.label == "Thrust")
+    assert "reach-2 point attack" in next(option.details for option in model.actions if option.label == "Thrust")
 
 
 def test_adrenaline_is_threshold_gated_once_only_and_suppresses_only_pain_stat_penalty():

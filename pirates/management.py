@@ -1,9 +1,15 @@
 """Read-only reports and explicit captain orders; browsing never advances time."""
 import time
 import tcod.event
+from pirates import sea_encounter
 from pirates.ship import FOOD_RECIPES, LABORS, LABELS, TRAIT_EFFECTS
 from pirates.ship_storage import resource_quantity
 from pirates.voyage import SEA_NODES
+
+
+def marks(count):
+    """Player-facing Mark count with a correct singular."""
+    return f"{count} Mark" + ("" if count == 1 else "s")
 
 
 def panel(renderer, world, title, rows):
@@ -84,6 +90,62 @@ def social_activity_rows(sailor, world):
     return rows
 
 
+def review_offer_rows(sailor, offer):
+    """Exact amendment shown before consent; shared with native previews."""
+    return [offer["summary"],
+            f"Proposed role: {offer['role']}",
+            f"Proposed wage: {marks(offer['wage_per_day'])} per completed day",
+            "Current terms remain in force until you accept.",
+            "An accepted wage applies from this consent day onward; no signing payment is repeated."]
+
+
+def departure_rows(sailor, world):
+    """Read-only consequences of releasing one employed sailor at port."""
+    agreement = world.economy.employment.record(sailor.id)
+    if agreement is None:
+        return []
+    undertaking = agreement.get("undertaking")
+    rows = [f"Current terms: {agreement['role']}, "
+            f"{marks(agreement['wage_per_day'])} per completed day."]
+    rows.append(f"Unpaid wages: {marks(agreement['arrears'])} remain payable at a port."
+                if agreement["arrears"] else "Unpaid wages: none.")
+    if undertaking and undertaking["status"] == "open":
+        rows.append("Open undertaking closes as withdrawn; it is never reassigned or rewarded.")
+    if agreement["review"] and agreement["review"]["status"] == "offered":
+        rows.append("The offered review expires with release.")
+    rows.append("The signing payment is not refunded, and this prospect cannot be rehired.")
+    return rows
+
+
+def employment_rows(sailor, world):
+    """Agreement terms, paid/unpaid totals and promise state; shared with previews."""
+    from pirates.economy import PORTS
+    agreement = world.economy.employment.record(sailor.id)
+    if agreement is None:
+        return ["Legacy/standing arrangement: no recorded wage and no invented back pay."
+                if sailor.id.startswith("hire:") else "No recorded wage agreement."]
+    rows = [f"Role: {agreement['role']}",
+            f"Wage: {marks(agreement['wage_per_day'])} per completed day",
+            f"Signing payment: {marks(agreement['signing_payment'])} (not a wage prepayment)",
+            f"Accepted day {agreement['accepted_day']}; status {agreement['status']}",
+            f"Paid to date: {marks(agreement['paid_total'])}; "
+            f"unpaid: {marks(agreement['arrears'])}"]
+    if agreement["status"] == "closed":
+        rows += [f"Closed day {agreement['closed_day']}: {agreement['close_cause']}"]
+    undertaking = agreement.get("undertaking")
+    if undertaking:
+        where = PORTS[undertaking["destination"]]["name"]
+        if undertaking["status"] == "open":
+            rows += [f"Undertaking: reach {where} by day {undertaking['deadline_day']} alive and aboard."]
+        else:
+            rows += [f"Undertaking {undertaking['status']} on day {undertaking['closed_day']} "
+                     f"(destination {where}, deadline day {undertaking['deadline_day']})."]
+    review = agreement["review"]
+    if review is not None:
+        rows += [f"Review {review['status']} on day {review['day']}."]
+    return rows
+
+
 def profile_rows(sailor, world=None):
     location = world.room_name(sailor.x, sailor.y, getattr(sailor, "z", 0)) if world is not None else "Ship position"
     potential = ("exceptional" if sailor.learning_potential >= 85 else
@@ -151,6 +213,7 @@ def profile_rows(sailor, world=None):
         rows += ["", "ISSUED EQUIPMENT"]
         rows += [f"{slot}: {CATALOG[key]['name']} — {CATALOG[key]['description']}" for slot, key in kit.items()]
         rows += [f"Weapon practice: {world.economy.weapon_xp.get(sailor.id, 0)} (combat not implemented)"]
+        rows += ["", "EMPLOYMENT TERMS", *employment_rows(sailor, world)]
     return rows
 
 
@@ -163,9 +226,22 @@ def crew_menu(renderer, world):
             return
         if index == len(world.ship.crew):
             former = world.ship.crew_history
-            panel(renderer, world, "Former crew ledger", [
-                f"{row['name']} — {row['status']} on day {row['day']}: {row['cause']}"
-                for row in reversed(former)] or ["No one has left the crew."])
+            rows = []
+            for row in reversed(former):
+                agreement = world.economy.employment.record(row["id"])
+                unpaid = agreement["arrears"] if agreement else 0
+                rows.append(f"{row['name']} — {row['status']} on day {row['day']}: {row['cause']}"
+                            + (f" | unpaid wages {marks(unpaid)}" if unpaid else ""))
+            panel(renderer, world, "Former crew ledger", rows or ["No one has left the crew."])
+            unpaid_total = sum(row["arrears"] for row in world.economy.employment.records.values())
+            if unpaid_total and not getattr(world, "at_sea", False) and world.player.z == 0 and world.player.x < 45:
+                confirm = choose(renderer, world, "Outstanding crew wages", [
+                    f"Pay all outstanding crew wages ({marks(unpaid_total)})", "Leave unpaid"])
+                if confirm == 0:
+                    try:
+                        world.economy.employment.pay_arrears(world)
+                    except ValueError as error:
+                        panel(renderer, world, "Cannot settle wages", [str(error)])
             continue
         if index == len(world.ship.crew) + 1:
             panel(renderer, world, "Work compliance", work_rows(world))
@@ -174,20 +250,40 @@ def crew_menu(renderer, world):
         while True:
             has_concern = any(row["crew"] == sailor.id and row["status"] == "open"
                               for row in world.ship.crew_concerns)
+            retention = sailor.grievance >= 60 or sailor.desertion_warning_hour is not None
+            agreement = world.economy.employment.record(sailor.id)
             rows = ["Crew profile and concern" if has_concern else "Needs, wants, thoughts and skills"]
             rows += [f"{LABELS[k]}: {'OFF' if sailor.labors[k] == 0 else sailor.labors[k]}" for k in LABORS]
             rows += ["Release this sailor from the crew (at port only)"]
-            rows += ([f"Honor retirement request (30-day notice ends day {sailor.retirement_notice_day + 30})"]
-                     if sailor.retirement_notice_day is not None else [])
-            if sailor.grievance >= 60 or sailor.desertion_warning_hour is not None:
-                rows += ["Offer a 25-Mark retention bonus / address their concern"]
+            retirement_row = None
+            if sailor.retirement_notice_day is not None:
+                retirement_row = len(rows)
+                rows.append(f"Honor retirement request (30-day notice ends day {sailor.retirement_notice_day + 30})")
+            retention_row = None
+            if retention:
+                retention_row = len(rows)
+                rows.append("Offer a 25-Mark retention bonus / address their concern")
+            wage_row = None
+            ashore = (not getattr(world, "at_sea", False) and world.player.z == 0
+                      and world.player.x < 45)
+            if agreement and agreement["arrears"] > 0 and ashore:
+                wage_row = len(rows)
+                rows.append(f"Settle {sailor.name}'s outstanding wages "
+                            f"({marks(agreement['arrears'])})")
+            review_row = None
+            if ashore and world.economy.employment.review_offer(sailor.id) is not None:
+                review_row = len(rows)
+                rows.append("Discuss the post-undertaking review (role and wage)")
             selected = choose(renderer, world, f"{sailor.name} — labor priorities (1 highest, 5 lowest)", rows,
-                              "Select a labor to set priority; 0 opens the profile; departure and retention options are shown when relevant.")
+                              "Select a labor to set priority; 0 opens the profile; departure, wage and retention options are shown when relevant.")
             if selected is None:
                 break
             if selected == 0:
                 panel(renderer, world, sailor.name, profile_rows(sailor, world))
             elif selected == len(LABORS) + 1:
+                consequences = departure_rows(sailor, world)
+                if consequences:
+                    panel(renderer, world, f"Release {sailor.name} — consequences", consequences)
                 confirm = choose(renderer, world, f"Release {sailor.name} from the crew?", [
                     "Confirm release at the current port", "Keep them aboard"])
                 if confirm == 0:
@@ -197,7 +293,7 @@ def crew_menu(renderer, world):
                         panel(renderer, world, "Cannot release sailor", [str(error)])
                     else:
                         break
-            elif sailor.retirement_notice_day is not None and selected == len(LABORS) + 2:
+            elif retirement_row is not None and selected == retirement_row:
                 confirm = choose(renderer, world, f"Honor {sailor.name}'s retirement request?", [
                     "Confirm retirement ashore", "Keep them aboard"])
                 if confirm == 0:
@@ -207,11 +303,44 @@ def crew_menu(renderer, world):
                         panel(renderer, world, "Cannot honor retirement", [str(error)])
                     else:
                         break
-            elif selected == len(LABORS) + 2 + int(sailor.retirement_notice_day is not None) and (sailor.grievance >= 60 or sailor.desertion_warning_hour is not None):
+            elif retention_row is not None and selected == retention_row:
                 try:
                     world.ship.offer_retention_bonus(world, sailor.id)
                 except ValueError as error:
                     panel(renderer, world, "Cannot offer retention bonus", [str(error)])
+            elif wage_row is not None and selected == wage_row:
+                try:
+                    total = world.economy.employment.pay_arrears(world, sailor.id)
+                except ValueError as error:
+                    panel(renderer, world, "Cannot settle wages", [str(error)])
+                else:
+                    panel(renderer, world, "Wages settled", [
+                        f"Paid {sailor.name} {marks(total)} of outstanding wages."])
+            elif review_row is not None and selected == review_row:
+                offer = world.economy.employment.review_offer(sailor.id)
+                if offer is None:
+                    continue
+                panel(renderer, world, f"{sailor.name} — employment review",
+                      review_offer_rows(sailor, offer))
+                decision = choose(renderer, world, "Accept the amended terms?", [
+                    "Accept the review", "Keep the current terms", "Decide later"])
+                if decision == 0:
+                    try:
+                        world.economy.employment.accept_review(world, sailor.id)
+                    except ValueError as error:
+                        panel(renderer, world, "Cannot accept review", [str(error)])
+                    else:
+                        panel(renderer, world, "Review accepted", [
+                            f"{sailor.name} now serves as {offer['role']} at "
+                            f"{offer['wage_per_day']} Marks per completed day."])
+                elif decision == 1:
+                    try:
+                        world.economy.employment.decline_review(world, sailor.id)
+                    except ValueError as error:
+                        panel(renderer, world, "Cannot close review", [str(error)])
+                    else:
+                        panel(renderer, world, "Terms unchanged", [
+                            f"{sailor.name} keeps the existing terms."])
             else:
                 kind = LABORS[selected - 1]
                 value = choose(renderer, world, f"{sailor.name}: {LABELS[kind]}",
@@ -225,6 +354,39 @@ def crew_roster_rows(world):
     open_concerns = {row["crew"] for row in world.ship.crew_concerns if row["status"] == "open"}
     return [f"{c.glyph} {c.name} | {c.mood_label} {c.morale:.0f} | {c.activity}"
             + (" | CONCERN" if c.id in open_concerns else "") for c in world.ship.crew]
+
+
+def crew_commitment_rows(world, plan):
+    """Read-only voyage disclosure of payroll exposure and open promises."""
+    rows = []
+    agreements = [row for row in world.economy.employment.records.values()
+                  if row["status"] == "active"]
+    if agreements:
+        daily = sum(row["wage_per_day"] for row in agreements)
+        arrears = sum(row["arrears"] for row in agreements)
+        from tales_sim.clock import TICKS_PER_DAY
+        crossings = ((world.clock.total_ticks + plan["duration_seconds"] * 100) // TICKS_PER_DAY
+                     - world.clock.total_ticks // TICKS_PER_DAY)
+        exposure = ("no midnight in the planned estimate" if crossings == 0 else
+                    f"{marks(crossings * daily)} across {crossings} planned "
+                    f"midnight{'s' if crossings != 1 else ''}")
+        rows += ["", f"CREW PAYROLL: {len(agreements)} "
+                     f"agreement{'s' if len(agreements) != 1 else ''}, "
+                     f"{marks(daily)} per day; {marks(arrears)} currently outstanding.",
+                 f"Planned payroll exposure: {exposure}. Delays may add completed days."]
+    undertakings = [(sailor_id, row["undertaking"]) for sailor_id, row in
+                    world.economy.employment.records.items()
+                    if row["status"] == "active" and row["undertaking"]
+                    and row["undertaking"]["status"] == "open"]
+    if undertakings:
+        from pirates.economy import PORTS
+        rows += ["", "CREW UNDERTAKING:"]
+        for sailor_id, undertaking in undertakings:
+            sailor = world.ship.sailor(sailor_id)
+            where = PORTS[undertaking["destination"]]["name"]
+            rows.append(f"{sailor.name if sailor else sailor_id}: reach {where} by day "
+                        f"{undertaking['deadline_day']} with them alive and aboard.")
+    return rows
 
 
 def chores_menu(renderer, world):
@@ -637,6 +799,64 @@ def naval_combat_menu(renderer, world):
             return
 
 
+def crossing_request_rows(world, sighting, request):
+    """Explain a durable crossing request without claiming it happened."""
+    names = {sailor.id: sailor.name for sailor in world.ship.crew}
+    mode = request.get("mode", request.get("requested_action", {}).get("mode"))
+    participants = (request.get("participants") if "participants" in request else
+                    request.get("requested_action", {}).get("personnel_manifest", []))
+    escorts = [sid for sid in participants if sid != world.player.id]
+    if mode == "alone":
+        party = "the captain alone"
+    elif mode == "everyone":
+        crew_names = ", ".join(names.get(sid, sid) for sid in escorts) or "no living crew"
+        party = f"the captain and all living crew: {crew_names}"
+    else:
+        escort_names = ", ".join(names.get(sid, sid) for sid in escorts)
+        party = f"the captain with {len(escorts)} escort(s): {escort_names}"
+    if request.get("cause") == "forced_boarding":
+        outcome = ("No clear permission was given. This durable boarding request is handed to the "
+                   "combat system; no person moved and no clash is resolved here.")
+        kind = "boarding combat handoff"
+        request_id = request["request_id"]
+    else:
+        outcome = ("The other captain granted permission. This is a peaceful transfer request; "
+                   "it will be honoured when the other vessel's deck can receive you.")
+        kind = "peaceful transfer"
+        request_id = request["request_id"]
+    return [
+        f"Requested party: {party}.",
+        f"Request kind: {kind} | status {request['status']} | id {request_id}.",
+        outcome,
+        ("Use Withdraw to cancel this peaceful transfer request." if request.get("cause") is None
+         else "The handoff cannot be withdrawn here; the combat system owns the next step."),
+    ]
+
+
+def combat_handoff_rows(world, sighting, request):
+    """Render the durable request without implying that its combat was consumed."""
+    names = {world.player.id: world.player.name}
+    names.update({sailor.id: sailor.name for sailor in world.ship.crew})
+    action = request["requested_action"]
+    if action["kind"] == "fire_cannon":
+        intent = f"{action['cannon'].replace('_', ' ')} fire intent"
+    else:
+        intent = f"cross with {action['mode']} manifest"
+    participants = ", ".join(names.get(sid, sid) for sid in request["participants"])
+    return [
+        f"Request: {request['request_id']}",
+        f"Cause: {request['cause']}",
+        f"Target: {sighting.get('name', request['target_id'])} ({request['target_id']}) | "
+        f"range: {request['range']}",
+        f"Requested action: {intent}",
+        f"Participants: {participants}",
+        f"Position: chart {request['position']['player_chart']} | "
+        f"target node {request['position']['target_node']}",
+        "The separate combat system owns all firing, boarding and outcomes.",
+        "No shot was consumed; nobody moved; no combat result was resolved.",
+    ]
+
+
 def voyage_menu(renderer, world):
     from pirates.voyage import (SEA_NODES, SEA_ROLES, CAPTAIN_ACTIONS, CREW_ORDERS,
                                 VoyageSystem, ticks_to_next_day_boundary)
@@ -769,7 +989,8 @@ def voyage_menu(renderer, world):
                       f"Navigator {plan['navigator']}; estimated {plan['duration_hours']} hours; wind: {plan['wind']['name']}.",
                       f"Quartermaster {plan['quartermaster']}: {plan['water_liters']} L clean water ({plan['water_days']} days); "
                       f"{plan['food_kg']} kg food ({plan['food_days']} days).",
-                      f"Purser {plan['purser']}: supplies are finite; ship wages/economy are not simulated.",
+                      f"Purser {plan['purser']}: supplies are finite; agreed wages accrue at each day boundary "
+                      f"and settle automatically from captain funds.",
                       *world.voyages.role_report(world), "", "Confirm to sail. Daily ship work and needs continue."]
             if plan["storm_forecast"]:
                 forecast = plan["storm_forecast"]
@@ -793,6 +1014,7 @@ def voyage_menu(renderer, world):
                         f"{contract['quantity']} {CATALOG[contract['item']]['name']} → "
                         f"{contract['destination']} by day {contract['deadline_day']}"
                     )
+            review += crew_commitment_rows(world, plan)
             panel(renderer, world, "Review voyage order", review)
             confirm = choose(renderer, world, "Commit this voyage order?", ["Confirm voyage order", "Cancel"],
                               f"Estimated {plan['duration_hours']} hours; sighting reports may be stale.")
@@ -871,57 +1093,228 @@ def voyage_menu(renderer, world):
                 world.message(f"Rudder ordered {rudders[selected]:+d}° from the chart leg.")
         elif voyage and voyage["status"] == "encounter" and choice == 6:
             sighting = voyage["encounter"]
+            contact = sea_encounter.contact_of(sighting)
             battle = sighting.get("combat", {})
-            cannon_label = ("Resume the ship-to-ship cannon exchange"
-                            if battle and battle.get("status") == "active"
-                            else "Begin a ship-to-ship cannon exchange")
-            options = [cannon_label]
-            actions = ["combat"]
-            if sighting.get("threat") == "pirates":
-                options.append("Repel a pirate boarding party")
-                actions.append("boarding")
-            options += ["Hold course and resume this route", "Turn back to the nearest port"]
-            actions += ["continue", "turn_back"]
-            if sighting.get("threat") != "pirates" and isinstance(sighting.get("id"), str):
-                contact = world.npcs.player_contacts.get(sighting["id"])
-                if not contact or not contact["hailed"]:
-                    options.append("Hail and exchange signals (1 minute)")
-                    actions.append("hail")
+            pending_crossing = contact.get("crossing")
+            pending_handoff = contact.get("combat_pending")
+
+            if pending_handoff:
+                panel(renderer, world, "Combat handoff pending",
+                      combat_handoff_rows(world, sighting, pending_handoff))
+                continue
+            if pending_crossing:
+                selected = choose(
+                    renderer, world, f"Nearby ship: {sighting.get('name', 'Unknown vessel')}",
+                    ["Review peaceful crossing request", "Withdraw the peaceful crossing request"],
+                    "A welcomed transfer awaits an NPC deck/transfer consumer; no person has moved.")
+                if selected is None:
+                    continue
+                if selected == 0:
+                    panel(renderer, world, "Peaceful crossing request",
+                          crossing_request_rows(world, sighting, pending_crossing))
+                    continue
+                try:
+                    world.voyages.withdraw_crossing_request(world)
+                except ValueError as error:
+                    panel(renderer, world, "Crossing request", [str(error)])
+                continue
+
+            cannon_ready = any(loaded and world.ship.layout.available(key)
+                               for key, loaded in world.ship.ammo.items())
+            cannon_label = ("Resume saved legacy artillery exchange"
+                            if battle and battle.get("status") == "active" else
+                            "Declare cannon-fire intent (combat handoff only)" if cannon_ready else
+                            "Cannon fire unavailable (no loaded installed cannon)")
+            options = ["Observe the vessel and review contact state (read-only)"]
+            actions = ["observe"]
+            if battle and battle.get("status") == "active":
+                options.append(cannon_label)
+                actions.append("combat")
+            else:
+                if contact["range"] == "distant":
+                    options += ["Signal the vessel from a distance (1 minute)",
+                                "Approach to close range (5 minutes)"]
+                    actions += ["signal", "approach"]
+                else:
+                    options += ["Parley at close range (1 minute)",
+                                "Request to cross alone",
+                                "Request to cross with named escorts",
+                                "Request to cross with everyone"]
+                    actions += ["parley", "cross_alone", "cross_escorts", "cross_everyone"]
+                options += ["Attempt to evade and break contact (5 minutes)",
+                            "Hold course and resume this route",
+                            "Turn back to the nearest port",
+                            cannon_label]
+                actions += ["evade", "continue", "turn_back", "combat"]
+            if (not (battle and battle.get("status") == "active")
+                    and sighting.get("threat") != "pirates"
+                    and isinstance(sighting.get("id"), str)):
+                record = world.npcs.player_contacts.get(sighting["id"])
                 live_ship = next((ship for ship in world.npcs.ships
                                   if ship["id"] == sighting["id"]), None)
-                if (contact and contact["hailed"] and contact["aid_count"] == 0
+                signaled = any(row["outcome"] == "answered" for row in contact["signals"])
+                if ((signaled or record and record["hailed"])
+                        and (not record or record["aid_count"] == 0)
                         and live_ship and live_ship["condition"] <= 60):
                     options.append("Offer one iron repair unit (+20 condition; requires hold access)")
                     actions.append("aid")
-            result = choose(renderer, world, f"Nearby ship: {sighting['name']}", options,
-                            "Public lookout information only. Aid costs one uncommitted iron; pirates remain hostile.")
+            result = choose(
+                renderer, world, f"Nearby ship: {sighting.get('name', 'Unknown vessel')}", options,
+                f"Range {contact['range']} | {sea_encounter.threat_of(sighting)} | "
+                "Public lookout information only; no hidden state is shown.")
             if result is None:
                 continue
             action = actions[result]
-            if action == "combat":
-                try:
-                    world.voyages.begin_naval_combat(world)
-                except ValueError as error:
-                    panel(renderer, world, "Cannot engage", [str(error)])
+            if action == "observe":
+                panel(renderer, world, "Lookout and contact report",
+                      sea_encounter.sighting_rows(world, sighting)
+                      + ["", *sea_encounter.contact_rows(world, sighting)])
+            elif action == "signal":
+                labels = {"identify": "Challenge the vessel to identify itself",
+                          "intentions": "Ask the other captain's stated intentions",
+                          "warn_off": "Warn the vessel to keep its distance"}
+                available = [intent for intent in sea_encounter.SIGNAL_INTENTS
+                             if not any(row["intent"] == intent for row in contact["signals"])]
+                if not available:
+                    panel(renderer, world, "Signals exhausted",
+                          ["Every signal subject has already been exchanged."])
                     continue
-                naval_combat_menu(renderer, world)
-                return
-            if action == "boarding":
-                from pirates.ship_boarding import breach_hull_for_boarders
-                count = min(5, max(1, int(sighting.get("crew", 3)) // 3))
-                assault = breach_hull_for_boarders(world)
-                if not assault or assault["path"] is None:
-                    panel(renderer, world, "Boarding route blocked", [
-                        "The raiders cannot find a traversable route from the hull to the captain.",
-                        "The breach and any forced doors remain real ship damage."])
+                selected = choose(renderer, world, "Ranged signals",
+                                  [labels[intent] for intent in available],
+                                  "Each exchange costs one minute; no private intent or cargo is disclosed.")
+                if selected is None:
+                    continue
+                try:
+                    exchange = world.voyages.signal_sighting(world, available[selected])
+                except ValueError as error:
+                    panel(renderer, world, "Signal unavailable", [str(error)])
                 else:
-                    entry = assault["entry"]
-                    world.combat.start_boarding(
-                        world, (entry[0] + 69, entry[1] + 12), count=count,
-                        seed=(world.clock.total_ticks // 100 + sum(map(ord, sighting["id"]))) % 2_147_483_647)
-                    if not world.combat.active:
-                        world.message("The boarders found a breach, but no valid fighting deck could be formed.")
+                    panel(renderer, world, "Signal exchange",
+                          [exchange["reply"], "One minute of ship time passed."])
+            elif action == "approach":
+                try:
+                    approach = world.voyages.approach_sighting(world)
+                except ValueError as error:
+                    panel(renderer, world, "Approach unavailable", [str(error)])
+                else:
+                    panel(renderer, world, "Close approach",
+                          [approach["text"], "Five minutes of ship time passed."])
+            elif action == "parley":
+                labels = {"identity": "Challenge and exchange identity",
+                          "intentions": "Ask the captain's stated intentions",
+                          "warn_off": "Warn the vessel off",
+                          "stand_down": "Propose a mutual stand-down for this encounter",
+                          "transfer_permission": "Ask permission to transfer personnel"}
+                state = contact.get("parley") or {"topics": []}
+                available = [topic for topic in sea_encounter.PARLEY_TOPICS
+                             if topic not in state["topics"]
+                             and (topic != "transfer_permission"
+                                  or "identity" in state["topics"])]
+                if not available:
+                    panel(renderer, world, "Parley exhausted",
+                          ["No further close-range subjects are available."])
+                    continue
+                selected = choose(renderer, world, "Close-range parley",
+                                  [labels[topic] for topic in available],
+                                  "Encounter-local only. No alliance, shared objective or lasting cooperation is created.")
+                if selected is None:
+                    continue
+                try:
+                    exchange = world.voyages.parley_sighting(world, available[selected])
+                except ValueError as error:
+                    panel(renderer, world, "Parley unavailable", [str(error)])
+                else:
+                    panel(renderer, world, "Parley",
+                          [exchange["text"], "One minute of ship time passed."])
+            elif action in ("cross_alone", "cross_everyone"):
+                mode = "alone" if action == "cross_alone" else "everyone"
+                try:
+                    request = world.voyages.request_crossing(world, mode)
+                except ValueError as error:
+                    panel(renderer, world, "Crossing unavailable", [str(error)])
+                else:
+                    panel(renderer, world, "Crossing request recorded",
+                          crossing_request_rows(world, sighting, request))
+            elif action == "cross_escorts":
+                living = [sailor for sailor in world.ship.crew if sailor.health > 0]
+                if not living:
+                    panel(renderer, world, "No escorts available",
+                          ["No living crew member can accompany the captain."])
+                    continue
+                escorts = []
+                while True:
+                    rows = [f"{'[x]' if sailor.id in escorts else '[ ]'} {sailor.name} ({sailor.id})"
+                            for sailor in living]
+                    rows.append(f"Confirm {len(escorts)} escort(s) and request the crossing")
+                    selected = choose(renderer, world, "Escorts for the captain", rows,
+                                      "Enter toggles one sailor; Esc cancels the crossing.")
+                    if selected is None:
+                        break
+                    if selected == len(living):
+                        if not escorts:
+                            panel(renderer, world, "Name an escort",
+                                  ["Select at least one crew member, or use the solo crossing."])
+                            continue
+                        try:
+                            request = world.voyages.request_crossing(world, "escorts", escorts)
+                        except ValueError as error:
+                            panel(renderer, world, "Crossing unavailable", [str(error)])
+                        else:
+                            panel(renderer, world, "Crossing request recorded",
+                                  crossing_request_rows(world, sighting, request))
+                        break
+                    sailor = living[selected]
+                    if sailor.id in escorts:
+                        escorts = [sid for sid in escorts if sid != sailor.id]
+                    else:
+                        escorts = escorts + [sailor.id]
+            elif action == "evade":
+                try:
+                    escape = world.voyages.evade_sighting(world)
+                except ValueError as error:
+                    panel(renderer, world, "Evasion unavailable", [str(error)])
+                else:
+                    panel(renderer, world, "Break contact",
+                          [escape["text"],
+                           f"Estimated chance was {escape['chance']:.0%}. "
+                           "Five minutes of ship time passed."])
+            elif action == "combat":
+                if battle and battle.get("status") == "active":
+                    # Compatibility for an encounter that was already in the
+                    # legacy artillery exchange when an older save was written.
+                    naval_combat_menu(renderer, world)
                     return
+                guns = [key for key, loaded in world.ship.ammo.items()
+                        if loaded and world.ship.layout.available(key)]
+                if not guns:
+                    panel(renderer, world, "Cannon fire unavailable", [
+                        "No installed ship cannon has a loaded charge.",
+                        "No combat request was created; stores and time are unchanged."])
+                    continue
+                selected = choose(renderer, world, "Choose a loaded cannon to hand off",
+                                  [f"Declare {gun.replace('_', ' ')} fire intent" for gun in guns],
+                                  "This creates a request only; it does not discharge shot.")
+                if selected is None:
+                    continue
+                cannon = guns[selected]
+                confirmed = choose(renderer, world, "Confirm hostile cannon intent", [
+                    f"Confirm {cannon.replace('_', ' ')} fire — create combat handoff",
+                    "Cancel without cost"],
+                    "The combat system will own firing, ammunition, damage and outcome resolution.")
+                if confirmed != 0:
+                    continue
+                ammo_before = world.ship.ammo[cannon]
+                try:
+                    request = world.voyages.request_naval_combat(world, cannon)
+                except ValueError as error:
+                    panel(renderer, world, "Cannot request cannon combat", [str(error)])
+                else:
+                    assert world.ship.ammo[cannon] == ammo_before
+                    panel(renderer, world, "Combat handoff pending", [
+                        f"Request {request['request_id']} for {request['target_id']}.",
+                        f"Participants: {', '.join(request['participants'])}",
+                        f"Range snapshot: {request['range']} at chart {request['position']['player_chart']}.",
+                        "No shot was consumed and no damage or retaliation was resolved."])
             elif action == "hail":
                 try:
                     world.npcs.hail_ship(world, sighting["id"])
@@ -933,12 +1326,20 @@ def voyage_menu(renderer, world):
                 except ValueError as error:
                     panel(renderer, world, "Assistance unavailable", [str(error)])
             elif action == "continue":
-                world.voyages.continue_after_sighting()
-                world.message(f"The lookout keeps {sighting['name']} in view; you hold course.")
+                try:
+                    world.voyages.continue_after_sighting()
+                except ValueError as error:
+                    panel(renderer, world, "Cannot resume", [str(error)])
+                else:
+                    world.message(f"The lookout keeps {sighting['name']} in view; you hold course.")
             elif action == "turn_back":
-                world.voyages.turn_back(world)
-                world.message("The navigator lays in a return route to the nearest port.")
-                return
+                try:
+                    world.voyages.turn_back(world)
+                except ValueError as error:
+                    panel(renderer, world, "Cannot turn back", [str(error)])
+                else:
+                    world.message("The navigator lays in a return route to the nearest port.")
+                    return
         elif voyage and voyage["status"] == "storm" and choice == 6:
             storm = voyage["storm_event"]
             prior_nodes = set(voyage["route"][:voyage["leg"]])

@@ -210,6 +210,47 @@ def cargo_menu(renderer, world):
             panel(renderer, world, "Trade / equipment history", economy.history or ["No trades yet."])
 
 
+def prospect_rows(world):
+    """Port prospect list, shared by the menu and native previews."""
+    return [f"{candidate['name']} | {candidate['role']} | age {candidate['age']} | "
+            f"advance {candidate['asking_price']} Marks, wage {candidate['wage_per_day']}/day"
+            for candidate in world.economy.recruitment.at_port(world.economy.port)]
+
+
+def candidate_terms_rows(candidate, day):
+    """Read-only prospect terms; the confirmation panel and previews share it."""
+    rows = [f"{candidate['name']} — {candidate['background']}, age {candidate['age']}",
+            candidate["summary"], "", "Known ship skills:"]
+    rows += [f"  {kind.title()}: {candidate['skills'][kind]}" for kind in candidate["skills"]]
+    rows += ["", "Mental / command profile (0–100):"]
+    rows += [f"  {key.replace('_', ' ').title()}: {value}"
+             for key, value in candidate["mental"].items()]
+    rows += ["", "PROPOSED TERMS",
+             f"Role: {candidate['role']} (descriptive; it does not override labor priorities)",
+             f"Signing payment: {candidate['asking_price']} Marks, paid once",
+             f"Wage: {candidate['wage_per_day']} Mark"
+             f"{'s' if candidate['wage_per_day'] != 1 else ''} per completed day",
+             "First wage falls due at the next day boundary; wages are paid automatically "
+             "from spendable captain funds, and any shortfall is recorded as unpaid wages.",
+             "Exit: release at a port after returning active work and carried supplies. "
+             "The signing payment is not refunded."]
+    undertaking = candidate.get("undertaking")
+    if undertaking:
+        deadline = day + undertaking["deadline_days"]
+        destination = PORTS[undertaking["destination"]]["name"]
+        rows += ["", "PERSONAL UNDERTAKING",
+                 f"Reach {destination} by day {deadline} with this person alive and aboard.",
+                 f"Reason: {undertaking['reason']}",
+                 "A coastal booking or a chart voyage both satisfy the destination; "
+                 "arrival is checked after travel, not by the report screen.",
+                 "A missed deadline closes it as late; leaving or dying first closes it as "
+                 "withdrawn or failed."]
+    rows += ["", "The recruit brings a hammock; it will be installed on a clear ship-deck tile.",
+             "Recruiting does not require a minimum sailing crew.",
+             "Their potential is a promise, not a guarantee of future skill or loyalty."]
+    return rows
+
+
 def port_menu(renderer, world):
     while True:
         index = choose(renderer, world, f"{PORTS[world.economy.port]['name']} — islands and coastal passage", [
@@ -238,25 +279,15 @@ def port_menu(renderer, world):
                     "Everyone currently seeking a berth at this port has already left or joined another crew.",
                     "The candidate roster is finite; no one appears merely because time passed."])
                 continue
-            selected = choose(renderer, world, "Crew prospects — an introduction is not a guarantee", [
-                f"{candidate['name']} | age {candidate['age']} | {candidate['background']} | advance {candidate['asking_price']} Marks"
-                for candidate in candidates])
+            selected = choose(renderer, world, "Crew prospects — an introduction is not a guarantee",
+                              prospect_rows(world))
             if selected is None:
                 continue
             candidate = candidates[selected]
-            rows = [f"{candidate['name']} — {candidate['background']}, age {candidate['age']}",
-                    candidate["summary"], "", "Known ship skills:"]
-            rows += [f"  {kind.title()}: {candidate['skills'][kind]}" for kind in candidate["skills"]]
-            rows += ["", "Mental / command profile (0–100):"]
-            rows += [f"  {key.replace('_', ' ').title()}: {value}"
-                     for key, value in candidate["mental"].items()]
-            rows += ["", f"Asking advance: {candidate['asking_price']} Marks",
-                     "The recruit brings a hammock; it will be installed on a clear ship-deck tile.",
-                     "Recruiting does not require a minimum sailing crew.",
-                     "Their potential is a promise, not a guarantee of future skill or loyalty."]
+            rows = candidate_terms_rows(candidate, world.clock.day)
             panel(renderer, world, "Crew prospect", rows)
             confirm = choose(renderer, world, f"Recruit {candidate['name']}?", [
-                f"Offer the berth and pay {candidate['asking_price']} Marks",
+                f"Accept these terms and pay {candidate['asking_price']} Marks",
                 "Leave the offer open", "Decline this prospect"])
             if confirm == 0:
                 attempt(renderer, world, lambda: world.economy.recruit_candidate(world, candidate["id"]))

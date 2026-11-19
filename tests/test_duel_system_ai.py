@@ -5,7 +5,8 @@ import pytest
 
 from pirates.duel_system.ai import choose_action, observe, score_actions
 from pirates.duel_system.engine import Choice, commit_action
-from pirates.duel_system.model import ActionKind, ActiveAction, Phase, Personality, Zone
+from pirates.duel_system.model import (ActionKind, ActiveAction, CombatState, EventType,
+                                       Phase, Personality, Severity, Wound, Zone)
 from pirates.duel_system.stats import effective_stats
 from test_duel_system_scheduler import arena
 
@@ -90,12 +91,47 @@ def test_two_unseen_action_kinds_do_not_change_ai_observation_or_scores():
     assert score_actions(first, "ronin") == score_actions(second, "ronin")
 
 
-def test_zone_preference_is_exposure_accuracy_and_phase_limited():
+def test_ai_scores_bleeding_treatment_and_waiting_to_recover_stability():
+    state = scenario(gap=3)
+    ronin = state.fighter("ronin")
+    ronin.wounds.append(Wound(Zone.TORSO, Severity.DEEP, 6))
+    ronin.bandages = 1
+    bandage = {item.category: item for item in score_actions(state, ronin.id)}["BANDAGE"]
+    assert any(name == "I5_BANDAGE_BLEED" and value > 0 for name, value in bandage.reasons)
+    ronin.blood = 25
+    assert choose_action(state, ronin.id).category != "BANDAGE"  # opponent is free to act before treatment completes
+    state.fighter("player").stagger_until = state.tick + 100
+    assert choose_action(state, ronin.id).category == "BANDAGE"
+    ronin.wounds.clear()
+    ronin.stability = 40
+    waiting = {item.category: item for item in score_actions(state, ronin.id)}["WAIT"]
+    assert any(name == "I5_WAIT_STABILITY" and value > 0 for name, value in waiting.reasons)
+    state.fighter("player").stagger_until = 0
+    ronin.wounds = [Wound(Zone.TORSO, Severity.DEEP, 20)]
+    ronin.blood = 1
+    assert choose_action(state, ronin.id).category != "BANDAGE"
+
+
+def test_ai_prioritizes_shove_of_witnessed_unsteady_opponent_into_open_tile():
+    from test_duel_system_foundation import bare_fighter
+    player = bare_fighter("player", pos=(1, 1), team_id="players")
+    ronin = bare_fighter("ronin", pos=(2, 1), team_id="raiders")
+    ally = bare_fighter("ally", pos=(5, 1), team_id="raiders")
+    ronin.personality = Personality(**deepcopy(scenario().config["ronin"]))
+    state = CombatState([player, ronin, ally], walkable={(x, y) for x in range(6) for y in range(4)})
+    state.emit(EventType.STABILITY, player.id,
+               deltas={"source": "HIT_IMPACT", "loss": 12, "band": "OFF_BALANCE"})
+    shove = {item.category: item for item in score_actions(state, ronin.id)}["SHOVE"]
+    assert any(name == "I5_SHOVE_UNSTEADY" and value > 0 for name, value in shove.reasons)
+    assert any(name == "I5_SHOVE_SPACE" and value > 0 for name, value in shove.reasons)
+
+
+def test_zone_preference_uses_fixed_accuracy_exposure_and_phase():
     recovering = scenario(phase="RECOVERY", remaining=12)
     recovering.fighters[1].accuracy = 25
     assert choose_action(recovering, "ronin").choice.aim == Zone.HAND
     guarding = scenario(phase="GUARD_HOLD", remaining=30, anger=50)
-    guarding.fighters[1].accuracy = 20  # rage lowers 16 ACC below heavy-leg difficulty 14
+    guarding.fighters[1].accuracy = 20  # covered hand's extra requirement still blocks that target
     assert choose_action(guarding, "ronin").choice.aim == Zone.LEG
     idle = scenario()
     assert choose_action(idle, "ronin").choice.aim == Zone.TORSO

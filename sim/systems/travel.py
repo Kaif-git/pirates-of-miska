@@ -6,6 +6,8 @@ from decimal import Decimal, InvalidOperation
 import math
 from typing import Any
 
+from sim.core.ownership import ship_is_commandable
+
 from sim.core.names import living_name_in_use
 
 
@@ -62,6 +64,8 @@ class TravelSystem:
             "navigation": navigation,
             "condition": condition,
             "location": {"kind": "island", "id": island_id},
+            "legal_owner": None,
+            "controller_crew_id": None,
         }
         world.entities[ship_id] = vessel
         created = world.event_log.append(
@@ -78,6 +82,8 @@ class TravelSystem:
             magnitude=0.1,
         )
         vessel["created_event_id"] = created.id
+        vessel["ownership_event_id"] = created.id
+        vessel["captured_by_crew_id"] = None
         return ship_id, created.id
 
     def start_voyage(self, world, ship_id: str, destination: str, *,
@@ -87,10 +93,8 @@ class TravelSystem:
         if ship_id in self.transits:
             raise ValueError(f"Vessel is already in transit: {ship_id}")
         vessel = world.entities[ship_id]
-        if (vessel.get("captured_by_crew_id") is not None
-                and not any(merchant.get("ship_id") == ship_id
-                            for merchant in world.economy.merchants.values())):
-            raise ValueError("Captured vessel cannot start an independent voyage")
+        if not ship_is_commandable(world, ship_id):
+            raise ValueError("Vessel lacks a valid onboard controller crew")
         location = vessel.get("location")
         if not isinstance(location, dict) or location.get("kind") != "island":
             raise ValueError("Vessel must be berthed at an island before departure")
@@ -224,6 +228,7 @@ class TravelSystem:
             "kind": "island", "id": transit["destination"],
         }
         del self.transits[ship_id]
+        world.crew_ships.on_commanded_ship_arrival(world, ship_id, event.id)
 
     def snapshot(self) -> dict[str, Any]:
         return {"transits": {ship_id: self.transits[ship_id]

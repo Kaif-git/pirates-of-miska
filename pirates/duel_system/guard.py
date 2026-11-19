@@ -1,6 +1,6 @@
 """Guard-line defense and deferred stagger: same-tick strikes still trade."""
-from .model import ActionKind, EventType
-from .stats import clamp, effective_stats, pay_stamina
+from .model import ActionKind, EventType, Phase
+from .stats import clamp, effective_stats, pay_stamina, stamina_cost
 
 
 def stagger(state, fighter, ticks, cause):
@@ -28,6 +28,12 @@ def try_guard(state, attacker, defender, zone, snap):
              "in_parry_window": in_window, "guard_ready_tick": snap.guard_ready_tick,
              "parry_window": window, "break_ratio": rule["break_str_ratio"]}
     if in_window and def_str >= ratio * att_str:
+        parry_cost = 0.0
+        if defender.action and defender.action.contextual_defense:
+            before = defender.stamina
+            pay_stamina(state, defender, stamina_cost(
+                defender, rule["defend_parry_cost"], cfg))
+            parry_cost = before - defender.stamina
         stagger(state, attacker, rule["parry_stagger"], "PARRY_WINDOW")
         defender.riposte = True
         from .mental import change_anger
@@ -35,7 +41,14 @@ def try_guard(state, attacker, defender, zone, snap):
         attacker.morale = clamp(attacker.morale + cfg["morale"]["parried"], 0, cap)
         defender.morale = clamp(defender.morale + cfg["morale"]["parry_success"], 0, cap)
         state.emit(EventType.PARRY, defender.id, attacker.id, zone,
-                   deltas={"stamina_cost": 0, **trace}, cause_tags=("PARRY_WINDOW",))
+                   deltas={"stamina_cost": parry_cost, **trace}, cause_tags=("PARRY_WINDOW",))
+        if defender.action and defender.action.contextual_defense:
+            defender.action.end_tick = state.tick + 1
+            defender.action.phases = [phase for phase in defender.action.phases
+                                      if phase.name not in {"GUARD_HOLD", "RECOVERY"}]
+            defender.action.phases.extend((
+                Phase("GUARD_HOLD", defender.action.guard_ready_tick, state.tick),
+                Phase("RECOVERY", state.tick, state.tick + 1)))
         from .engine import apply_weapon_stress
         apply_weapon_stress(state, defender, "PARRY", opponent=attacker)
         apply_weapon_stress(state, attacker, "PARRY", opponent=defender)

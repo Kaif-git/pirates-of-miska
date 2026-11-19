@@ -15,6 +15,15 @@ def test_seeded_full_fight_is_reproducible_and_resolves_with_real_events():
     assert first["reason"] != "timeout"
 
 
+def test_consequence_audit_trace_includes_contact_and_blood_source_fields():
+    result = run_fight("SpamHeavyBot", "Ronin", seed=8101, trace=True)
+    types = {event["type"] for event in result["trace"]}
+    # A matched-novice sample need not happen to cross a terminal injury threshold.
+    assert {"HIT", "WOUND", "POOL_CHANGE"} <= types
+    assert all("impact_applied" in event["deltas"] for event in result["trace"]
+               if event["type"] == "HIT")
+
+
 def test_matchup_reports_counts_end_reasons_length_and_config_fingerprint():
     report = run_matchup("SpamHeavyBot", "Ronin", fights=3, seed=20)
     assert report["fights"] == 3
@@ -72,7 +81,8 @@ def test_scripted_punisher_interrupts_a_visible_heavy_when_light_wins_the_tick_r
     punisher, ronin = state.fighters
     punisher.pos, ronin.pos = (4, 3), (5, 3)
     commit_action(state, ronin.id, Choice(ActionKind.HEAVY, Zone.TORSO))
-    state.tick = state.config["ai"]["reaction_delay_default"]
+    # Decide early enough that the new matched-novice Light reaches before the Heavy.
+    state.tick = 2
     choice = choose_bot(state, punisher.id, "ScriptedPunisherBot", random.Random(1))
     assert choice.kind == ActionKind.LIGHT
 

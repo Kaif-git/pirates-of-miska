@@ -130,6 +130,7 @@ def test_memory_snapshot_resume_and_encounter_hook_integration():
 def test_revenge_action_is_grudge_scored_and_cites_memory_provenance():
     world = WorldState.create("memory-hunt-rival")
     holder_id, target_id = _two_people(world)
+    world.entities[target_id]["location"] = dict(world.location_of(holder_id))
     source_event = world.entities[holder_id]["last_event_id"]
     memory_id = world.memories.add_memory(
         world, holder_id, target_id, "betrayed", event_id=source_event,
@@ -163,11 +164,25 @@ def test_revenge_action_is_grudge_scored_and_cites_memory_provenance():
     assert raid.type == "FEUD_RAID_ATTEMPTED"
     assert "feud_escalation" in raid.causes_tags
     assert raid.targets[0]["entity_id"] == target_id
+    assert raid.data["ship_id"] == world.crew_ships.crews[holder["crew_id"]]["ship_ids"][0]
+    assert raid.data["actor_location_id"] == raid.data["target_location_id"]
+    expense = world.event_log.get(action.id)
+    crew = world.crew_ships.crews[holder["crew_id"]]
+    account = world.economy.crew_accounts[holder["crew_id"]]
+    assert expense.data["silver_cost"] == 10
+    assert expense.data["ledger_sink"] == {"silver": 10, "goods": {}}
+    assert crew["treasury_silver"] == account["treasury_silver"]
+    assert world.economy.ledger.silver_sinks == 10
+    world.economy.validate_world(world)
+    world.crew_ships.validate_world(world)
+    world.to_snapshot()
+    assert world.decisions._grudge_target_id(world, holder) is None
 
 
 def test_public_insult_drives_a_causal_rival_hunt():
     world = WorldState.create("memory-insult-feud")
-    instigator_id, target_id = _two_people(world)
+    target_id, instigator_id = _two_people(world)
+    world.entities[instigator_id]["location"] = dict(world.location_of(target_id))
     source_event = world.entities[instigator_id]["last_event_id"]
     world.entities[target_id]["traits"]["pride"] = 100
     insult_id = world.memories.insult(
@@ -199,10 +214,61 @@ def test_public_insult_drives_a_causal_rival_hunt():
     assert raid.type == "FEUD_RAID_ATTEMPTED"
     assert "feud_escalation" in raid.causes_tags
     assert raid.targets[0]["entity_id"] == instigator_id
+    assert raid.data["actor_location_id"] == raid.data["target_location_id"]
     reciprocal = [memory for memory in world.entities[instigator_id]["memory"]
                   if memory["source_event_id"] == result_id]
     assert reciprocal and reciprocal[0]["kind"] == "humiliated"
     assert world.entities[instigator_id]["opinions"][target_id]["grievance"] > 0
+
+
+def test_grudge_action_requires_reachable_ship_capability():
+    world = WorldState.create("memory-hunt-capability")
+    holder_id, holder = next((entity_id, row) for entity_id, row in world.entities.items()
+                             if row.get("kind") == "character" and row.get("crew_id") is None)
+    target_id = next(entity_id for entity_id, row in world.entities.items()
+                     if row.get("kind") == "character" and entity_id != holder_id)
+    world.entities[target_id]["location"] = dict(world.location_of(holder_id))
+    source_event = holder["last_event_id"]
+    world.memories.add_memory(
+        world, holder_id, target_id, "betrayed", event_id=source_event,
+        intensity_permille=1000, valence_permille=-1000,
+    )
+
+    assert world.decisions._grudge_target_id(world, holder) is None
+    assert "hunt_rival" not in world.decisions.candidates(world, holder_id)
+
+
+def test_grudge_action_is_unavailable_without_treasury_and_failed_execution_is_atomic():
+    world = WorldState.create("memory-hunt-unfunded")
+    holder_id, holder = next((entity_id, row) for entity_id, row in world.entities.items()
+                             if row.get("kind") == "character" and row.get("crew_id"))
+    target_id = next(entity_id for entity_id, row in world.entities.items()
+                     if row.get("kind") == "character" and entity_id != holder_id)
+    world.entities[target_id]["location"] = dict(world.location_of(holder_id))
+    source_event = holder["last_event_id"]
+    world.memories.add_memory(
+        world, holder_id, target_id, "betrayed", event_id=source_event,
+        intensity_permille=1000, valence_permille=-1000,
+    )
+    crew_id = holder["crew_id"]
+    world.crew_ships.crews[crew_id]["treasury_silver"] = 0
+    world.economy.crew_accounts[crew_id]["treasury_silver"] = 0
+    assert "hunt_rival" not in world.decisions.candidates(world, holder_id)
+
+    state = world.decisions.agents.setdefault(holder_id, world.decisions._new_agent_state())
+    state.update({"decision_count": 1, "last_action_id": "hunt_rival",
+                  "last_decision_tick": world.clock.tick,
+                  "last_executed_decision_number": 0})
+    choice = {"agent_id": holder_id, "action_id": "hunt_rival", "decision_number": 1,
+              "tick": world.clock.tick, "caused_by": source_event, "score": 1,
+              "top_candidates": []}
+    before_events = len(world.event_log)
+    before_ledger = copy.deepcopy(world.economy.ledger.snapshot())
+    with pytest.raises(ValueError, match="preconditions"):
+        world.decisions.execute(world, choice)
+    assert len(world.event_log) == before_events
+    assert world.economy.ledger.snapshot() == before_ledger
+    assert state["last_executed_decision_number"] == 0
 
 
 def test_reconciliation_reduces_grievance_but_leaves_a_decaying_scar():

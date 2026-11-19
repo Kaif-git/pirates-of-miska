@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 import math
 
 from .model import ActionKind, ActiveAction, EventType, GroundWeapon, Phase, Zone
+from .geometry import bearing_from, lock_delay
 from .stats import (clamp, effective_stats, fatigue_gain, max_stamina, pay_stamina,
                     phase_ticks, refresh_exhaustion, stamina_cost, weapon_reach)
 
@@ -21,6 +22,7 @@ class Choice:
     tiles: int = 1
     item_id: str | None = None
     target_id: str | None = None
+    contextual_defense: bool = False
 
 
 def drop_weapon(state, fighter, cause):
@@ -148,6 +150,11 @@ def legality(state, fighter_id, choice):
             return "Choose a living hostile target"
         if len(state.fighters) > 2 and not state.can_see(fighter, target):
             return "Target is not currently visible"
+        if Zone(choice.aim) == Zone.EYE:
+            if fighter.permanent_injuries.eyes_damaged >= 2:
+                return "Bilateral eye injury prevents acquiring a precise eye target"
+            if target.permanent_injuries.eyes_damaged >= 2:
+                return "No functioning eye remains to target"
         if kind == ActionKind.DISARM and target.disarmed:
             return "Opponent has no weapon to disarm"
     elif kind in {ActionKind.FEINT, ActionKind.SHOVE, ActionKind.DISENGAGE}:
@@ -244,20 +251,36 @@ def commit_action(state, fighter_id, choice):
                             cursor, movement_end))
         cursor = movement_end
     windup = phase_ticks(table.get("windup", 0), locked.speed, cfg)
+    if kind == ActionKind.GUARD and choice.contextual_defense:
+        windup = phase_ticks(cfg["guard"]["defend_raise"], locked.speed, cfg)
     strike_tick = None
     if kind in ATTACK_KINDS:
         if fighter.riposte:
-            windup = max(cfg["time"]["min_phase_ticks"], math.ceil(windup * cfg["guard"]["riposte_windup_mult"]))
+            riposte_mult = (cfg["guard"]["riposte_disarm_windup_mult"]
+                            if kind == ActionKind.DISARM else cfg["guard"]["riposte_windup_mult"])
+            windup = max(cfg["time"]["min_phase_ticks"], math.ceil(windup * riposte_mult))
         phases.append(Phase("WINDUP", cursor, cursor + windup))
         cursor += windup
         strike_tick = cursor
-        active = phase_ticks(table["active"], locked.speed, cfg)
+        # Contact is resolved on strike_tick; a zero active phase makes readiness
+        # relative to that point while preserving the legacy scaled-phase model.
+        active = phase_ticks(table.get("active", 0), locked.speed, cfg)
         phases.append(Phase("ACTIVE", cursor, cursor + active))
         cursor += active
     elif kind == ActionKind.GUARD:
         phases.append(Phase("GUARD_RAISE", cursor, cursor + windup))
         cursor += windup
-        phases.append(Phase("GUARD_HOLD", cursor, None))
+        if choice.contextual_defense:
+            hold = phase_ticks(cfg["guard"]["defend_hold"], locked.speed, cfg)
+            phases.append(Phase("GUARD_HOLD", cursor, cursor + hold))
+            cursor += hold
+            lower = phase_ticks(cfg["guard"]["defend_lower"], locked.speed, cfg,
+                                recovery_weight=fighter.equipment.total_weight)
+            if lower:
+                phases.append(Phase("RECOVERY", cursor, cursor + lower))
+                cursor += lower
+        else:
+            phases.append(Phase("GUARD_HOLD", cursor, None))
     elif windup:
         phases.append(Phase(kind.value, cursor, cursor + windup))
         cursor += windup
@@ -266,22 +289,31 @@ def commit_action(state, fighter_id, choice):
     if recovery and kind != ActionKind.GUARD:
         phases.append(Phase("RECOVERY", cursor, cursor + recovery))
         cursor += recovery
-    base_cost = table["stamina"] * (choice.tiles if kind == ActionKind.RUN else 1)
+    base_cost = (cfg["guard"]["defend_setup_cost"] if kind == ActionKind.GUARD
+                 and choice.contextual_defense else
+                 table["stamina"] * (choice.tiles if kind == ActionKind.RUN else 1))
     cost = stamina_cost(fighter, base_cost, cfg)
     fatigue_before = fighter.fatigue
     paid = pay_stamina(state, fighter, cost)
     guard_ready = state.tick + windup if kind == ActionKind.GUARD else None
     weak_penalty = sum(s.parry_penalty for s in fighter.statuses if s.active(state.tick))
-    parry_window = max(cfg["guard"]["parry_min_window"], round(
+    parry_window = (cfg["guard"]["defend_parry_window"] if kind == ActionKind.GUARD
+                    and choice.contextual_defense else max(cfg["guard"]["parry_min_window"], round(
         cfg["guard"]["parry_speed_coef"] * locked.speed
-        + cfg["guard"]["parry_acc_coef"] * locked.accuracy) - weak_penalty)
+        + cfg["guard"]["parry_acc_coef"] * locked.accuracy) - weak_penalty))
     fighter.action = ActiveAction(kind, Zone(choice.aim) if choice.aim else None,
                                   tuple(choice.direction) if choice.direction else None,
                                   state.tick, phases, strike_tick, paid, locked,
-                                  None if kind == ActionKind.GUARD else cursor,
+                                   None if kind == ActionKind.GUARD and not choice.contextual_defense else cursor,
                                   path, windup, table.get("power", 0), table.get("acc_mod", 0),
-                                    guard_ready, parry_window, item_id=choice.item_id,
-                                    target_id=target.id if target else None)
+                                   guard_ready, parry_window, item_id=choice.item_id,
+                                     target_id=target.id if target else None,
+                                     attack_bearing=(bearing_from(fighter.pos, target.pos)
+                                                     if target and state.can_see(fighter, target) else None),
+                                       bearing_lock_tick=(state.tick + phase_ticks(
+                                           lock_delay(kind), locked.speed, cfg)
+                                                          if target and lock_delay(kind) else None),
+                                      contextual_defense=choice.contextual_defense)
     if kind == ActionKind.ADRENALINE:
         fighter.adrenaline_used = True
     if kind in ATTACK_KINDS:
@@ -304,7 +336,8 @@ def commit_action(state, fighter_id, choice):
                  "aim": choice.aim.value if isinstance(choice.aim, Zone) else choice.aim,
                  "target_id": target.id if target else None,
                 "direction": tuple(choice.direction) if choice.direction else None, "tiles": choice.tiles,
-                "paid": paid, "cost": cost, "strike_tick": strike_tick, "end_tick": fighter.action.end_tick,
+                 "paid": paid, "cost": cost, "strike_tick": strike_tick, "end_tick": fighter.action.end_tick,
+                 "contextual_defense": choice.contextual_defense,
                 "speed": locked.speed, "strength": locked.strength, "accuracy": locked.accuracy,
                 "endurance": locked.endurance, "fatigue_penalty": locked.fatigue_penalty,
                 "fatigue_added": fighter.fatigue-fatigue_before,
@@ -361,12 +394,17 @@ def apply_passive(state):
         kind = action.kind if action else None
         idle = kind == ActionKind.WAIT or (action is None and state.tick - fighter.idle_since >= cfg["stamina"]["idle_delay"])
         regen = cfg["stamina"]["regen_idle_per_turn" if idle else "regen_active_per_turn"] / turn
+        # Reduced circulating blood limits exertion recovery as well as force/speed.
+        # Reuse the same derived impairment curve; Accuracy remains invariant.
+        regen *= 1 - effective_stats(fighter, cfg, state.tick).blood_penalty
         fighter.stamina = min(max_stamina(fighter, cfg), fighter.stamina + regen)
         drain = cfg["fatigue"]["drain_idle"] if idle else cfg["fatigue"]["drain_walk"] if kind in {
             ActionKind.WALK, ActionKind.CRAWL, ActionKind.DISENGAGE} else 0
         fighter.fatigue = max(0, fighter.fatigue - drain / turn)
         if kind == ActionKind.GUARD and action.phase_at(state.tick) == "GUARD_HOLD":
-            pay_stamina(state, fighter, stamina_cost(fighter, cfg["guard"]["hold_cost_per_tick"], cfg))
+            hold_cost = (cfg["guard"]["defend_hold_cost_per_tick"]
+                         if action.contextual_defense else cfg["guard"]["hold_cost_per_tick"])
+            pay_stamina(state, fighter, stamina_cost(fighter, hold_cost, cfg))
         fighter.pain = max(0, fighter.pain - cfg["pain"]["decay_per_turn"] / turn)
         composure = fighter.personality.composure if fighter.personality else 1
         change_anger(state, fighter, -cfg["anger"]["decay_per_turn"] * composure / turn, "ANGER_DECAY")
@@ -378,7 +416,8 @@ def apply_passive(state):
         bleed = min(cfg["blood"]["total_bleed_cap_per_turn"], sum(
             wound.bleed_per_turn * (1-cfg["blood"]["bandage_reduction"] if wound.bandaged else 1)
             for wound in fighter.wounds))
-        fighter.blood = max(0, fighter.blood - bleed / turn * cfg["blood"]["exertion"][exertion])
+        bleed_loss = min(fighter.blood, bleed / turn * cfg["blood"]["exertion"][exertion])
+        fighter.blood = max(0, fighter.blood - bleed_loss)
         blood_morale(state, fighter)
         was_exhausted = fighter.exhausted
         refresh_exhaustion(fighter, cfg)
@@ -389,7 +428,12 @@ def apply_passive(state):
         recover_stability(state, fighter)
         deltas = {key: getattr(fighter, key) - value for key, value in old.items() if getattr(fighter, key) != value}
         if deltas:
-            state.emit(EventType.POOL_CHANGE, fighter.id, deltas=deltas)
+            if bleed_loss > 0:
+                deltas.update(bleed_loss=bleed_loss,
+                              bleed_rate_per_turn=bleed * cfg["blood"]["exertion"][exertion],
+                              bleed_exertion=exertion)
+            state.emit(EventType.POOL_CHANGE, fighter.id, deltas=deltas,
+                       cause_tags=("BLEEDING",) if bleed_loss > 0 else ())
 
 
 def apply_pending_interrupts(state):
@@ -536,17 +580,23 @@ def resolve_tactical_actions(state):
                                   stamina_cost(defender, rule["feint_guard_drain"], state.config))
             riposte_consumed = defender.riposte
             defender.riposte = False
+            from .guard import stagger
+            stagger(state, defender, rule["feint_disrupt_ticks"], "FEINT_DISRUPTED_GUARD")
         state.emit(EventType.FEINT, actor.id, defender.id,
                    deltas={"outcome": "GUARD_DISRUPTED" if success else "NO_EFFECT",
                             "distance": gap, "reach": reach,
-                           "guard_stamina_drained": drained,
-                           "riposte_consumed": riposte_consumed},
+                            "guard_stamina_drained": drained,
+                            "riposte_consumed": riposte_consumed,
+                            "opening_until_tick": (state.tick + state.config["tactics"]["feint_disrupt_ticks"]
+                                                   if success else None)},
                    cause_tags=("FEINT_DISRUPTED_GUARD",) if success else ("FEINT_IGNORED",))
 
     plans = {}
     from .stability import balance_rating
     from .stats import effective_stats
-    cfg, fraction = state.config, state.config["tactics"]["shove_balance_fraction"]
+    cfg = state.config
+    shove_cfg = cfg["tactics"]
+    fraction = shove_cfg["shove_balance_fraction"]
     for actor_id, action in due.items():
         if action.kind != ActionKind.SHOVE:
             continue
@@ -554,15 +604,18 @@ def resolve_tactical_actions(state):
         defender = target_for(state, actor, action.target_id)
         if defender is None:
             plans[actor_id] = {"actor": actor, "defender": actor, "destination": actor.pos,
-                               "attacker_score": 0, "defender_score": 0, "braced": False,
-                               "outcome": "NO_TARGET"}
+                                "attacker_score": 0, "defender_score": 0, "margin": 0,
+                                "braced": False, "steps": [],
+                                "outcome": "NO_TARGET"}
             continue
         gap = max(abs(actor.pos[0] - defender.pos[0]), abs(actor.pos[1] - defender.pos[1]))
         direction = (_sign(defender.pos[0] - actor.pos[0]),
                      _sign(defender.pos[1] - actor.pos[1]))
         destination = (defender.pos[0] + direction[0], defender.pos[1] + direction[1])
         attacker_score = (effective_stats(actor, cfg, state.tick).strength
-                          + balance_rating(actor, cfg, state.tick) * fraction)
+                          + balance_rating(actor, cfg, state.tick) * fraction
+                          + max(0, cfg["stability"]["start"] - defender.stability)
+                          * shove_cfg["shove_unsteady_bonus"])
         defender_score = (effective_stats(defender, cfg, state.tick).strength
                           + balance_rating(defender, cfg, state.tick) * fraction)
         guard = defender.action
@@ -570,61 +623,66 @@ def resolve_tactical_actions(state):
                       and guard.phase_at(state.tick) in {"GUARD_RAISE", "GUARD_HOLD"})
         if braced:
             defender_score += cfg["tactics"]["shove_guard_brace"]
+        margin = attacker_score - defender_score
+        desired_steps = (2 if margin >= shove_cfg["shove_two_step_margin"] else
+                         1 if margin >= shove_cfg["shove_move_margin"] else 0)
         plans[actor_id] = {"actor": actor, "defender": defender, "destination": destination,
                            "attacker_score": attacker_score, "defender_score": defender_score,
-                           "braced": braced,
+                           "margin": margin, "braced": braced, "steps": [],
                            "outcome": ("OUT_OF_RANGE" if gap > 1 else
-                                       "SUCCESS" if attacker_score > defender_score else "RESISTED")}
+                                        "RESISTED" if margin <= 0 else
+                                        "OFF_BALANCE" if desired_steps == 0 else "SUCCESS")}
 
-    successes = [row for row in plans.values() if row["outcome"] == "SUCCESS"]
-    destination_counts = {}
-    for row in successes:
-        destination_counts[row["destination"]] = destination_counts.get(row["destination"], 0) + 1
-    for row in successes:
-        if destination_counts[row["destination"]] != 1:
-            row["outcome"] = "BLOCKED_DESTINATION_CONFLICT"
-    changed = True
-    while changed:
-        changed = False
-        moving_ids = {row["defender"].id for row in successes if row["outcome"] == "SUCCESS"}
-        for row in successes:
-            if row["outcome"] != "SUCCESS":
-                continue
-            destination = row["destination"]
-            blocker = next((other for other in state.fighters
-                            if other.id != row["defender"].id and other.pos == destination
-                            and other.id not in moving_ids), None)
-            if state.walkable is not None and destination not in state.walkable:
-                row["outcome"], row["blocker"] = "BLOCKED", "ARENA_EDGE"
-                changed = True
-            elif blocker:
-                row["outcome"], row["blocker"] = "BLOCKED", blocker.id
-                changed = True
+    from .forced_movement import resolve_forced_movement
+    moving_rows = [row for row in plans.values() if row["outcome"] == "SUCCESS"]
+    requests = []
+    for row in moving_rows:
+        actor, defender = row["actor"], row["defender"]
+        dx, dy = _sign(defender.pos[0] - actor.pos[0]), _sign(defender.pos[1] - actor.pos[1])
+        request = {"actor": actor, "target": defender, "direction": (dx, dy),
+                   "steps": 2 if row["margin"] >= shove_cfg["shove_two_step_margin"] else 1,
+                   "cause_tag": "SHOVE_PUSH"}
+        row["motion_request"] = request
+        requests.append(request)
+    resolve_forced_movement(state, requests)
+    for row in moving_rows:
+        request = row["motion_request"]
+        row["route"], row["steps"] = request["route"], request["actual"]
+        if request.get("blocker"):
+            row["blocker"] = request["blocker"]
+            row["outcome"] = "BLOCKED" if not row["steps"] else "PARTIAL_BLOCKED"
 
-    moving = [row for row in successes if row["outcome"] == "SUCCESS"]
-    before_positions = {row["defender"].id: row["defender"].pos for row in moving}
-    for row in moving:
-        row["defender"].pos = row["destination"]
     for row in plans.values():
         actor, defender = row["actor"], row["defender"]
         outcome = row["outcome"]
         deltas = {"outcome": outcome, "attacker_score": round(row["attacker_score"], 3),
                   "defender_score": round(row["defender_score"], 3), "braced": row["braced"],
+                  "margin": round(row["margin"], 3), "requested_steps": len(row.get("route", [])),
+                  "actual_steps": len(row.get("steps", [])),
                   "destination": row["destination"]}
         if "blocker" in row:
             deltas["blocker"] = row["blocker"]
-        if outcome == "SUCCESS":
-            state.emit(EventType.MOVE, defender.id, actor.id,
-                       deltas={"from": before_positions[defender.id], "to": row["destination"], "forced": True},
-                       cause_tags=("SHOVE_PUSH",))
         state.emit(EventType.SHOVE, actor.id, defender.id, deltas=deltas,
                    cause_tags=("SHOVE_" + outcome,))
-    if moving:
-        from .stability import apply_stability_loss
-        for row in moving:
-            apply_stability_loss(state, row["defender"], "SHOVE_IMPACT",
-                                 cfg["tactics"]["shove_stability_loss"],
-                                 details={"attacker": row["actor"].id})
+        if row.get("steps"):
+            from .stability import interrupt_unresolved_action
+            interrupt_unresolved_action(state, defender)
+        if outcome not in {"NO_TARGET", "OUT_OF_RANGE"}:
+            from .stability import apply_stability_loss
+            margin_fraction = min(1.0, max(0.0, row["margin"])
+                                  / shove_cfg["shove_margin_for_max_loss"])
+            loss = (shove_cfg["shove_min_stability_loss"]
+                    + (shove_cfg["shove_max_stability_loss"]
+                       - shove_cfg["shove_min_stability_loss"]) * margin_fraction)
+            if row["braced"]:
+                loss *= shove_cfg["shove_braced_impact_mult"]
+            if row.get("blocker"):
+                loss *= shove_cfg["shove_blocked_impact_mult"]
+            apply_stability_loss(state, defender, "SHOVE_IMPACT", loss,
+                                 details={"attacker": actor.id, "contest_margin": round(row["margin"], 3),
+                                          "outcome": outcome, "requested_steps": len(row.get("route", [])),
+                                          "actual_steps": len(row.get("steps", [])),
+                                          "braced": row["braced"]})
 
 
 def finish_completed_actions(state):
@@ -637,8 +695,22 @@ def finish_completed_actions(state):
         if action.kind == ActionKind.BANDAGE:
             eligible = [wound for wound in fighter.wounds if not wound.bandaged and wound.bleed_per_turn > 0]
             if eligible and fighter.bandages > 0:
-                max(eligible, key=lambda wound: wound.bleed_per_turn).bandaged = True
+                treated = max(eligible, key=lambda wound: wound.bleed_per_turn)
+                rate_before = min(state.config["blood"]["total_bleed_cap_per_turn"], sum(wound.bleed_per_turn * (
+                    1-state.config["blood"]["bandage_reduction"] if wound.bandaged else 1)
+                    for wound in fighter.wounds))
+                treated.bandaged = True
                 fighter.bandages -= 1
+                rate_after = min(state.config["blood"]["total_bleed_cap_per_turn"], sum(wound.bleed_per_turn * (
+                    1-state.config["blood"]["bandage_reduction"] if wound.bandaged else 1)
+                    for wound in fighter.wounds))
+                state.emit(EventType.STATUS, fighter.id,
+                           deltas={"status": "bandaged", "zone": treated.zone.value,
+                                   "severity": treated.severity.value,
+                                   "wound_rate": treated.bleed_per_turn,
+                                   "rate_before": rate_before, "rate_after": rate_after,
+                                   "bandages_remaining": fighter.bandages},
+                           cause_tags=("BANDAGE_COMPLETED",))
         elif action.kind in {ActionKind.EAT, ActionKind.DRINK}:
             field = "food" if action.kind == ActionKind.EAT else "water"
             if getattr(fighter, field) > 0:
@@ -819,6 +891,7 @@ def advance_one_tick(state):
     state.tick += 1
     resolve_adrenaline_expiry(state)
     apply_passive(state)
+    update_attack_bearings(state)
     snap = {fighter.id: defense_snapshot(state, fighter) for fighter in state.fighters}
     strikers = [fighter for fighter in state.fighters
                 if state.combat_active(fighter) and fighter.action
@@ -845,6 +918,26 @@ def advance_one_tick(state):
     check_end_conditions(state)
     from .perception import refresh_contacts
     refresh_contacts(state, state.event_log[event_cursor:])
+
+
+def update_attack_bearings(state):
+    """Track visible targets until the committed attack's deterministic lock tick."""
+    for fighter in state.fighters:
+        action = fighter.action
+        if (not action or action.bearing_lock_tick is None
+                or state.tick > action.bearing_lock_tick):
+            continue
+        target = target_for(state, fighter, action.target_id)
+        if target is None or not state.can_see(fighter, target):
+            continue
+        bearing = bearing_from(fighter.pos, target.pos)
+        if bearing is None:
+            continue
+        action.attack_bearing = bearing
+        if state.tick == action.bearing_lock_tick:
+            state.emit(EventType.ATTACK_LOCK, fighter.id, target.id,
+                       deltas={"bearing": bearing, "kind": action.kind.value,
+                               "tick": state.tick}, cause_tags=("ATTACK_BEARING_LOCKED",))
 
 
 def run_until_decision(state):

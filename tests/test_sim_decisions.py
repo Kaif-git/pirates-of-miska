@@ -23,6 +23,10 @@ def test_action_catalog_is_structured_and_rejects_invalid_costs():
     invalid["actions"]["trade_run"]["risk_permille"] = 1001
     with pytest.raises(ValueError, match="action definition"):
         validate_action_data(invalid)
+    invalid = copy.deepcopy(data)
+    invalid["rules"]["grudge_target_cooldown_days"] = 0
+    with pytest.raises(ValueError, match="action scoring rules"):
+        validate_action_data(invalid)
 
 
 def test_decision_candidates_have_hard_preconditions_and_explainable_scores():
@@ -165,8 +169,49 @@ def test_terminal_actor_audit_detects_only_post_terminal_activity():
     assert violations[0]["event_type"] == "AGENT_ACTION"
 
 
+def test_terminal_organization_audit_distinguishes_crew_roles_from_indirect_faction_commands():
+    world = WorldState.create("terminal-faction-audit")
+    crew_id, crew = next(iter(sorted(world.crew_ships.crews.items())))
+    faction_id = crew["faction_id"]
+    faction = world.politics.factions[faction_id]
+    roster_before = list(crew["roster"])
+    account_before = copy.deepcopy(world.economy.crew_accounts[crew_id])
+    members = sorted(faction["member_crew_ids"])
+    first_departure = world.politics.on_crew_dissolved(
+        world, members[0], caused_by=faction["last_event_id"], reason="audit_test")
+    dissolved_id = world.politics.on_crew_dissolved(
+        world, members[1], caused_by=first_departure, reason="audit_test")
+    assert crew_id in world.crew_ships.crews
+    assert crew["roster"] == roster_before
+    assert world.economy.crew_accounts[crew_id] == account_before
+    assert crew["faction_id"] is None
+    assert faction_id in world.politics.archived_factions
+    indirect_command = world.event_log.append(
+        tick=world.clock.tick, event_type="TERRITORY_CLAIMED",
+        actors=[{"role": "faction_leader", "entity_id": crew["captain_id"]}],
+        data={"faction_id": faction_id}, caused_by=[dissolved_id],
+        causes_tags=["terminal_audit_test"], magnitude=0.1)
+    crew_action = world.event_log.append(
+        tick=world.clock.tick, event_type="SHIP_CAPTURED",
+        actors=[{"role": "captor_crew", "entity_id": crew_id}],
+        data={"new_crew_id": crew_id}, caused_by=[dissolved_id],
+        causes_tags=["terminal_audit_test"], magnitude=0.1)
+
+    violations = _terminal_actor_violations(world.event_log)
+
+    assert len(violations) == 1
+    assert violations[0]["event_id"] == indirect_command.id
+    assert violations[0]["terminal_kind"] == "organization"
+    assert all(row["event_id"] != crew_action.id for row in violations)
+
+
 def test_seed_27_combat_death_and_later_succession_do_not_reuse_dead_actor():
     world = WorldState.create(27)
+    crew = next(iter(world.crew_ships.crews.values()))
+    captain_id = crew["captain_id"]
+    cause = crew["last_event_id"]
+    world.characters.kill_character(
+        world, captain_id, cause="combat", caused_by=cause, replace_majors=False)
     world.run_until(720)
 
     assert world.event_log.by_type("CHARACTER_DIED")

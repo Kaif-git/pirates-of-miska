@@ -84,12 +84,12 @@ def test_degradation_shows_consequences_not_just_a_percentage():
     model = ui.model()
     values = dict(model.own_readout)
     assert values['light_ticks'] > values['fresh_light_ticks']
-    assert values['Accuracy'] < values['fresh_Accuracy']
+    assert values['Accuracy'] == values['fresh_Accuracy']
     assert any('windup' in alert for alert in model.functional_alerts)
-    assert any('aim:' in alert for alert in model.functional_alerts)
+    assert not any('aim:' in alert for alert in model.functional_alerts)
 
 
-def test_trade_compares_both_actual_hits_and_deep_cutoff():
+def test_recap_reports_both_choices_and_physical_consequences_without_trade_score():
     session = DuelSession.new(guide_mode='off')
     session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
     # Freeze the NPC choice for this controlled example, not a live AI promise.
@@ -97,9 +97,10 @@ def test_trade_compares_both_actual_hits_and_deep_cutoff():
     ui = DuelUI(session, rounds=True)
     ui.activate('Light')
     ui.activate('Torso')
-    reason = ui.round_summary[2]
-    assert reason.startswith('Trade:')
-    assert 'You 14.0 cut' in reason and 'Ronin 22.1 deep' in reason and 'deep ≥ 16' in reason
+    text = '\n'.join(ui.round_result)
+    assert 'You chose:' in text and 'Ronin chose:' in text
+    assert any(term in text.lower() for term in ('cut', 'deep', 'missed', 'parried', 'blocked'))
+    assert not any(term in text.lower() for term in ('damage trade', 'net damage', 'power - armor'))
 
 
 def test_observed_light_generates_conditional_parry_not_future_certainty():
@@ -110,7 +111,7 @@ def test_observed_light_generates_conditional_parry_not_future_certainty():
     ui.activate('Wait')
     hint = coach(ui.model())
     assert hint.action == 'Guard'
-    assert 'if light repeats' in hint.headline
+    assert 'Next enemy choice is unknown.' in ' '.join(hint.cautions)
     assert 'bypass' in ' '.join(hint.cautions)
 
 
@@ -119,7 +120,7 @@ def test_successful_parry_teaches_the_real_riposte_opportunity():
     session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
     session._npc_choice = lambda: Choice(ActionKind.LIGHT, Zone.TORSO)
     ui = DuelUI(session, rounds=True)
-    ui.activate('Guard')
+    ui.activate('Defend')
     hint = coach(ui.model())
     assert hint.action == 'Light' and 'riposte' in hint.headline
     from pirates.duel_system.render_model import preview_action
@@ -139,14 +140,14 @@ def test_unlearned_coach_uses_recorded_evidence_not_secret_current_stats():
     assert coach(ui.model()) == before
 
 
-def test_heavy_target_picker_displays_the_extra_accuracy_requirement():
+def test_heavy_target_picker_does_not_modify_permanent_accuracy_requirement():
     ui = DuelUI(DuelSession.new(guide_mode='off'), rounds=True)
     ui.activate('Light')
     light = {z.zone: z.difficulty for z in ui.model().zones}
     ui.activate('Back')
     ui.activate('Heavy')
     for zone in ui.model().zones:
-        assert zone.difficulty == light[zone.zone]+2
+        assert zone.difficulty == light[zone.zone]
 
 
 def test_fresh_reference_and_readout_never_mutate_state():

@@ -8,6 +8,8 @@ from .engine import Choice, adrenaline_trigger_reasons, commit_action, legality
 from .ai import PublicKey
 from .guide import CAUSE_LINES, _public_key
 from .model import ActionKind, EventType, Fighter, Zone
+from .geometry import attack_cells
+from .defense import choose_defend
 from .notebook import PatternState
 from .stats import effective_stats, fear, max_stamina, stamina_cost, phase_ticks, weapon_edge, weapon_reach
 from .wounds import defense_snapshot
@@ -34,6 +36,7 @@ class ZoneOption:
     difficulty: float
     exposed: bool
     accuracy: float
+    blocked_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,7 @@ class Popup:
     text: str
     big: bool
     tick: int
+    direction: tuple[int, int] = (0, 0)
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,9 @@ class RenderModel:
     player_emotion_rows: tuple[str, ...] = ()
     enemy_tell: tuple[str, ...] = ()
     enemy_confidence: str = "Unknown — no named-NPC observations in similar conditions."
+    enemy_commitment: str = "No visible commitment."
+    enemy_opportunity: str = "Next choice unknown."
+    enemy_condition: str = "No visible condition read."
     player_injury_rows: tuple[str, ...] = ()
     enemy_injury_rows: tuple[str, ...] = ()
     player_stability: float = 100
@@ -209,7 +216,7 @@ def preview_action(state, choice):
     cost = stamina_cost(player, table["stamina"] * (choice.tiles if choice.kind == ActionKind.RUN else 1), state.config)
     acc = effective_stats(player, state.config, state.tick).accuracy
     extra = state.config["zones"]["guard_hand_extra"] if choice.aim == Zone.HAND and enemy and enemy.action and enemy.action.phase_at(state.tick) == "GUARD_HOLD" else 0
-    needed = state.config["zones"]["difficulty"][choice.aim.value] + table.get("acc_mod", 0) + extra if choice.aim else 0
+    needed = state.config["zones"]["difficulty"][choice.aim.value] + extra if choice.aim else 0
     risk = f"Needs {needed:g} ACC; you have {acc:.1f}." if choice.aim else "Moving is defenseless." if choice.direction else ""
     if choice.aim and (acc < needed or choice.aim == Zone.HAND and enemy
                        and not defense_snapshot(state, enemy).hand_exposed):
@@ -233,10 +240,17 @@ def event_line(event, names):
     actor = names.get(event.actor, event.actor or "Fight")
     if event.type == EventType.ACTION_START:
         return f"{actor}: {event.deltas['kind'].lower()} committed"
+    if event.type == EventType.ATTACK_LOCK:
+        return f"{actor}: attack direction locked"
+    if event.type == EventType.WHIFF and "OUTSIDE_LOCKED_ATTACK_GEOMETRY" in event.cause_tags:
+        return f"{actor}: target moved outside the locked attack line"
     if event.type == EventType.HIT:
         structure = event.deltas.get("structure", "soft tissue").replace("_", " ").lower()
         depth = event.deltas.get("depth", event.severity.value).replace("_", " ").lower()
         return f"{actor}: {event.zone.value.lower()} {event.severity.value.lower()} ({depth} {structure})"
+    if event.type == EventType.WOUND:
+        target = names.get(event.target, "opponent")
+        return f"{actor}: caused a bleeding wound on {target} ({event.zone.value.lower()})"
     if event.type == EventType.MOVE:
         destination = tuple(event.deltas.get("to", ()))
         return f"{actor}: moved to {destination}"
@@ -295,6 +309,13 @@ def event_line(event, names):
         return f"{actor}: picked up {event.deltas.get('name', 'weapon')}"
     if event.type == EventType.EYE_INJURY:
         return f"{actor}: permanent eye injury — {event.deltas.get('eyes_damaged_after', 1)} eye(s) impaired"
+    if event.type == EventType.SEVER:
+        target = names.get(event.target, "opponent")
+        side = event.deltas.get("side")
+        hand = f"{side.lower()} " if side else ""
+        function = ("weapon hand lost; cannot hold a weapon" if event.deltas.get("weapon_hand_lost")
+                    else "supporting hand lost; one-handed weapon remains usable")
+        return f"{target}: {hand}hand severed — {function}"
     if event.type == EventType.DECAPITATION:
         return f"{actor}: clean heavy cutting head strike caused death"
     if event.type == EventType.INCAPACITATED:
@@ -338,6 +359,74 @@ def _enemy_tells(enemy, key, entry, config):
     return tuple(rows[:2] or ("No reliable read yet; next choice unknown.",))
 
 
+def _opponent_read(state, enemy, *, visible, group_combat):
+    """Summarize only current public commitment and visible physical evidence."""
+    if not visible:
+        return ("No visible commitment; next choice and range unknown.",
+                "No observed opening; next choice remains unknown.",
+                "No visible condition read.")
+    if group_combat:
+        posture = "grounded" if enemy.grounded else "standing"
+        return (f"Visible hostile: {posture}; commitment detail may be incomplete.",
+                "Do not infer an opening from an unseen choice.",
+                "Group condition details withheld unless directly witnessed.")
+
+    action = enemy.action
+    if action is None:
+        if enemy.stagger_until > state.tick:
+            commitment = f"Staggered through t{enemy.stagger_until}; no current commitment."
+            opportunity = f"Cannot voluntarily act for {enemy.stagger_until-state.tick} more ticks."
+        else:
+            commitment = "Ready; no committed action visible."
+            opportunity = "Next choice unknown; readiness is not an opening by itself."
+    else:
+        name = action.kind.value.replace("_", " ").title()
+        detail = f"Committed {name}"
+        if action.aim:
+            detail += f" → {action.aim.value.title()}"
+        if action.attack_bearing:
+            direction = {(0, -1): "north", (1, -1): "northeast", (1, 0): "east",
+                         (1, 1): "southeast", (0, 1): "south", (-1, 1): "southwest",
+                         (-1, 0): "west", (-1, -1): "northwest"}[action.attack_bearing]
+            if action.bearing_lock_tick is not None and action.bearing_lock_tick > state.tick:
+                detail += f"; tracking {direction}, locks t{action.bearing_lock_tick}"
+            else:
+                detail += f"; locked {direction} sector/ray"
+        first_step = next((tick for tick, _ in action.path if tick >= state.tick), None)
+        if first_step is not None:
+            detail += f"; next step t{first_step}"
+        if action.strike_tick is not None and action.strike_tick >= state.tick:
+            detail += f"; contact t{action.strike_tick}"
+        commitment = detail + "."
+        if action.strike_tick is not None and action.strike_tick >= state.tick:
+            opportunity = (f"Committed contact in {action.strike_tick-state.tick} ticks; "
+                           f"recovery/readiness boundary t{action.end_tick}. Do not assume a free follow-up.")
+        elif action.end_tick is not None and action.end_tick > state.tick:
+            opportunity = (f"Recovering/committed until t{action.end_tick} "
+                           f"({action.end_tick-state.tick} ticks); next choice is not yet available.")
+        else:
+            opportunity = "Commitment shown; no strike deadline is currently visible."
+
+    condition = []
+    if enemy.grounded:
+        condition.append("grounded")
+    if enemy.stagger_until > state.tick:
+        condition.append(f"staggered through t{enemy.stagger_until}")
+    if enemy.disarmed:
+        condition.append("disarmed")
+    if enemy.wounds:
+        latest = enemy.wounds[-1]
+        condition.append(f"{latest.zone.value.lower()} {latest.depth.lower()} wound")
+        bleed = sum(wound.bleed_per_turn for wound in enemy.wounds if not wound.bandaged)
+        if bleed > 0:
+            condition.append(f"visible bleeding {bleed:g}/turn")
+    if enemy.fatigue >= state.config["ai"]["vigor_low_fatigue"]:
+        condition.append("looks winded")
+    condition_text = ("Visible condition: " + "; ".join(condition) + "."
+                      if condition else "No obvious visible injury or posture impairment.")
+    return commitment, opportunity, condition_text
+
+
 def build_render_model(state, notebook, selected=None, advice=None, *, timeline=True, guide_mode="off", playback=False):
     player = state.fighters[0]
     group_combat = len(state.fighters) > 2
@@ -354,7 +443,7 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     cfg, horizon = state.config, state.config["ui"]["timeline_ticks"]
     if enemy is None and len(state.fighters) <= 2:
         enemy = state.primary_opponent(player.id, active_only=True) or state.primary_opponent(player.id, active_only=False)
-    enemy_visible = enemy is not None
+    enemy_visible = enemy is not None and state.can_see(player, enemy)
     if enemy is None:
         # A neutral projection keeps empty-contact UI states renderable without
         # consulting any off-screen fighter's condition, action or profile.
@@ -380,6 +469,8 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         PatternState.HABIT: f"Strong tendency, not certainty — {action_count}/{entry.total} similar observations.",
         PatternState.MIXED: f"Mixed — {entry.total} similar observations show no reliable choice.",
     }[entry.state] if enemy_visible else "Unknown — no current visual contact."
+    enemy_commitment, enemy_opportunity, enemy_condition = _opponent_read(
+        state, enemy, visible=enemy_visible, group_combat=group_combat)
     ghost = not enemy.action and entry.ghost
     if ghost and enemy_visible:
         glyph = {"HEAVY": "R^", "LIGHT": "R/", "GUARD": "R]", "DASH_LIGHT": "R>",
@@ -407,9 +498,17 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     danger = set()
     if enemy_visible and enemy.action and enemy.action.strike_tick is not None and enemy.action.strike_tick >= state.tick:
         origin = enemy.action.path[-1][1] if enemy.action.path else enemy.pos
-        reach = weapon_reach(enemy, cfg)
-        danger = {pos for pos in state.walkable or ()
-                  if pos != origin and max(abs(pos[0]-origin[0]), abs(pos[1]-origin[1])) <= reach}
+        candidates = attack_cells(origin, enemy.action.attack_bearing, enemy.action.kind)
+        for pos in candidates:
+            if state.walkable is not None and pos not in state.walkable:
+                continue
+            line = state.line_cells(origin, pos)
+            if any(state.walkable is not None and cell not in state.walkable for cell in line):
+                continue
+            if any(f.id not in {enemy.id, player.id} and state.occupies_tile(f)
+                   and f.pos in line for f in state.fighters):
+                continue
+            danger.add(pos)
     if player.blood <= 0 or player.decapitated:
         status, instructions = "DEAD - DEFEAT", "Fight over. Backspace: retry | Esc: leave"
     elif player.unconscious:
@@ -432,11 +531,14 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     preview = preview_action(state, selected) if selected else None
     own_timeline = preview.timeline if preview and preview.valid else timeline_for(player.action, state.tick, horizon)
     acc = effective_stats(player, cfg, state.tick).accuracy
-    selected_acc_mod = cfg["actions"][selected.kind.value].get("acc_mod", 0) if selected else 0
-    zones = tuple(ZoneOption(zone, cfg["zones"]["difficulty"][zone.value]
-                             + selected_acc_mod
-                             + (cfg["zones"]["guard_hand_extra"] if zone == Zone.HAND and phase == "GUARD_HOLD" else 0),
-                             zone != Zone.HAND or snap.hand_exposed, acc) for zone in Zone)
+    zones = tuple(ZoneOption(
+        zone, cfg["zones"]["difficulty"][zone.value]
+        + (cfg["zones"]["guard_hand_extra"] if zone == Zone.HAND and phase == "GUARD_HOLD" else 0),
+        zone != Zone.HAND or snap.hand_exposed, acc,
+        ("Bilateral eye injury prevents precise eye targeting" if zone == Zone.EYE
+         and player.permanent_injuries.eyes_damaged >= 2 else
+         "No functioning eye remains to target" if zone == Zone.EYE and enemy
+         and enemy.permanent_injuries.eyes_damaged >= 2 else "")) for zone in Zone)
     def action_option(label, choice):
         if (label in {"Cover", "Guard"} and player.action and player.action.kind == ActionKind.GUARD
                 and player.action.phase_at(state.tick) == "GUARD_HOLD"):
@@ -448,7 +550,13 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         duration = (f"Ready again in {preview.end_tick-state.tick} ticks."
                     if preview.end_tick is not None else "Held until you release it.")
         landing = f"Hits in {preview.strike_tick-state.tick} ticks. " if preview.strike_tick is not None else ""
-        if label == "Rise":
+        if label == "Light":
+            details = (f"Quick committed cut; shorter recovery than Heavy. Forward swing sector, not a homing hit. "
+                       f"{landing}{duration} Costs {preview.stamina:.1f} stamina; adds {preview.fatigue:.1f} fatigue.")
+        elif label == "Heavy":
+            details = (f"Slower committed cut with greater contact force; exposed to faster interruption and evasion. "
+                       f"{landing}{duration} Costs {preview.stamina:.1f} stamina; adds {preview.fatigue:.1f} fatigue.")
+        elif label == "Rise":
             details = (f"Exposed for {duration} Costs {preview.stamina:.1f} stamina; "
                        "a qualifying hit interrupts Rise and leaves you grounded.")
         elif label == "Crawl":
@@ -456,19 +564,34 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         elif label == "Cover":
             details = f"Committed guard; no movement or attack. {duration} Costs {preview.stamina:.1f} stamina."
         elif label == "Feint":
-            details = (f"Non-damaging; on completion drains a committed in-reach Guard and consumes its riposte. "
+            opening = state.config["tactics"]["feint_disrupt_ticks"]
+            details = (f"Non-damaging setup; an in-reach committed Guard is interrupted and its riposte consumed, "
+                       f"creating {opening} ticks of opening. A follow-up must land before it expires; "
+                       f"Light is more likely to fit than Heavy. "
                        f"{duration} Costs {preview.stamina:.1f} stamina; ignored Feint has no effect.")
         elif label == "Shove":
             details = (f"Close-range strength/balance contest; a guard braces. Success pushes one clear tile and costs stability. "
                        f"{duration} Costs {preview.stamina:.1f} stamina; blocked destinations stop it.")
+        elif label == "Defend":
+            defense = choose_defend(state, player.id)
+            details = (f"Defend → {defense.response}. {defense.reason} "
+                       f"{duration} Costs {preview.stamina:.1f} stamina; adds {preview.fatigue:.1f} fatigue.")
         elif label == "Disengage":
-            details = (f"Move one tile away; no invulnerability, and same-tick strikes resolve first. "
-                       f"{duration} Costs {preview.stamina:.1f} stamina; choose a clear direction.")
+            details = (f"Deliberate one-tile spacing move; not invulnerability. Same-tick strikes resolve first, "
+                       f"and the destination must leave the committed threat. {duration} Costs {preview.stamina:.1f} stamina.")
+        elif label == "Dash+Light":
+            details = (f"Approach then commit a Light cut; the approach is exposed and the final sector locks. "
+                       f"{landing}{duration} Costs {preview.stamina:.1f} stamina; adds {preview.fatigue:.1f} fatigue.")
         elif label == "Thrust":
-            details = (f"Committed aimed strike; slower than Light, using ordinary reach, armor and wound rules. "
+            details = (f"Narrow straight reach-2 point attack; can be evaded sideways and stopped by a body or wall. "
                        f"{landing}{duration} Costs {preview.stamina:.1f} stamina. Blunt weapons cannot thrust.")
         elif label == "Disarm":
-            details = (f"Requires a parry-earned riposte. Clean, non-drifted hand contact must win the grip contest; "
+            opening = ""
+            if player.riposte and enemy_visible and enemy.stagger_until > state.tick:
+                fits = preview.strike_tick is not None and preview.strike_tick < enemy.stagger_until
+                opening = (f"Observed parry opening until t{enemy.stagger_until}; "
+                           f"this contact {'fits' if fits else 'arrives too late'}. ")
+            details = (f"Requires a parry-earned riposte. {opening}Clean, non-drifted hand contact must win the grip contest; "
                        f"guard may parry. {landing}{duration} Costs {preview.stamina:.1f} stamina.")
         elif label == "Adrenaline":
             rule = cfg["adrenaline"]
@@ -478,9 +601,47 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                        f"for {rule['duration_ticks']} ticks; no healing. Expiry adds {rule['fatigue_debt']:g} fatigue debt. "
                        f"{duration} Costs {preview.stamina:.1f} stamina.")
         else:
-            details = f"{landing}{duration} Costs {preview.stamina:.1f} stamina; "
-            details += (f"adds {preview.fatigue:.1f} fatigue. {preview.risk} "
-                        "Attack estimate: torso. Movement estimate: one tile down; choose direction for exact preview.")
+            details = (f"{landing}{duration} Costs {preview.stamina:.1f} stamina; "
+                       f"adds {preview.fatigue:.1f} fatigue. {preview.risk}")
+        intent = {
+            ActionKind.LIGHT: "quick cut",
+            ActionKind.HEAVY: "committed high-force cut",
+            ActionKind.THRUST: "narrow reach-2 line attack",
+            ActionKind.DASH_LIGHT: "close distance, then attack",
+            ActionKind.GUARD: "prepare a bounded blade response",
+            ActionKind.WALK: "reposition one tile",
+            ActionKind.RUN: "reposition quickly; longer route costs more",
+            ActionKind.DASH: "create or close space quickly",
+            ActionKind.DISENGAGE: "increase spacing if the step is timely",
+            ActionKind.FEINT: "test or disrupt a committed defense",
+            ActionKind.SHOVE: "contest balance and create space",
+            ActionKind.DISARM: "take a weapon only from a valid opening",
+            ActionKind.WAIT: "recover while accepting incoming risk",
+            ActionKind.BANDAGE: "treat bleeding over time",
+            ActionKind.EAT: "restore a resource after commitment",
+            ActionKind.DRINK: "restore a resource after commitment",
+        }.get(choice.kind, "complete the selected action")
+        read = "No current observed hostile commitment; its next choice is unknown."
+        if enemy_visible and enemy.action:
+            if choice.kind in {ActionKind.LIGHT, ActionKind.HEAVY, ActionKind.THRUST,
+                               ActionKind.DASH_LIGHT, ActionKind.DISARM}:
+                enemy_impact = enemy.action.strike_tick
+                if (enemy_impact is not None and player.pos in danger
+                        and preview.strike_tick is not None and enemy_impact <= preview.strike_tick):
+                    read = f"Observed threat reaches you at t{enemy_impact} before your contact."
+                elif enemy.action.end_tick is not None and preview.strike_tick is not None \
+                        and enemy.action.end_tick <= preview.strike_tick:
+                    read = (f"Current commitment ends at t{enemy.action.end_tick}; "
+                            "the opponent's next choice remains unknown.")
+                else:
+                    read = "Current commitments overlap; compare the locked geometry and contact deadlines."
+            elif choice.kind in {ActionKind.WALK, ActionKind.RUN, ActionKind.DASH,
+                                 ActionKind.DISENGAGE}:
+                read = "Movement is not invulnerability; the first step must beat contact and leave its locked sector."
+            else:
+                read = ("Current hostile commitment is visible; treatment/recovery can be interrupted if contact lands."
+                        if player.pos in danger else "Current hostile commitment is visible; next opportunity remains conditional.")
+        details += f" Intent: {intent}. {read}"
         return ActionOption(label, True, details)
     if player.grounded:
         crawl_choice = next((Choice(ActionKind.CRAWL, direction=direction, tiles=1)
@@ -494,23 +655,24 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         actions = () if playback else tuple(action_option(label, choice) for label, choice in grounded_actions)
     else:
         disengage_choice = next((Choice(ActionKind.DISENGAGE, direction=direction)
-                                 for direction in ((0, 1), (1, 0), (0, -1), (-1, 0),
-                                                   (1, 1), (-1, 1), (1, -1), (-1, -1))
-                                 if not legality(state, player.id,
-                                                 Choice(ActionKind.DISENGAGE, direction=direction))),
-                                Choice(ActionKind.DISENGAGE, direction=(0, 1)))
+                                  for direction in ((0, 1), (1, 0), (0, -1), (-1, 0),
+                                                    (1, 1), (-1, 1), (1, -1), (-1, -1))
+                                  if not legality(state, player.id,
+                                                  Choice(ActionKind.DISENGAGE, direction=direction))),
+                                 Choice(ActionKind.DISENGAGE, direction=(0, 1)))
         actions = () if playback else tuple(action_option(label, choice)
-                    for label, choice in (("Light", Choice(ActionKind.LIGHT, Zone.TORSO)),
-                                          ("Heavy", Choice(ActionKind.HEAVY, Zone.TORSO)),
-                                          ("Guard", Choice(ActionKind.GUARD)),
-                                          ("Dash", Choice(ActionKind.DASH, direction=(0, 1))),
-                                          ("Move", Choice(ActionKind.WALK, direction=(0, 1))),
-                                          ("Wait", Choice(ActionKind.WAIT)),
+                        for label, choice in (("Light", Choice(ActionKind.LIGHT, Zone.TORSO)),
+                                              ("Heavy", Choice(ActionKind.HEAVY, Zone.TORSO)),
+                                              ("Defend", choose_defend(state, player.id).choice),
+                                              ("Dash", Choice(ActionKind.DASH, direction=(0, 1))),
+                                              ("Move", Choice(ActionKind.WALK, direction=(0, 1))),
+                                              ("Run", Choice(ActionKind.RUN, direction=(0, 1))),
+                                              ("Wait", Choice(ActionKind.WAIT)),
                                           ("More", Choice(ActionKind.WAIT)),
-                                          ("Feint", Choice(ActionKind.FEINT)),
-                                          ("Shove", Choice(ActionKind.SHOVE)),
-                                          ("Disengage", disengage_choice),
-                                          ("Thrust", Choice(ActionKind.THRUST, Zone.TORSO)),
+                                           ("Feint", Choice(ActionKind.FEINT)),
+                                           ("Shove", Choice(ActionKind.SHOVE)),
+                                           ("Disengage", disengage_choice),
+                                              ("Thrust", Choice(ActionKind.THRUST, Zone.TORSO)),
                                           ("Disarm", Choice(ActionKind.DISARM, Zone.HAND)),
                                           ("Adrenaline", Choice(ActionKind.ADRENALINE))))
     names = {fighter.id: ("You" if fighter.id == player.id else fighter.name
@@ -532,7 +694,7 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     why = tuple(" | ".join(lines) for lines in why_by_tick.values())[-cfg["ui"]["why_history"]:]
     popup_types = {EventType.PARRY: "Parried!", EventType.BLOCK: "Blocked!", EventType.WHIFF: "Too far!", EventType.GUARD_BREAK: "Guard broken!",
                      EventType.INTERRUPT: "Interrupted!", EventType.STAGGER: "Staggered!", EventType.SEVER: "Hand severed!",
-                     EventType.HIT: "+pain", EventType.STATUS: "Changed", EventType.INJURY_RESPONSE: "Injury reflex",
+                      EventType.HIT: "+pain", EventType.WOUND: "Bleeding", EventType.STATUS: "Changed", EventType.INJURY_RESPONSE: "Injury reflex",
                     EventType.STABILITY: "Off balance!", EventType.FALL: "FALLEN!", EventType.RISE: "Rising!",
                     EventType.FEINT: "Feint", EventType.SHOVE: "Shove", EventType.DISARM: "Disarm",
                      EventType.ADRENALINE: "Adrenaline", EventType.WEAPON_STRESS: "Weapon wear",
@@ -544,8 +706,16 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     wounded_at = {(e.tick, e.target) for e in render_events if e.type == EventType.HIT}
     fatal_at = {(e.tick, e.target) for e in render_events if e.type == EventType.DECAPITATION}
     def popup_label(event):
+        if event.type == EventType.WHIFF and "OUTSIDE_LOCKED_ATTACK_GEOMETRY" in event.cause_tags:
+            return "Missed line"
+        if event.type == EventType.WOUND:
+            if group_combat and event.target != player.id:
+                return "Bleeding wound"
+            return f"Bleeding {event.zone.value.lower()}"
         if event.type == EventType.HIT:
             label = f"{event.severity.value} {event.zone.value.lower()}" if event.zone else event.severity.value
+            if event.deltas.get("impact_applied", 0) > 0:
+                label += " · impact"
             structure = event.deltas.get("structure")
             if structure:
                 label += " · " + structure.replace("_", " ").lower()
@@ -595,20 +765,26 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
             return "Unconscious"
         return popup_types[event.type]
     popups = tuple(Popup(state.fighter(event.actor if event.type in {EventType.WHIFF, EventType.STATUS, EventType.INJURY_RESPONSE}
-                          else event.target or event.actor).pos
+                           else event.target or event.actor).pos
                          if (event.actor if event.type in {EventType.WHIFF, EventType.STATUS, EventType.INJURY_RESPONSE}
                              else event.target or event.actor) in {fighter.id for fighter in state.fighters}
                          else enemy.pos,
                          popup_label(event),
                            event.type in {EventType.PARRY, EventType.GUARD_BREAK, EventType.SEVER,
-                                          EventType.WEAPON_BREAK, EventType.DECAPITATION}
-                          or event.type == EventType.INJURY_RESPONSE and event.deltas.get("response") == "RECOIL",
-                          event.tick)
-                     for event in render_events if event.type in popup_types
+                                           EventType.WEAPON_BREAK, EventType.DECAPITATION}
+                           or event.type == EventType.HIT and event.deltas.get("impact_applied", 0) > 0
+                           or event.type == EventType.INJURY_RESPONSE and event.deltas.get("response") == "RECOIL",
+                           event.tick,
+                           (0 if event.type != EventType.HIT else
+                            (1 if state.fighter(event.target).pos[0] > state.fighter(event.actor).pos[0] else
+                             -1 if state.fighter(event.target).pos[0] < state.fighter(event.actor).pos[0] else 0),
+                            1 if event.type == EventType.HIT and state.fighter(event.target).pos[1] > state.fighter(event.actor).pos[1] else
+                            -1 if event.type == EventType.HIT and state.fighter(event.target).pos[1] < state.fighter(event.actor).pos[1] else 0))
+                      for event in render_events if event.type in popup_types
                      and (event.type == EventType.DECAPITATION
                           or (event.tick, event.actor) not in fatal_at
                           and (event.tick, event.target) not in fatal_at)
-                     and (event.type != EventType.STABILITY or "loss" in event.deltas)
+                      and (event.type != EventType.STABILITY or "loss" in event.deltas)
                    and (event.type != EventType.STATUS or 'status' in event.deltas)
                    and (event.type != EventType.STATUS or (event.tick, event.actor) not in wounded_at)
                    and state.tick - event.tick < cfg["ui"]["popup_turns"] * cfg["time"]["ticks_per_turn"])
@@ -642,14 +818,29 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                 effect = "disarmed"
             if fighter.unconscious and wound.zone == Zone.HEAD:
                 effect = "unconscious"
-            consequence = effect.replace("_", " ") if effect else "bleeding/pain"
+            consequence = effect.replace("_", " ") if effect else "pain"
             bleed = wound.bleed_per_turn * (1-cfg["blood"]["bandage_reduction"] if wound.bandaged else 1)
-            rows.append(f"{wound.zone.value.title()} {wound.depth.lower()} {wound.structure.replace('_', ' ').lower()}: "
-                        f"{consequence}; bleed {bleed:g}/turn")
-        if fighter.permanent_injuries.hand_severed:
-            rows.append("Permanent injury: hand severed; cannot hold or pick up a weapon.")
+            bleed_text = (f"continuing bleed {bleed:g}/turn "
+                          f"({'partially bandaged' if wound.bandaged else 'untreated'})"
+                          if bleed > 0 else "no continuing bleed")
+            loss_text = (f"; one-off blood loss {wound.initial_blood_loss:g}"
+                         if wound.initial_blood_loss > 0 else "")
+            site = (f"{wound.side.lower()} " if wound.side else "") + wound.site.replace("_", " ").lower()
+            rows.append(f"{wound.zone.value.title()} — {site}; {wound.depth.lower()} "
+                        f"{wound.structure.replace('_', ' ').lower()}: "
+                        f"{consequence}; {bleed_text}{loss_text}")
+        for side in fighter.permanent_injuries.severed_hands:
+            if side == fighter.weapon_hand:
+                rows.append(f"Permanent injury: {side.lower()} weapon hand severed; cannot hold or pick up a weapon.")
+            else:
+                rows.append(f"Permanent injury: {side.lower()} supporting hand severed; one-handed weapon actions remain usable.")
+        if fighter.permanent_injuries.hand_severed and not fighter.permanent_injuries.severed_hands:
+            rows.append("Permanent injury: weapon hand severed (legacy side unknown); cannot hold or pick up a weapon.")
         if fighter.permanent_injuries.eyes_damaged:
-            rows.append(f"Permanent injury: {fighter.permanent_injuries.eyes_damaged} eye(s) impaired; accuracy reduced.")
+            vision = ("bilateral impairment prevents acquiring precise eye targets"
+                      if fighter.permanent_injuries.eyes_damaged == 2
+                      else "one eye impaired; precise eye targeting remains possible")
+            rows.append(f"Permanent injury: {fighter.permanent_injuries.eyes_damaged} eye(s) impaired; {vision}; Accuracy unchanged.")
         if fighter.decapitated:
             rows.append("Fatal injury: decapitation.")
         rows.append(weapon_status(fighter))
@@ -681,6 +872,7 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                                 + weapon_edge(fighter, cfg)}
     own = readout(player, eff)
     own.update({"fresh_"+key: value for key, value in readout(fresh, healthy).items()})
+    total_bleed_rate = min(cfg["blood"]["total_bleed_cap_per_turn"], sum(value for _, value in wounds))
     own.update({"light_cost": stamina_cost(player, cfg["actions"]["LIGHT"]["stamina"], cfg),
                 "dash_cost": stamina_cost(player, cfg["actions"]["DASH"]["stamina"], cfg),
                 "exhausted": float(player.exhausted), "bandages": player.bandages,
@@ -688,7 +880,7 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                 "disarmed": float(player.disarmed),
                 "unbandaged": float(any(w.bleed_per_turn > 0 and not w.bandaged for w in player.wounds)),
                 "no_dash": float(any(s.no_dash for s in player.statuses if s.active(state.tick))),
-                "riposte": float(player.riposte), "bleed": sum(value for _, value in wounds)})
+                "riposte": float(player.riposte), "bleed": total_bleed_rate})
     observed = {}
     for event in reversed(state.event_log):
         if event.actor == enemy.id and event.type == EventType.ACTION_START and "speed" in event.deltas:
@@ -719,10 +911,6 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         alerts.insert(0, f"{player_stability_state.replace('_', ' ')}: stability {player.stability:.0f}/100; heavy overreach/fast turns risk a fall")
     if own['light_ticks'] != own['fresh_light_ticks']:
         alerts.append(f"Next light {own['fresh_light_ticks']:g} → {own['light_ticks']:g}t (windup)")
-    for zone in ("ARM", "LEG", "HEAD", "EYE", "HAND"):
-        needed = cfg['zones']['difficulty'][zone]
-        if healthy.accuracy >= needed and eff.accuracy < needed:
-            alerts.append(f"{zone.title()} aim: ACC {eff.accuracy:.1f} < {needed:g}; may drift")
     if own['fresh_light_power'] >= cfg['wound_net']['cut'][0] > own['light_power']:
         alerts.append("Light power below cut threshold before armor")
     if player.exhausted:
@@ -730,12 +918,12 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     elif player.stamina < own['light_cost']:
         alerts.insert(0, f"Light needs {own['light_cost']:.1f} stamina; you have {player.stamina:.1f}")
     if own['bleed']:
-        alerts.append(f"Bleeding {own['bleed']:g}/turn before exertion; bandage stops part, not all")
+        alerts.append(f"Bleeding {own['bleed']:g} blood per turn (10 ticks) before exertion; bandage stops part, not all")
     effects = []
     for zone in Zone:
         parts = []
         cut = cfg['wounds'][zone.value].get('CUT', {})
-        for field, label in (("strength_mult", "force"), ("speed_mult", "speed"), ("accuracy_mult", "accuracy")):
+        for field, label in (("strength_mult", "force"), ("speed_mult", "speed")):
             if field in cut:
                 parts.append(f"{label} −{(1-cut[field])*100:g}%")
         effects.append((zone.value, "Cut: " + (", ".join(parts) if parts else "bleeding") + "; only if the hit gets through armor."))
@@ -745,7 +933,7 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
             if not status.active(state.tick):
                 continue
             changes = [f"{label} ×{getattr(status, field):g}" for field, label in
-                       (("strength_mult", "STR"), ("speed_mult", "SPD"), ("accuracy_mult", "ACC"))
+                       (("strength_mult", "STR"), ("speed_mult", "SPD"))
                        if getattr(status, field) != 1]
             if status.no_dash:
                 changes.append("no dash")
@@ -854,7 +1042,7 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                             enemy_observed=tuple(observed.items()) if enemy_visible and not group_combat else (),
                            combat_rules=(("deep", cfg['wound_net']['deep']), ("jitter", cfg['accuracy']['jitter']),
                                         ("parry_light", cfg['guard']['parry_str_ratio']['light']), ("parry_heavy", cfg['guard']['parry_str_ratio']['heavy']),
-                                        ("break_heavy", cfg['guard']['break_str_ratio']), ("heavy_accuracy", cfg['actions']['HEAVY']['acc_mod']),
+                                         ("break_heavy", cfg['guard']['break_str_ratio']),
                                          ("bandage_reduction", cfg['blood']['bandage_reduction']), ("cut", cfg['wound_net']['cut'][0])),
                            functional_alerts=tuple(alerts), target_effects=tuple(effects),
                              player_status_rows=(f"{player_stability_state.replace('_', ' ').title()}: "
@@ -885,11 +1073,14 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                                  enemy_weapon_status=weapon_status(enemy) if enemy_visible and not group_combat else "Weapon: unknown — group detail hidden",
                                player_hand_severed=player.hand_severed,
                                pickup_range=cfg["weapon_integrity"]["pickup_range"],
-                               actors=actor_summaries, target_options=target_options,
-                               threats=visible_threats,
-                                threat_overflow=max(0, len(target_options)-len(visible_threats)),
-                                enemy_visible=enemy_visible,
-                                 group_combat=group_combat)
+                            actors=actor_summaries, target_options=target_options,
+                            threats=visible_threats,
+                             threat_overflow=max(0, len(target_options)-len(visible_threats)),
+                             enemy_visible=enemy_visible,
+                             group_combat=group_combat,
+                             enemy_commitment=enemy_commitment,
+                             enemy_opportunity=enemy_opportunity,
+                             enemy_condition=enemy_condition)
 
 
 def bar(fraction, segments):
@@ -935,6 +1126,9 @@ def format_ascii(model):
                        f"hand:{'OPEN' if model.hand_exposed else 'closed'} | gap {model.gap} | t{model.tick}"]
                       if model.enemy_visible else ["No visible hostile; next action and range unknown.", f"t{model.tick}"])
     rows = [*enemy_rows,
+             f"COMMITMENT: {model.enemy_commitment}",
+             f"OPPORTUNITY: {model.enemy_opportunity}",
+             f"CONDITION: {model.enemy_condition}",
              *model.traits[:2], "-" * model.columns, *map_lines(model), "-" * model.columns]
     rows.append("Green: you | Red: Ronin | > exit" +
                 (" | w: ground weapon; More > Pickup" if model.ground_weapons else ""))
@@ -983,6 +1177,8 @@ def format_ascii(model):
     if model.player_grounded:
         rows.extend(["[Rise][Crawl][Cover]", model.instructions])
     else:
-        rows.extend(["[Light][Heavy][Guard][Dash]", "[Move][Wait][More]", model.instructions])
+        rows.extend(["[Light][Heavy][Thrust][Defend]", "[Dash][Move][Run][Dash+Light]",
+                     "[Feint][Shove][Disarm][Disengage]", "[Wait][Bandage][More][Sheet][Help]",
+                     model.instructions])
     return tuple(part for row in rows for part in (textwrap.wrap(row, width=model.columns,
                  replace_whitespace=False, drop_whitespace=False) or [""]))

@@ -31,10 +31,9 @@ def test_actions_lock_stats_timing_and_pay_cost_at_commit_not_completion():
     commit_action(state, fighter.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     action = fighter.action
     assert action.strike_tick == 2
-    assert action.end_tick == 6  # ceil(active .5) + ceil(recovery 2.5)
-    assert action.cost_paid == 6
-    assert fighter.stamina == 94
-    assert fighter.fatigue == pytest.approx(5.7)
+    assert action.end_tick == 4  # impact t2 + one contact tick + one recovery tick
+    assert action.cost_paid == pytest.approx(5.66)
+    assert fighter.stamina == pytest.approx(94.34)
     fighter.speed = 1
     assert action.strike_tick == 2 and action.locked_stats.speed == 20
     before = state.to_data()
@@ -43,15 +42,49 @@ def test_actions_lock_stats_timing_and_pay_cost_at_commit_not_completion():
     assert state.to_data() == before
 
 
+def test_matched_cutlass_novice_uses_approved_impact_ready_and_escape_targets():
+    from pirates.duel_system.session import DuelSession
+    session = DuelSession.new(guide_mode="off")
+    fighter, enemy = session.player, session.enemy
+    fighter.pos, enemy.pos = (4, 3), (5, 3)
+    expected_attacks = {
+        ActionKind.LIGHT: (3, 6, 6),
+        ActionKind.HEAVY: (7, 14, 14),
+        ActionKind.THRUST: (4, 9, 8),
+    }
+    for kind, (impact, ready, cost) in expected_attacks.items():
+        fighter.action = None
+        fighter.stamina, fighter.fatigue = 100, 0
+        action = commit_action(session.state, fighter.id,
+                               Choice(kind, Zone.TORSO, target_id=enemy.id))
+        assert (action.strike_tick, action.end_tick, action.cost_paid) == pytest.approx(
+            (impact, ready, cost), abs=0.01)
+
+    expected_movement = {
+        ActionKind.WALK: (4, 6, 3),
+        ActionKind.RUN: (3, 6, 5),
+        ActionKind.DASH: (2, 7, 9),
+    }
+    for kind, (step, ready, cost) in expected_movement.items():
+        fighter.action = None
+        fighter.stamina, fighter.fatigue = 100, 0
+        action = commit_action(session.state, fighter.id,
+                               Choice(kind, direction=(0, 1), tiles=1))
+        assert action.path[0][0] == step
+        assert (action.end_tick, action.cost_paid) == pytest.approx((ready, cost), abs=0.01)
+
+
 def test_walk_commits_until_end_and_run_updates_each_tile():
     state = arena()
     state.fighters[1].pos = (8, 0)
     commit_action(state, "player", Choice(ActionKind.WALK, direction=(0, 1)))
-    advance_to(state, 9)
+    advance_to(state, 3)
     assert state.fighters[0].pos == (0, 0)
     assert state.fighters[0].action.phase_at(state.tick) == "MOVE"
-    advance_to(state, 10)
+    advance_to(state, 4)
     assert state.fighters[0].pos == (0, 1)
+    assert state.fighters[0].action is not None  # movement landed; readiness is t6
+    advance_to(state, 6)
     assert state.fighters[0].action is None
     commit_action(state, "player", Choice(ActionKind.RUN, direction=(1, 0), tiles=2))
     scheduled = deepcopy(state.fighters[0].action.path)
@@ -68,17 +101,18 @@ def test_dash_light_skips_dash_recovery_and_scales_each_tile():
     fighter.speed = 20
     state.fighters[1].pos = (4, 0)
     commit_action(state, "player", Choice(ActionKind.DASH_LIGHT, Zone.HAND, (1, 0), 3))
-    assert fighter.action.path == [(2, (1, 0)), (4, (2, 0)), (6, (3, 0))]
-    assert fighter.action.strike_tick == 8
-    assert fighter.action.cost_paid == 14
-    assert fighter.fatigue == pytest.approx(13.3)
+    assert fighter.action.path == [(1, (1, 0)), (2, (2, 0)), (3, (3, 0))]
+    assert fighter.action.strike_tick == 5
+    assert fighter.action.end_tick == 8
+    assert fighter.action.cost_paid == pytest.approx(12.26)
 
 
 def test_reference_fighter_speed_gap_breaks_movement_ticks_not_action_count():
     from pirates.duel_system.session import DuelSession
-    expected = {"DASH": (2, 3), "RUN": (3, 4), "DASH_LIGHT": (2, 3)}
+    expected = {"DASH": (1, 2), "RUN": (2, 3), "DASH_LIGHT": (1, 2)}
     for action_name, (player_step, ronin_step) in expected.items():
         session = DuelSession.new(guide_mode="off")
+        session.player.speed, session.enemy.speed = 20, 14
         kind = ActionKind(action_name)
         if kind == ActionKind.DASH_LIGHT:
             player_choice = Choice(kind, Zone.TORSO, (1, 0), 3)
@@ -91,7 +125,7 @@ def test_reference_fighter_speed_gap_breaks_movement_ticks_not_action_count():
         assert player.path[0][0]-player.start_tick == player_step
         assert ronin.path[0][0]-ronin.start_tick == ronin_step
         if kind == ActionKind.DASH_LIGHT:
-            assert player.strike_tick == 9 and ronin.strike_tick == 12
+            assert player.strike_tick == 5 and ronin.strike_tick == 9
         assert len([event for event in session.state.event_log if event.type == EventType.ACTION_START]) == 2
 
 
@@ -99,19 +133,20 @@ def test_faster_reference_dash_gains_position_before_ronin_moves():
     from pirates.duel_system.session import DuelSession
     session = DuelSession.new(guide_mode="off")
     session.player.pos, session.enemy.pos = (4, 3), (8, 3)
+    session.player.speed, session.enemy.speed = 20, 14
     commit_action(session.state, session.player.id, Choice(ActionKind.DASH, direction=(1, 0), tiles=1))
     commit_action(session.state, session.enemy.id, Choice(ActionKind.DASH, direction=(-1, 0), tiles=1))
-    advance_to(session.state, 2)
+    advance_to(session.state, 1)
     assert session.player.pos == (5, 3)
     assert session.enemy.pos == (8, 3)
-    advance_to(session.state, 3)
+    advance_to(session.state, 2)
     assert session.enemy.pos == (7, 3)
 
 
 def test_fatigue_degrades_dash_timing_under_the_candidate_action_table():
     from pirates.duel_system.session import DuelSession
     session = DuelSession.new(guide_mode="off")
-    expected_deadlines = {0: 2, 35: 2, 60: 3, 85: 4}
+    expected_deadlines = {0: 2, 35: 3, 60: 4, 85: 5}
     for fatigue, deadline in expected_deadlines.items():
         fighter = session.player
         fighter.action = None
@@ -132,9 +167,9 @@ def test_strike_on_dash_step_tick_resolves_before_movement_and_does_not_evade():
     state.config["accuracy"]["jitter"] = 0
     dash = commit_action(state, player.id, Choice(ActionKind.DASH, direction=(-1, 0), tiles=1))
     attack = commit_action(state, enemy.id, Choice(ActionKind.LIGHT, Zone.TORSO))
-    assert dash.path[0][0] == attack.strike_tick == 2
-    advance_to(state, 2)
-    tick_events = [event.type for event in state.event_log if event.tick == 2]
+    assert dash.path[0][0] == attack.strike_tick == 1
+    advance_to(state, 1)
+    tick_events = [event.type for event in state.event_log if event.tick == 1]
     assert tick_events.index(EventType.HIT) < tick_events.index(EventType.MOVE)
     assert player.wounds and player.pos == (-1, 0)
 

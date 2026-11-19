@@ -4,15 +4,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from pirates.duel_system.ai import movement_choice, observe
+from pirates.duel_system.ai import movement_choice, observe, score_actions
 from pirates.duel_system.config import load_config
 from pirates.duel_system.engine import Choice, advance_one_tick, check_end_conditions, commit_action, legality
-from pirates.duel_system.model import ActionKind, CombatState, EventType, Personality, Zone
+from pirates.duel_system.model import ActionKind, CombatState, EventType, Personality, Severity, Wound, Zone
 from pirates.duel_system.perception import apply_witnessed_morale, refresh_contacts
 from pirates.duel_coach import coach, strategy_rows
 from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
 from pirates.duel_system.render_model import build_render_model, format_ascii
+from pirates.duel_system.exchange_log import format_exchange
 from test_duel_system_foundation import bare_fighter
 
 
@@ -55,6 +56,21 @@ def test_explicit_attack_target_is_locked_and_allies_are_not_legal_targets():
     assert not near.wounds
     hit = next(event for event in state.event_log if event.type == EventType.HIT)
     assert hit.target == "far"
+
+
+def test_hidden_target_eye_state_does_not_leak_through_target_legality():
+    outcomes = []
+    for eyes in (0, 2):
+        config = load_config()
+        config["group"]["vision_range"] = 1
+        player = bare_fighter("player", pos=(1, 1), team_id="player")
+        ally = bare_fighter("ally", pos=(1, 2), team_id="player")
+        target = bare_fighter("far", pos=(7, 1), team_id="raiders")
+        target.permanent_injuries.eyes_damaged = eyes
+        state = CombatState([player, ally, target], config=config)
+        outcomes.append(legality(state, player.id,
+                                 Choice(ActionKind.LIGHT, Zone.EYE, target_id=target.id)))
+    assert outcomes == ["Target is not currently visible"] * 2
 
 
 def test_simultaneous_contested_move_blocks_all_claimants_without_id_priority():
@@ -116,10 +132,10 @@ def test_melee_strike_cannot_pass_through_an_intervening_ally():
     player = bare_fighter("player", pos=(1, 1), team_id="player", strength=100, accuracy=100)
     ally = bare_fighter("ally", pos=(2, 2), team_id="player")
     enemy = bare_fighter("enemy", pos=(3, 1), team_id="raiders")
-    player.equipment.weapon.reach = 3
+    player.equipment.weapon.damage_type = "PIERCING"
     state = encounter(player, ally, enemy)
     action = commit_action(state, player.id,
-                           Choice(ActionKind.HEAVY, Zone.TORSO, target_id=enemy.id))
+                           Choice(ActionKind.THRUST, Zone.TORSO, target_id=enemy.id))
     ally.pos = (2, 1)
     while state.tick < action.strike_tick:
         advance_one_tick(state)
@@ -146,7 +162,7 @@ def test_v6_snapshot_migration_adds_team_and_target_defaults_without_changing_de
     old["config"].pop("group", None)
 
     restored = CombatState.from_data(old)
-    assert restored.config["schema_version"] == 7
+    assert restored.config["schema_version"] == 18
     assert restored.fighters[0].action.end_tick == deadline
     assert restored.fighters[0].team_id != restored.fighters[1].team_id
     assert restored.fighters[0].action.target_id is None
@@ -177,7 +193,7 @@ def test_v6_session_migration_preserves_active_path_deadlines_and_replay():
     expected_path = deepcopy(session.player.action.path)
 
     restored, replay = DuelSession.from_data(old), DuelSession.from_data(old)
-    assert restored.state.config["schema_version"] == 7
+    assert restored.state.config["schema_version"] == 18
     assert restored.player.action.end_tick == deadline
     assert restored.player.action.path == expected_path
     assert restored.exchange is not None and set(restored.exchange["participants"]) == {
@@ -405,8 +421,23 @@ def test_group_event_witnesses_and_rendering_do_not_reveal_occluded_choice_or_st
     event = state.emit(EventType.ACTION_START, hidden.id, player.id,
                        deltas={"kind": "HEAVY", "strength": 99})
     assert player.id not in event.witnesses
+    hidden_wound = state.emit(EventType.WOUND, hidden.id, blocker.id, Zone.TORSO,
+                              Severity.DEEP, deltas={"bleed_per_turn": 6})
+    hidden_bleed = state.emit(EventType.POOL_CHANGE, hidden.id,
+                              deltas={"blood": -0.42, "bleed_loss": 0.42,
+                                      "bleed_rate_per_turn": 6},
+                              cause_tags=("BLEEDING",))
+    assert player.id not in hidden_wound.witnesses + hidden_bleed.witnesses
     blocker.strength, blocker.stamina, blocker.fatigue, blocker.blood = 99, 1, 90, 12
     session = DuelSession.from_state(state, guide_mode="off")
+    ui = DuelUI(session, rounds=True)
+    assert hidden_wound not in ui._public_exchange_events([hidden_wound, hidden_bleed])
+    assert hidden_bleed not in ui._public_exchange_events([hidden_wound, hidden_bleed])
+    private_recap = format_exchange([hidden_bleed], {hidden.id: "Unknown hostile"},
+                                    private_actor_ids={hidden.id})
+    assert any("appears to be bleeding" in line and "exact blood loss and rate are unknown" in line
+               for line in private_recap)
+    assert all("0.42" not in line and "6/turn" not in line for line in private_recap)
     before = state.to_data()
     model = build_render_model(state, session.notebook.public_view(), guide_mode="off")
     assert model.enemy_name == "Blocker"
@@ -417,6 +448,8 @@ def test_group_event_witnesses_and_rendering_do_not_reveal_occluded_choice_or_st
     assert all("99" not in value for value in model.comparison)
     assert all("hidden" not in line and "99" not in line and "heavy" not in line.lower()
                for line in model.full_log)
+    assert all("bleed_loss" not in line and "bleeding wound" not in line.lower()
+               for line in model.full_log)
     assert all(actor.actor_id != "hidden" for actor in model.actors)
     assert state.to_data() == before
 
@@ -425,6 +458,56 @@ def test_group_event_witnesses_and_rendering_do_not_reveal_occluded_choice_or_st
     hidden.personality = object()
     public_after = build_render_model(state, session.notebook.public_view(), guide_mode="off")
     assert public_after == model
+
+
+def test_witnessed_group_wound_gets_coarse_bleeding_cue_without_private_rate():
+    player = bare_fighter("player", pos=(1, 1), team_id="players")
+    enemy = bare_fighter("enemy", pos=(2, 1), team_id="raiders")
+    ally = bare_fighter("ally", pos=(1, 2), team_id="players")
+    state = encounter(player, enemy, ally)
+    state.emit(EventType.WOUND, player.id, enemy.id, Zone.TORSO, Severity.DEEP,
+               deltas={"bleed_per_turn": 6})
+    session = DuelSession.from_state(state, guide_mode="off")
+    model = build_render_model(state, session.notebook.public_view(), guide_mode="off")
+    assert any("bleeding wound" in line.lower() for line in model.full_log)
+    assert any(popup.text == "Bleeding wound" for popup in model.popups)
+    assert not model.enemy_wounds and not model.enemy_pools
+    assert all("6/turn" not in line and "bleed_per_turn" not in line for line in model.full_log)
+
+
+def test_group_ai_observation_and_scores_ignore_unobserved_exact_enemy_pools_wounds_and_strength():
+    player = bare_fighter("player", pos=(1, 1), team_id="players")
+    enemy = bare_fighter("enemy", pos=(2, 1), team_id="raiders")
+    ally = bare_fighter("ally", pos=(1, 2), team_id="players")
+    state = encounter(player, enemy, ally)
+    event = state.emit(EventType.WOUND, player.id, enemy.id, Zone.TORSO, Severity.CUT,
+                       deltas={"bleed_per_turn": 3})
+    assert player.id in event.witnesses
+    baseline_view = observe(state, player.id)
+    baseline_scores = score_actions(state, player.id)
+    altered = state.clone()
+    changed = altered.fighter(enemy.id)
+    changed.blood, changed.strength = 1, 99
+    changed.wounds = []
+    changed.wounds.append(Wound(Zone.HEAD, Severity.DEEP, 20))
+    changed.stability = 0
+    assert observe(altered, player.id) == baseline_view
+    assert score_actions(altered, player.id) == baseline_scores
+    assert baseline_view.opponent_bleeding
+    assert baseline_view.opponent_blood == state.config["blood"]["start"]
+    assert baseline_view.opponent_strength == state.config["defaults"]["strength"]
+
+
+def test_group_ai_unsteady_opening_uses_fresh_witnessed_state_only():
+    player = bare_fighter("player", pos=(1, 1), team_id="players")
+    enemy = bare_fighter("enemy", pos=(2, 1), team_id="raiders")
+    ally = bare_fighter("ally", pos=(1, 2), team_id="players")
+    state = encounter(player, enemy, ally)
+    state.emit(EventType.STABILITY, enemy.id,
+               deltas={"source": "HIT_IMPACT", "loss": 12, "band": "OFF_BALANCE"})
+    assert observe(state, player.id).opponent_unsteady
+    state.tick = state.config["time"]["ticks_per_turn"] + 1
+    assert not observe(state, player.id).opponent_unsteady
 
 
 def test_hearing_only_contact_is_coarse_and_expires_without_revealing_location():

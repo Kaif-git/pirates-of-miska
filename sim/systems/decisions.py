@@ -9,6 +9,8 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
+from sim.core.ownership import ship_is_commandable
+
 
 ACTIONS_PATH = Path(__file__).resolve().parents[1] / "data" / "actions.json"
 _TRAITS = {"ambition", "honor", "greed", "loyalty", "cruelty", "curiosity",
@@ -21,7 +23,8 @@ _DREAM_KINDS = {
     "free_island", "become_wealthiest", "defeat_character", "find_person",
     "protect_entity", "reach_legend_tier",
 }
-_LOOP_RULES = {"loop_max_sequence_length", "loop_repeat_limit", "loop_penalty"}
+_LOOP_RULES = {"loop_max_sequence_length", "loop_repeat_limit", "loop_penalty",
+               "grudge_target_cooldown_days"}
 
 
 def load_action_data(path: str | Path = ACTIONS_PATH) -> tuple[dict[str, Any], str]:
@@ -109,6 +112,7 @@ def validate_action_data(data: Any) -> None:
             or rules["top_k"] < 1 or rules["top_k"] > 10
             or rules["recency_window_ticks"] < 1
             or rules["selection_temperature_base"] < 1
+            or rules["grudge_target_cooldown_days"] < 1
             or rules["debug_history_limit"] < 1):
         raise ValueError("Invalid action scoring rules")
     actions = data["actions"]
@@ -259,7 +263,8 @@ class DecisionSystem:
             return []
         result = []
         for action_id, definition in sorted(self.data["actions"].items()):
-            if self._eligible(world, agent, definition["precondition"]):
+            if (self._eligible(world, agent, definition["precondition"])
+                    and self._can_afford_action(world, agent, action_id, definition)):
                 result.append(action_id)
         return result
 
@@ -420,7 +425,8 @@ class DecisionSystem:
                 or state["last_executed_decision_number"] == choice["decision_number"]):
             raise ValueError("Action choice is stale or has already executed")
         definition = self.data["actions"].get(choice["action_id"])
-        if definition is None or not self._eligible(world, agent, definition["precondition"]):
+        if (definition is None or not self._eligible(world, agent, definition["precondition"])
+                or not self._can_afford_action(world, agent, choice["action_id"], definition)):
             raise ValueError("Action preconditions no longer hold")
         world.event_log.get(choice["caused_by"])
         location = world.location_of(agent_id)
@@ -433,18 +439,41 @@ class DecisionSystem:
         tags = ["agent_decision", f"action:{choice['action_id']}"]
         if grudge_target_id is not None:
             tags.append("grudge")
+        raid_ship_id = None
+        crew_id = agent.get("crew_id")
+        cost = definition["silver_cost"]
+        if definition["handler"] == "pursue_grudge":
+            if grudge_target_id is None:
+                raise ValueError("No living reachable grievance target remains for this action")
+            raid_ship_id = self._grudge_ship_for_target(world, agent, grudge_target_id)
+            if raid_ship_id is None:
+                raise ValueError("Grudge target is no longer reachable by the agent's crew")
+            crew = world.crew_ships.crews.get(crew_id)
+            account = world.economy.crew_accounts.get(crew_id)
+            if (not crew or not account or crew["treasury_silver"] != account["treasury_silver"]
+                    or account["treasury_silver"] < cost):
+                raise ValueError("Crew treasury cannot afford this grudge action")
+        action_data = {"action_id": choice["action_id"],
+                       "decision_number": choice["decision_number"],
+                       "score": choice["score"], "cost": definition["time_cost_ticks"],
+                       "expected_gain": definition["expected_gain"],
+                       "expected_loss": definition["expected_loss"],
+                       "target_id": grudge_target_id}
+        if definition["handler"] == "pursue_grudge" and cost:
+            action_data.update({"crew_id": crew_id, "silver_cost": cost,
+                                "ledger_sink": {"silver": cost, "goods": {}}})
         action_event = world.event_log.append(
             tick=world.clock.tick, event_type="AGENT_ACTION", location=location["id"],
             actors=[{"role": "agent", "entity_id": agent_id}],
-            data={"action_id": choice["action_id"], "decision_number": choice["decision_number"],
-                  "score": choice["score"], "cost": definition["time_cost_ticks"],
-                  "expected_gain": definition["expected_gain"],
-                  "expected_loss": definition["expected_loss"],
-                  "target_id": grudge_target_id},
+            data=action_data,
             caused_by=parents, causes_tags=tags, magnitude=0.05,
             event_class=("narrative" if definition["handler"] in {
                 "advance_dream", "pursue_grudge"} else "routine"),
         )
+        if definition["handler"] == "pursue_grudge" and cost:
+            crew["treasury_silver"] -= cost
+            world.economy.crew_accounts[crew_id]["treasury_silver"] -= cost
+            world.economy.ledger.record_sink(action_event.id, silver=cost)
         handler = definition["handler"]
         if handler == "advance_dream":
             dream = agent["dream"]
@@ -483,24 +512,30 @@ class DecisionSystem:
                 world, merchant_id, plan, caused_by=action_event.id)
             result_id = route_event_id
         elif handler == "pursue_grudge":
-            if grudge_target_id is None:
-                raise ValueError("No living grievance target remains for this action")
             grievance = agent["opinions"][grudge_target_id]["grievance"]
+            target = world.entities[grudge_target_id]
+            actor_location = world.location_of(agent_id)
+            target_location = world.location_of(grudge_target_id)
             pursuit = world.event_log.append(
                 tick=world.clock.tick, event_type="GRUDGE_PURSUED", location=location["id"],
                 actors=[{"role": "avenger", "entity_id": agent_id}],
                 targets=[{"role": "rival", "entity_id": grudge_target_id}],
-                data={"grievance": grievance, "action_id": choice["action_id"]},
+                data={"grievance": grievance, "action_id": choice["action_id"],
+                      "ship_id": raid_ship_id,
+                      "actor_location_id": actor_location["id"],
+                      "target_location_id": target_location["id"]},
                 caused_by=[action_event.id], causes_tags=["grudge", "revenge_pursuit"],
                 magnitude=min(1.0, grievance / 100),
             )
             raid_event = world.event_log.append(
                 tick=world.clock.tick, event_type="FEUD_RAID_ATTEMPTED",
-                location=world.location_of(grudge_target_id)["id"],
+                location=target_location["id"],
                 actors=[{"role": "raider", "entity_id": agent_id}],
                 targets=[{"role": "raided_rival", "entity_id": grudge_target_id}],
                 data={"outcome": "repelled", "material_transfer": False,
-                      "grievance": grievance},
+                      "grievance": grievance, "ship_id": raid_ship_id,
+                      "actor_location_id": actor_location["id"],
+                      "target_location_id": target_location["id"]},
                 caused_by=[pursuit.id], causes_tags=["grudge", "retaliation", "feud_escalation"],
                 magnitude=0.35,
             )
@@ -775,10 +810,19 @@ class DecisionSystem:
             key = (location.get("kind"), location.get("id"), location.get("from"), location.get("to"))
             cohorts.setdefault(key, []).append(agent_id)
         rules = self.ai_data["belief_rules"]
+        # Snapshot each list so same-day transfers cannot cascade, but retain the
+        # immutable-by-convention belief records instead of JSON-round-tripping them.
         source_beliefs = {
-            agent_id: json.loads(json.dumps(self.agents.get(agent_id, {}).get("beliefs", [])))
+            agent_id: tuple(self.agents.get(agent_id, {}).get("beliefs", ()))
             for agent_id in sorted(world.entities)
         }
+        belief_observed_ticks = {}
+        for agent_id, beliefs in source_beliefs.items():
+            observed = {}
+            for belief in beliefs:
+                observed.setdefault(
+                    (belief["subject_id"], belief["attribute"]), belief["observed_tick"])
+            belief_observed_ticks[agent_id] = observed
         source_last_events = {
             agent_id: world.entities[agent_id]["last_event_id"]
             for agent_id in sorted(source_beliefs)
@@ -793,11 +837,13 @@ class DecisionSystem:
                 if not beliefs:
                     continue
                 for belief in beliefs:
+                    belief_key = (belief["subject_id"], belief["attribute"])
                     for recipient_id in cohort:
                         if recipient_id == sender_id:
                             continue
-                        existing = self.belief(recipient_id, belief["subject_id"], belief["attribute"])
-                        if existing and existing["observed_tick"] >= belief["observed_tick"]:
+                        observed_tick = belief_observed_ticks.get(recipient_id, {}).get(
+                            belief_key)
+                        if observed_tick is not None and observed_tick >= belief["observed_tick"]:
                             continue
                         recipient = world.entities[recipient_id]
                         sociability = (sender["traits"]["sociability"]
@@ -805,15 +851,17 @@ class DecisionSystem:
                         probability = min(10000, rules["share_base_basis_points"]
                                           + sociability
                                           * rules["share_sociability_basis_points_per_point"])
-                        belief_key = hashlib.sha256(
+                        belief_digest = hashlib.sha256(
                             f"{belief['subject_id']}\u001f{belief['attribute']}".encode("utf-8")
                         ).hexdigest()
-                        stream_name = f"belief-share:{day}:{sender_id}:{recipient_id}:{belief_key}"
+                        stream_name = (
+                            f"belief-share:{day}:{sender_id}:{recipient_id}:{belief_digest}")
                         rng = world.rng.stream(stream_name)
                         if rng.randbelow(10000) >= probability:
                             continue
                         distorted = False
                         value = belief["value"]
+                        original_value = value
                         if (type(value) is int
                                 and rng.randbelow(10000) < rules["distortion_basis_points"]):
                             delta = rng.randint(-rules["max_distortion_permille"],
@@ -835,6 +883,7 @@ class DecisionSystem:
                             targets=[{"role": "recipient", "entity_id": recipient_id}],
                             data={"subject_id": belief["subject_id"],
                                   "attribute": belief["attribute"], "value": value,
+                                  "original_value": original_value,
                                   "confidence_permille": confidence, "distorted": distorted,
                                   "original_source_event": source_event_id},
                             caused_by=causes,
@@ -846,6 +895,15 @@ class DecisionSystem:
                             world, recipient_id, belief["subject_id"], belief["attribute"],
                             value, source_event_id=event.id, confidence_permille=confidence,
                             source_kind="rumor", source_agent_id=sender_id)
+                        recipient_state = self.agents[recipient_id]
+                        stored = next((row for row in recipient_state["beliefs"]
+                                       if (row["subject_id"], row["attribute"]) == belief_key),
+                                      None)
+                        recipient_index = belief_observed_ticks.setdefault(recipient_id, {})
+                        if stored is None:
+                            recipient_index.pop(belief_key, None)
+                        else:
+                            recipient_index[belief_key] = stored["observed_tick"]
                         recipient["last_event_id"] = event.id
 
     def set_event_cursor(self, cursor: int) -> None:
@@ -982,6 +1040,11 @@ class DecisionSystem:
     def _eligible(self, world, agent: dict[str, Any], precondition: str) -> bool:
         if agent.get("kind") != "character" or agent.get("death_tick") is not None:
             return False
+        if agent.get("missing_at_sea") is not None:
+            return False
+        prisoner = world.encounters.prisoners.get(agent["id"])
+        if prisoner is not None and prisoner.get("status") == "held":
+            return False
         if precondition == "living_character_with_dream":
             return isinstance(agent.get("dream"), dict) and bool(agent["dream"].get("kind"))
         if precondition == "living_character_with_grudge":
@@ -989,10 +1052,15 @@ class DecisionSystem:
         crew_id = agent.get("crew_id")
         crew = world.crew_ships.crews.get(crew_id)
         if precondition == "crew_at_island_below_full_morale":
-            return bool(crew and crew["morale"] < 100
-                        and world.location_of(crew["ship_ids"][0]).get("kind") == "island")
+            if not crew or crew["morale"] >= 100:
+                return False
+            if crew["ship_ids"]:
+                return bool(ship_is_commandable(world, crew["ship_ids"][0])
+                            and world.location_of(crew["ship_ids"][0]).get("kind") == "island")
+            return crew.get("stranded_location", {}).get("kind") == "island"
         if precondition == "captain_with_profitable_trade_route":
-            if not crew or crew.get("captain_id") != agent["id"]:
+            if (not crew or not crew["ship_ids"]
+                    or crew.get("captain_id") != agent["id"]):
                 return False
             ship_id = crew["ship_ids"][0]
             merchant_id = next((key for key, row in world.economy.merchants.items()
@@ -1000,18 +1068,72 @@ class DecisionSystem:
             return merchant_id is not None and world.economy.best_trade_route(world, merchant_id) is not None
         raise ValueError(f"Unknown action precondition: {precondition}")
 
+    @staticmethod
+    def _can_afford_action(world, agent: dict[str, Any], action_id: str,
+                           definition: dict[str, Any]) -> bool:
+        cost = definition["silver_cost"]
+        if cost <= 0:
+            return True
+        if definition["handler"] != "pursue_grudge":
+            return False
+        crew_id = agent.get("crew_id")
+        crew = world.crew_ships.crews.get(crew_id)
+        account = world.economy.crew_accounts.get(crew_id)
+        return bool(crew and account
+                    and crew["treasury_silver"] == account["treasury_silver"]
+                    and account["treasury_silver"] >= cost)
+
     def _grudge_target_id(self, world, agent: dict[str, Any]) -> str | None:
         threshold = world.memories.rules_data["rules"]["revenge_want_threshold"]
+        time = world.config["time"]
+        ticks_per_day = time["hours_per_day"] // time["hours_per_tick"]
+        cooldown = self.data["rules"]["grudge_target_cooldown_days"] * ticks_per_day
+        recently_pursued = set()
+        for event in reversed(world.event_log.by_entity_type(
+                agent["id"], "FEUD_RAID_ATTEMPTED")):
+            if world.clock.tick - event.tick >= cooldown:
+                break
+            if not any(actor.get("role") == "raider"
+                       and actor.get("entity_id") == agent["id"]
+                       for actor in event.actors):
+                continue
+            if any(target.get("role") == "raided_rival"
+                   for target in event.targets):
+                target_id = next((target.get("entity_id") for target in event.targets
+                                  if target.get("role") == "raided_rival"), None)
+                if target_id:
+                    recently_pursued.add(target_id)
         eligible = [
             (record["grievance"], target_id)
             for target_id, record in agent.get("opinions", {}).items()
-            if record.get("grievance", 0) >= threshold
+            if target_id not in recently_pursued
+            and record.get("grievance", 0) >= threshold
             and (target := world.entities.get(target_id)) is not None
             and target.get("kind") == "character" and target.get("death_tick") is None
+            and self._grudge_ship_for_target(world, agent, target_id) is not None
         ]
         if not eligible:
             return None
         return min(eligible, key=lambda row: (-row[0], row[1]))[1]
+
+    @staticmethod
+    def _grudge_ship_for_target(world, agent: dict[str, Any], target_id: str) -> str | None:
+        """Return an active crew vessel only when the agent and rival share its location."""
+        crew_id = agent.get("crew_id")
+        crew = world.crew_ships.crews.get(crew_id)
+        if not crew or agent["id"] not in crew["roster"]:
+            return None
+        actor_location = world.location_of(agent["id"])
+        target_location = world.location_of(target_id)
+        if (actor_location.get("kind") not in {"island", "route"}
+                or actor_location != target_location):
+            return None
+        for ship_id in sorted(crew["ship_ids"]):
+            ship = world.entities.get(ship_id)
+            if (ship and world.ship_is_commandable(ship_id)
+                    and world.location_of(ship_id) == actor_location):
+                return ship_id
+        return None
 
     @staticmethod
     def _new_agent_state() -> dict[str, Any]:

@@ -1,3 +1,4 @@
+import copy
 import json
 import hashlib
 from pathlib import Path
@@ -114,6 +115,156 @@ def test_schema_16_snapshot_migrates_event_classes_without_changing_history():
     assert all(event.event_class in {"routine", "narrative", "structural"}
                for event in restored.event_log)
     assert restored.event_log.get("event_000001").event_class == "structural"
+
+
+def test_schema_17_snapshot_backfills_canonical_ship_authority_after_capture():
+    world = WorldState.create("schema17-ship-authority")
+    world.encounters.data["rules"].update({
+        "boarding_threshold_basis_points": 10000,
+        "surrender_morale_threshold": 100,
+        "surrender_basis_points": 10000,
+        "ship_capture_basis_points": 10000,
+    })
+    ships = sorted(ship_id for ship_id, row in world.entities.items()
+                   if row.get("kind") == "ship")[:2]
+    world.entities[ships[1]]["location"] = dict(world.entities[ships[0]]["location"])
+    causes = [world.crew_ships.crews[world.entities[ship_id]["crew_id"]]["last_event_id"]
+              for ship_id in ships]
+    result_id = world.encounters.resolve(
+        world, *ships, caused_by=causes,
+        stances={ships[0]: "attack", ships[1]: "attack"}, force_combat=True)
+    captured_id = world.event_log.get(result_id).data["outcome_details"]["captured_ship_id"]
+
+    prior = world.to_snapshot()
+    prior["snapshot_schema_version"] = 17
+    for table_name in ("entities", "archive"):
+        for row in prior[table_name].values():
+            if row.get("kind") == "ship":
+                row.pop("legal_owner", None)
+                row.pop("controller_crew_id", None)
+                row.pop("ownership_event_id", None)
+
+    restored = WorldState.from_snapshot(prior)
+    captured = restored.entities[captured_id]
+
+    acquired = next(event for event in reversed(restored.event_log.by_type("SHIP_ACQUIRED"))
+                    if any(target["entity_id"] == captured_id for target in event.targets))
+    assert captured["legal_owner"] == {
+        "kind": acquired.data["legal_owner_kind"],
+        "id": acquired.data["legal_owner_id"]}
+    assert captured["controller_crew_id"] == acquired.data["controller_crew_id"]
+    assert restored.ship_is_commandable(captured_id)
+    assert restored.to_snapshot()["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
+
+
+def test_schema_18_snapshot_migrates_faction_coalition_membership_fields():
+    world = WorldState.create("schema18-coalition-migration")
+    expected_factions = copy.deepcopy(world.politics.factions)
+    prior = world.to_snapshot()
+    prior["snapshot_schema_version"] = 18
+    for registry in ("factions", "archived_factions"):
+        for faction in prior["politics"][registry].values():
+            for field in ("member_crew_ids", "founder_id", "anchorage_island_id", "purpose"):
+                faction.pop(field, None)
+
+    restored = WorldState.from_snapshot(prior)
+
+    assert restored.politics.factions == expected_factions
+    assert restored.to_snapshot()["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
+
+
+def test_snapshot_preserves_explicitly_uncommanded_ship_with_onboard_crew(tmp_path):
+    world = WorldState.create("explicitly-uncommanded-hull")
+    ship_id = sorted(ship_id for ship_id, row in world.entities.items()
+                     if row.get("kind") == "ship")[0]
+    ship = world.entities[ship_id]
+    crew_id = ship["crew_id"]
+    acquisition = world.event_log.append(
+        tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+        targets=[{"role": "acquired_ship", "entity_id": ship_id}],
+        data={"legal_owner_kind": "crew", "legal_owner_id": crew_id,
+              "controller_crew_id": None},
+        caused_by=[ship["ownership_event_id"]], causes_tags=["abandoned_hull"],
+        magnitude=0.1)
+    world.assign_ship_title(ship_id, owner_kind="crew", owner_id=crew_id,
+                            controller_crew_id=None, event_id=acquisition.id)
+
+    restored = WorldState.load(world.save(tmp_path / "uncommanded.json"))
+
+    assert restored.entities[ship_id]["crew_id"] == crew_id
+    assert restored.entities[ship_id]["controller_crew_id"] is None
+    assert restored.entities[ship_id]["captured_by_crew_id"] is None
+    assert not restored.ship_is_commandable(ship_id)
+
+
+def test_active_merchant_title_must_match_its_unique_vessel():
+    world = WorldState.create("unique-merchant-title")
+    merchant_id, merchant = sorted(world.economy.merchants.items())[0]
+    ship = world.entities[merchant["ship_id"]]
+    assert ship["legal_owner"] == {"kind": "merchant", "id": merchant_id}
+
+    other_merchant_id = next(
+        candidate for candidate in sorted(world.economy.merchants)
+        if candidate != merchant_id)
+    ship["legal_owner"] = {"kind": "merchant", "id": other_merchant_id}
+
+    with pytest.raises(ValueError, match="unique vessel"):
+        world.to_snapshot()
+
+
+def test_recapture_is_a_new_causal_title_transfer_not_a_replayed_claim():
+    world = WorldState.create("causal-recapture")
+    ship_id = sorted(ship_id for ship_id, row in world.entities.items()
+                     if row.get("kind") == "ship")[0]
+    ship = world.entities[ship_id]
+    merchant_id = next(mid for mid, merchant in world.economy.merchants.items()
+                       if merchant["ship_id"] == ship_id)
+    crew_id = ship["crew_id"]
+    old_event_id = ship["ownership_event_id"]
+    captured = world.event_log.append(
+        tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+        targets=[{"role": "acquired_ship", "entity_id": ship_id}],
+        data={"method": "capture", "previous_owner": ship["legal_owner"],
+              "previous_controller_crew_id": ship["controller_crew_id"],
+              "legal_owner_kind": "crew",
+              "legal_owner_id": crew_id, "controller_crew_id": crew_id},
+        caused_by=[old_event_id], causes_tags=["test_capture"], magnitude=0.1)
+    world.assign_ship_title(ship_id, owner_kind="crew", owner_id=crew_id,
+                            controller_crew_id=crew_id, event_id=captured.id)
+    recaptured = world.event_log.append(
+        tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+        targets=[{"role": "acquired_ship", "entity_id": ship_id}],
+        data={"method": "recapture", "previous_owner": ship["legal_owner"],
+              "previous_controller_crew_id": ship["controller_crew_id"],
+              "legal_owner_kind": "merchant",
+              "legal_owner_id": merchant_id, "controller_crew_id": crew_id},
+        caused_by=[captured.id], causes_tags=["test_recapture"], magnitude=0.1)
+    world.assign_ship_title(ship_id, owner_kind="merchant", owner_id=merchant_id,
+                            controller_crew_id=crew_id, event_id=recaptured.id)
+    with pytest.raises(ValueError, match="replay or precede"):
+        world.assign_ship_title(ship_id, owner_kind="crew", owner_id=crew_id,
+                                controller_crew_id=crew_id, event_id=captured.id)
+
+    assert ship["legal_owner"] == {"kind": "merchant", "id": merchant_id}
+    assert ship["ownership_event_id"] == recaptured.id
+    assert world.ship_is_commandable(ship_id)
+    assert [event.id for event in world.event_log.by_type("SHIP_ACQUIRED")
+            if any(target["entity_id"] == ship_id for target in event.targets)] == [
+                captured.id, recaptured.id]
+
+    stale_claim = world.event_log.append(
+        tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+        targets=[{"role": "acquired_ship", "entity_id": ship_id}],
+        data={"method": "recapture", "previous_owner": {"kind": "crew", "id": crew_id},
+              "previous_controller_crew_id": crew_id,
+              "legal_owner_kind": "crew", "legal_owner_id": crew_id,
+              "controller_crew_id": crew_id},
+        caused_by=[captured.id], causes_tags=["stale_same_tick_claim"], magnitude=0.1)
+    with pytest.raises(ValueError, match="stale against the current legal owner"):
+        world.assign_ship_title(ship_id, owner_kind="crew", owner_id=crew_id,
+                                controller_crew_id=crew_id, event_id=stale_claim.id)
+    assert ship["legal_owner"] == {"kind": "merchant", "id": merchant_id}
+    assert ship["ownership_event_id"] == recaptured.id
 
 
 def test_saved_snapshot_is_canonical_and_loadable(tmp_path):

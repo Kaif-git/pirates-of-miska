@@ -1,6 +1,8 @@
 from pirates.duel_scene import ExchangePlayback
 from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
+from dataclasses import replace
+from pirates.duel_system.render_model import Popup
 
 
 def test_playback_records_real_independent_commitments_and_intermediate_moves():
@@ -35,6 +37,23 @@ def test_playback_uses_engine_easing_not_teleportation():
     start, end = ui.playback[index].player_pos, ui.playback[index+1].player_pos
     assert start[1] < positions[0][1] < end[1]
     assert not done
+
+
+def test_flinch_playback_is_bounded_within_tile_and_disabled_by_reduced_motion():
+    ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+    model = ui.model()
+    enemy = next(actor for actor in model.actors if not actor.is_player)
+    end = replace(model, tick=model.tick+1,
+                  popups=(Popup(enemy.pos, "Flinched", True, model.tick+1),))
+    normal = ExchangePlayback((model, end), started=0)
+    sample_time = normal.tell + normal.step/2
+    _, positions, _, _ = normal.sample(sample_time)
+    by_id = {actor.actor_id: position for actor, position in zip(model.actors, positions)}
+    assert 0 < by_id[enemy.actor_id][0]-enemy.pos[0] <= .161
+    assert by_id[enemy.actor_id][1] == enemy.pos[1]
+    reduced = ExchangePlayback((model, end), started=0, reduced_motion=True)
+    _, reduced_positions, _, _ = reduced.sample(sample_time)
+    assert reduced_positions == tuple(actor.pos for actor in model.actors)
 
 
 def test_commitment_is_visible_before_first_movement():

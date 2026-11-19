@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from sim.core.names import living_name_in_use, validate_living_names
+from sim.core.ownership import ship_is_commandable
 
 
 CREWS_SHIPS_PATH = Path(__file__).resolve().parents[1] / "data" / "crews_ships.json"
@@ -167,7 +168,9 @@ class CrewShipSystem:
                 actors=[{"role": "captain", "entity_id": captain_id}],
                 targets=[{"role": "ship", "entity_id": ship_id}],
                 data={"crew_id": crew_id, "name": name, "roster": roster,
-                      "ship_id": ship_id, "roles": role_map},
+                      "ship_id": ship_id, "roles": role_map,
+                      "legal_owner_kind": "merchant", "legal_owner_id": merchant_id,
+                      "controller_crew_id": crew_id},
                 caused_by=[cause, merchant["last_event_id"]],
                 causes_tags=["crew_formation", "merchant_company"], magnitude=0.25,
             )
@@ -189,7 +192,8 @@ class CrewShipSystem:
                                "wage_per_day": self.data["rules"]["wage_per_member_per_day_silver"]},
                 "arrears_silver": 0, "treasury_silver": self.data["rules"]["starting_silver"],
                 "wages_paid_silver": 0,
-                "ideology_tags": [], "founded_tick": world.clock.tick,
+                "ideology_tags": ["merchant", "trade"],
+                "founded_tick": world.clock.tick,
                 "faction_id": None, "flag_symbol": "skull", "last_event_id": event.id,
                 "distress_days": 0,
             }
@@ -209,7 +213,7 @@ class CrewShipSystem:
             ship_profile = self.data["classes"]["merchant_sloop"]
             ship.update({
                 "class": "merchant_sloop", "built_tick": world.clock.tick,
-                "owner_char": captain_id, "owner_faction": None,
+                "owner_char": captain_id,
                 "hull": {"max": ship_profile["hull_max"], "current": ship_profile["hull_max"]},
                 "rigging": {"max": ship_profile["rigging_max"],
                             "current": ship_profile["rigging_max"]},
@@ -222,6 +226,9 @@ class CrewShipSystem:
                 "upgrades": [], "condition_flags": [], "history": [event.id],
                 "crew_id": crew_id,
             })
+            world.assign_ship_title(
+                ship_id, owner_kind="merchant", owner_id=merchant_id,
+                controller_crew_id=crew_id, event_id=event.id)
             desired = dict(ship_profile["starting_supplies"])
             island_stock = world.economy.islands[home]["stockpile_milli"]
             actual = {goods_id: min(quantity, island_stock[goods_id])
@@ -258,7 +265,9 @@ class CrewShipSystem:
             targets=[{"role": "ship", "entity_id": ship_id}],
             data={"crew_id": crew_id, "name": crew_name,
                   "roster": [captain_id], "ship_id": ship_id,
-                  "roles": {"captain": captain_id}, "recruitment": "actor_budget"},
+                  "roles": {"captain": captain_id}, "recruitment": "actor_budget",
+                  "legal_owner_kind": "merchant", "legal_owner_id": merchant_id,
+                  "controller_crew_id": crew_id},
             caused_by=[caused_by, captain["last_event_id"]],
             causes_tags=["crew_formation", "actor_budget_recruitment"], magnitude=0.2)
         self.crews[crew_id] = {
@@ -285,7 +294,7 @@ class CrewShipSystem:
         profile = self.data["classes"]["merchant_sloop"]
         ship.update({
             "class": "merchant_sloop", "built_tick": world.clock.tick,
-            "owner_char": captain_id, "owner_faction": None, "owner_type": "merchant",
+            "owner_char": captain_id, "owner_type": "merchant",
             "hull": {"max": profile["hull_max"], "current": profile["hull_max"]},
             "rigging": {"max": profile["rigging_max"], "current": profile["rigging_max"]},
             "cannons": [dict(row) for row in profile["cannons"]],
@@ -295,6 +304,9 @@ class CrewShipSystem:
             "cargo": dict(merchant["cargo_milli"]), "upgrades": [],
             "condition_flags": [], "history": [founded.id], "crew_id": crew_id,
         })
+        world.assign_ship_title(
+            ship_id, owner_kind="merchant", owner_id=merchant_id,
+            controller_crew_id=crew_id, event_id=founded.id)
         desired = dict(profile["starting_supplies"])
         stock = world.economy.islands[location]["stockpile_milli"]
         actual = {goods_id: min(quantity, stock[goods_id])
@@ -312,10 +324,6 @@ class CrewShipSystem:
                   "appointment": "recruited_merchant_captain"},
             caused_by=[founded.id], causes_tags=["captain_appointment", "crew_formation"],
             magnitude=0.2)
-        if world.politics.factions:
-            faction_event = world.politics.register_recruited_crew(
-                world, crew_id, owner_type="merchant", caused_by=founded.id)
-            crew["last_event_id"] = faction_event
         return crew_id
 
     def provision_recruited_vessel(self, world, ship_id: str, owner_type: str, *,
@@ -339,7 +347,9 @@ class CrewShipSystem:
             targets=[{"role": "ship", "entity_id": ship_id}],
             data={"crew_id": crew_id, "name": crew_name,
                   "roster": [captain_id], "ship_id": ship_id,
-                  "roles": {"captain": captain_id}, "owner_type": owner_type},
+                  "roles": {"captain": captain_id}, "owner_type": owner_type,
+                  "legal_owner_kind": "crew", "legal_owner_id": crew_id,
+                  "controller_crew_id": crew_id},
             caused_by=[caused_by, captain["last_event_id"]],
             causes_tags=["crew_formation", "actor_budget_recruitment", owner_type],
             magnitude=0.25)
@@ -372,7 +382,7 @@ class CrewShipSystem:
         profile = self.data["classes"]["merchant_sloop"]
         ship.update({
             "class": "merchant_sloop", "built_tick": world.clock.tick,
-            "owner_char": captain_id, "owner_faction": None, "owner_type": owner_type,
+            "owner_char": captain_id, "owner_type": owner_type,
             "hull": {"max": profile["hull_max"], "current": profile["hull_max"]},
             "rigging": {"max": profile["rigging_max"], "current": profile["rigging_max"]},
             "cannons": [dict(row) for row in profile["cannons"]],
@@ -403,20 +413,34 @@ class CrewShipSystem:
             tick=world.clock.tick, event_type="SHIP_ACQUIRED", location=location,
             actors=[{"role": "captain", "entity_id": captain_id}],
             targets=[{"role": "acquired_ship", "entity_id": ship_id}],
-            data={"method": "build", "owner_type": owner_type,
-                  "crew_id": crew_id, "captain_appointed_event_id": appointed.id},
+                data={"method": "build", "owner_type": owner_type,
+                      "crew_id": crew_id, "captain_appointed_event_id": appointed.id,
+                      "legal_owner_kind": "crew", "legal_owner_id": crew_id,
+                      "controller_crew_id": crew_id},
             caused_by=[founded.id, appointed.id],
             causes_tags=["ship_acquisition", "actor_budget_recruitment", owner_type],
             magnitude=0.3)
         crew["last_event_id"] = acquired.id
-        if world.politics.factions:
-            faction_event = world.politics.register_recruited_crew(
-                world, crew_id, owner_type=owner_type, caused_by=acquired.id)
-            crew["last_event_id"] = faction_event
+        world.assign_ship_title(
+            ship_id, owner_kind="crew", owner_id=crew_id,
+            controller_crew_id=crew_id, event_id=acquired.id)
         return crew_id
+
+    @staticmethod
+    def crew_location(world, crew: dict[str, Any]) -> dict[str, str]:
+        if crew.get("ship_ids"):
+            ship_id = crew["ship_ids"][0]
+            if ship_id in world.entities:
+                return world.location_of(ship_id)
+        location = crew.get("stranded_location")
+        if isinstance(location, dict) and location.get("kind") == "island":
+            return dict(location)
+        raise ValueError(f"Hull-less crew lacks a valid stranded location: {crew.get('id')}")
 
     def recruit(self, world, crew_id: str, character_id: str, *, caused_by: str) -> str:
         crew = self._crew(crew_id)
+        if not crew["ship_ids"] or not ship_is_commandable(world, crew["ship_ids"][0]):
+            raise ValueError("Crew cannot recruit without valid vessel command authority")
         character = world.entities.get(character_id)
         if not character or character.get("kind") != "character" or character.get("death_tick") is not None:
             raise ValueError("Only a living active character may be recruited")
@@ -442,6 +466,252 @@ class CrewShipSystem:
         world.economy.crew_accounts[crew_id]["member_wallets"][character_id] = character["wealth"]["silver"]
         return event.id
 
+    def on_character_captured(self, world, character_id: str, *, captor_ship_id: str,
+                              captor_crew_id: str, caused_by: str) -> str:
+        """Move a captured character into custody and keep their former crew operational."""
+        character = world.entities.get(character_id)
+        if not character or character.get("kind") != "character":
+            raise ValueError("Captured character must remain an active character")
+        captor_ship = world.entities.get(captor_ship_id)
+        if (not captor_ship or captor_ship.get("kind") != "ship"
+                or captor_ship.get("crew_id") != captor_crew_id):
+            raise ValueError("Prisoner captor must have a valid commanded vessel")
+        world.event_log.get(caused_by)
+        former_crew_id = character.get("crew_id")
+        former_crew = self.crews.get(former_crew_id)
+        if former_crew is not None and character_id not in former_crew["roster"]:
+            raise ValueError("Captured character's crew link is absent from its roster")
+        location = world.location_of(captor_ship_id)
+        capture = world.event_log.append(
+            tick=world.clock.tick, event_type="PRISONER_CAPTURED", location=location["id"],
+            actors=[{"role": "captor_crew", "entity_id": captor_crew_id}],
+            targets=[{"role": "prisoner", "entity_id": character_id},
+                     *([{"role": "former_crew", "entity_id": former_crew_id}]
+                       if former_crew_id else [])],
+            data={"character_id": character_id, "captor_ship_id": captor_ship_id,
+                  "from_crew_id": former_crew_id, "to_crew_id": None},
+            caused_by=[caused_by], causes_tags=["prisoner_capture", "crew_departure"],
+            magnitude=0.65)
+        if former_crew is not None:
+            former_crew["roster"].remove(character_id)
+            for role, assigned in list(former_crew["roles"].items()):
+                if assigned == character_id:
+                    del former_crew["roles"][role]
+            former_crew["last_event_id"] = capture.id
+            if former_crew["captain_id"] == character_id:
+                if not former_crew["roster"]:
+                    stranded_or_ship_location = self.crew_location(world, former_crew)
+                    arrival_island = (stranded_or_ship_location["id"]
+                                      if stranded_or_ship_location["kind"] == "island"
+                                      else world.geography.routes[
+                                          stranded_or_ship_location["id"]].origin)
+                    replacement_id = world.characters.create_character(
+                        world, tier="MINOR", cause_event_id=capture.id, role="sailor",
+                        island_id=arrival_island)
+                    generated_id = world.entities[replacement_id]["last_event_id"]
+                    arrival = world.event_log.append(
+                        tick=world.clock.tick, event_type="CHARACTER_ARRIVED",
+                        location=stranded_or_ship_location["id"],
+                        actors=[{"role": "new_crew_member", "entity_id": replacement_id}],
+                        data={"crew_id": former_crew_id, "role": "sailor",
+                              "replacement_for": character_id,
+                              "reason": "captain_captured"},
+                        caused_by=[capture.id, generated_id],
+                        causes_tags=["crew_replacement", "character_arrival"], magnitude=0.25)
+                    former_crew["roster"].append(replacement_id)
+                    replacement = world.entities[replacement_id]
+                    replacement.update({
+                        "crew_id": former_crew_id,
+                        "ship_id": former_crew["ship_ids"][0] if former_crew["ship_ids"] else None,
+                        "location": stranded_or_ship_location,
+                        "last_event_id": arrival.id,
+                    })
+                    world.economy.crew_accounts[former_crew_id]["member_wallets"][replacement_id] = 0
+                former_crew["roster"].sort()
+                successor = min(former_crew["roster"])
+                successor_ship_id = (former_crew["ship_ids"][0]
+                                     if former_crew["ship_ids"] else None)
+                succession_location = (world.location_of(successor_ship_id)["id"]
+                                       if successor_ship_id
+                                       else self.crew_location(world, former_crew)["id"])
+                succession = world.event_log.append(
+                    tick=world.clock.tick, event_type="CAPTAIN_CHANGED",
+                    location=succession_location,
+                    actors=[{"role": "new_captain", "entity_id": successor}],
+                    targets=[{"role": "crew", "entity_id": former_crew_id}],
+                    data={"crew_id": former_crew_id, "former_captain_id": character_id,
+                          "new_captain_id": successor, "reason": "captured"},
+                    caused_by=[capture.id], causes_tags=["crew_succession", "captain_captured"],
+                    magnitude=0.45)
+                former_crew["captain_id"] = successor
+                former_crew["roles"]["captain"] = successor
+                former_crew["last_event_id"] = succession.id
+                if successor_ship_id:
+                    ship = world.entities[successor_ship_id]
+                    ship["owner_char"] = successor
+                    ship["history"].append(succession.id)
+                world.entities[successor]["last_event_id"] = succession.id
+        character.update({"crew_id": None, "ship_id": captor_ship_id,
+                          "location": location, "last_event_id": capture.id})
+        prisoner = world.encounters.prisoners[character_id]
+        prisoner["captor_ship_id"] = captor_ship_id
+        prisoner["capture_event_id"] = capture.id
+        prisoner["former_crew_id"] = former_crew_id
+        return capture.id
+
+    def employ_stranded_crew(self, world, stranded_crew_id: str, employer_crew_id: str, *,
+                             caused_by: str) -> str:
+        """Merge an opted-in hull-less crew into a co-located, commandable employer."""
+        stranded = self._crew(stranded_crew_id)
+        employer = self._crew(employer_crew_id)
+        if stranded_crew_id == employer_crew_id or stranded["ship_ids"]:
+            raise ValueError("Employment source must be a distinct hull-less crew")
+        if not employer["ship_ids"] or not ship_is_commandable(world, employer["ship_ids"][0]):
+            raise ValueError("Employment requires a commandable employer vessel")
+        if len(stranded["roster"]) + len(employer["roster"]) > self.data["rules"]["crew_roster_max"]:
+            raise ValueError("Employer vessel lacks crew capacity for the stranded crew")
+        location = self.crew_location(world, stranded)
+        employer_ship_id = employer["ship_ids"][0]
+        employer_location = world.location_of(employer_ship_id)
+        if location.get("kind") != "island" or employer_location != location:
+            raise ValueError("Employer vessel must be at the stranded crew's island")
+        if any(member_id not in world.entities
+               or world.entities[member_id].get("missing_at_sea") is not None
+               for member_id in stranded["roster"]):
+            raise ValueError("Employment cannot resolve a crew with missing or inactive members")
+        if any(prisoner.get("status") == "held"
+               and prisoner.get("former_crew_id") == stranded_crew_id
+               for prisoner in world.encounters.prisoners.values()):
+            raise ValueError("Employment cannot dissolve a crew with an unresolved held prisoner")
+        source_faction = world.politics.factions.get(stranded.get("faction_id"))
+        if ((source_faction is not None and source_faction.get("kind") == "marine")
+                or "marine" in stranded.get("ideology_tags", ())
+                or any(world.entities.get(ship_id, {}).get("owner_type") == "marine"
+                       for ship_id in stranded["ship_ids"])):
+            raise ValueError("Marine organizations cannot dissolve through civilian employment")
+        source_account = world.economy.crew_accounts[stranded_crew_id]
+        target_account = world.economy.crew_accounts[employer_crew_id]
+        if set(source_account["member_wallets"]) & set(target_account["member_wallets"]):
+            raise ValueError("Employment would duplicate a personal crew wallet")
+        world.event_log.get(caused_by)
+        accepted = world.event_log.append(
+            tick=world.clock.tick, event_type="CREW_EMPLOYMENT_ACCEPTED", location=location["id"],
+            actors=[{"role": "employer_captain", "entity_id": employer["captain_id"]}],
+            targets=[{"role": "employed_crew", "entity_id": stranded_crew_id}],
+            data={"from_crew_id": stranded_crew_id, "to_crew_id": employer_crew_id,
+                  "ship_id": employer_ship_id, "member_count": len(stranded["roster"])},
+            caused_by=list(dict.fromkeys([caused_by, employer["last_event_id"]])),
+            causes_tags=["stranded_crew", "employment", "crew_consolidation"], magnitude=0.45)
+        for member_id in sorted(stranded["roster"]):
+            wallet_silver = source_account["member_wallets"].get(member_id, 0)
+            transfer = world.event_log.append(
+                tick=world.clock.tick, event_type="CREW_MEMBER_TRANSFERRED",
+                location=location["id"],
+                actors=[{"role": "employer_captain", "entity_id": employer["captain_id"]}],
+                targets=[{"role": "employed_member", "entity_id": member_id}],
+                data={"character_id": member_id, "from_crew_id": stranded_crew_id,
+                      "to_crew_id": employer_crew_id, "wallet_silver": wallet_silver,
+                      "reason": "stranded_employment"},
+                caused_by=[accepted.id],
+                causes_tags=["crew_membership_transfer", "employment", "wallet_transfer"],
+                magnitude=0.25)
+            source_account["member_wallets"].pop(member_id, None)
+            target_account["member_wallets"][member_id] = wallet_silver
+            person = world.entities[member_id]
+            person.update({"crew_id": employer_crew_id, "ship_id": employer_ship_id,
+                           "location": employer_location, "last_event_id": transfer.id})
+            role = next((name for name, assigned in stranded["roles"].items()
+                         if assigned == member_id and name != "captain"), "sailor")
+            while role in employer["roles"]:
+                role = "sailor_" + str(len(employer["roles"]) + 1)
+            employer["roles"][role] = member_id
+            employer["roster"].append(member_id)
+            employer["last_event_id"] = transfer.id
+        employer["roster"].sort()
+
+        # Historical/dead/captive members can still own wallet balances in the
+        # old account; transfer that ledger explicitly without recreating roster membership.
+        for member_id, wallet_silver in sorted(source_account["member_wallets"].items()):
+            transfer = world.event_log.append(
+                tick=world.clock.tick, event_type="CREW_WALLET_TRANSFERRED",
+                location=location["id"],
+                actors=[{"role": "source_crew", "entity_id": stranded_crew_id}],
+                targets=[{"role": "wallet_beneficiary", "entity_id": member_id}],
+                data={"character_id": member_id, "from_crew_id": stranded_crew_id,
+                      "to_crew_id": employer_crew_id, "wallet_silver": wallet_silver},
+                caused_by=[accepted.id],
+                causes_tags=["wallet_transfer", "crew_consolidation"], magnitude=0.1)
+            target_account["member_wallets"][member_id] = wallet_silver
+            source_account["member_wallets"].pop(member_id)
+            employer["last_event_id"] = transfer.id
+
+        source_treasury = source_account["treasury_silver"]
+        source_arrears = stranded["arrears_silver"]
+        source_owned_ship_ids = sorted(
+            ship_id for ship_id, ship in world.entities.items()
+            if ship.get("kind") == "ship"
+            and ship.get("legal_owner") == {"kind": "crew", "id": stranded_crew_id})
+        assets = world.event_log.append(
+            tick=world.clock.tick, event_type="CREW_ASSETS_TRANSFERRED", location=location["id"],
+            actors=[{"role": "source_crew", "entity_id": stranded_crew_id}],
+            targets=[{"role": "employer_crew", "entity_id": employer_crew_id}],
+            data={"from_crew_id": stranded_crew_id, "to_crew_id": employer_crew_id,
+                  "treasury_silver": source_treasury, "arrears_silver": source_arrears,
+                  "ship_ids": source_owned_ship_ids},
+            caused_by=[accepted.id],
+            causes_tags=["crew_assets", "finite_transfer", "employment"], magnitude=0.2)
+        target_account["treasury_silver"] += source_treasury
+        employer["treasury_silver"] += source_treasury
+        employer["arrears_silver"] += source_arrears
+        source_account["treasury_silver"] = 0
+        stranded["treasury_silver"] = 0
+        stranded["arrears_silver"] = 0
+        employer["last_event_id"] = assets.id
+
+        # A crew can hold legal title to captured hulls it does not list as its
+        # onboard vessel. Dissolving that crew must not leave owner/controller
+        # references pointing at a terminal organization. Transfer title with
+        # an auditable event, but clear operational control until a crew is
+        # explicitly assigned aboard the hull.
+        for asset_ship_id in source_owned_ship_ids:
+            asset_ship = world.entities[asset_ship_id]
+            former_controller = asset_ship.get("controller_crew_id")
+            title_transfer = world.event_log.append(
+                tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+                location=world.location_of(asset_ship_id)["id"],
+                actors=[{"role": "acquiring_crew", "entity_id": employer_crew_id}],
+                targets=[{"role": "acquired_ship", "entity_id": asset_ship_id}],
+                data={"method": "crew_employment_asset_transfer",
+                      "previous_owner": {"kind": "crew", "id": stranded_crew_id},
+                      "previous_controller_crew_id": former_controller,
+                      "new_crew_id": employer_crew_id,
+                      "legal_owner_kind": "crew", "legal_owner_id": employer_crew_id,
+                      "controller_crew_id": None},
+                caused_by=[accepted.id, assets.id],
+                causes_tags=["ship_acquisition", "crew_dissolution", "employment"],
+                magnitude=0.35)
+            world.assign_ship_title(
+                asset_ship_id, owner_kind="crew", owner_id=employer_crew_id,
+                controller_crew_id=None, event_id=title_transfer.id)
+            asset_ship["last_event_id"] = title_transfer.id
+            asset_ship.setdefault("history", []).append(title_transfer.id)
+
+        dissolved = world.event_log.append(
+            tick=world.clock.tick, event_type="CREW_DISSOLVED", location=location["id"],
+            actors=[{"role": "former_captain", "entity_id": stranded["captain_id"]}],
+            targets=[{"role": "dissolved_crew", "entity_id": stranded_crew_id}],
+            data={"crew_id": stranded_crew_id, "employed_by_crew_id": employer_crew_id,
+                  "member_count": len(stranded["roster"]),
+                  "assets_event_id": assets.id},
+            caused_by=[assets.id], causes_tags=["crew_dissolution", "employment"],
+            magnitude=0.45)
+        faction_event = world.politics.on_crew_dissolved(
+            world, stranded_crew_id, caused_by=dissolved.id, reason="employment")
+        stranded["last_event_id"] = faction_event or dissolved.id
+        self.crews.pop(stranded_crew_id)
+        world.economy.crew_accounts.pop(stranded_crew_id)
+        return faction_event or dissolved.id
+
     def on_character_death(self, world, character_id: str, death_event_id: str) -> None:
         character = world.archive.get(character_id)
         if not character or character.get("crew_id") is None:
@@ -454,12 +724,13 @@ class CrewShipSystem:
                 del crew["roles"][role]
         crew["last_event_id"] = death_event_id
         if not crew["roster"]:
+            location = self.crew_location(world, crew)
             replacement_id = world.characters.create_character(
                 world, tier="MINOR", cause_event_id=death_event_id, role="sailor")
             generated_id = world.entities[replacement_id]["last_event_id"]
             arrival = world.event_log.append(
                 tick=world.clock.tick, event_type="CHARACTER_ARRIVED",
-                location=world.location_of(crew["ship_ids"][0])["id"],
+                location=location["id"],
                 actors=[{"role": "new_crew_member", "entity_id": replacement_id}],
                 data={"crew_id": crew["id"], "role": "sailor",
                       "replacement_for": character_id},
@@ -469,14 +740,16 @@ class CrewShipSystem:
             replacement = world.entities[replacement_id]
             replacement["last_event_id"] = arrival.id
             replacement["crew_id"] = crew["id"]
-            replacement["ship_id"] = crew["ship_ids"][0]
+            replacement["ship_id"] = crew["ship_ids"][0] if crew["ship_ids"] else None
+            replacement["location"] = location
             world.economy.crew_accounts[crew["id"]]["member_wallets"][replacement_id] = 0
         if crew["captain_id"] == character_id:
             successor = min(crew["roster"])
-            ship_id = crew["ship_ids"][0]
+            ship_id = crew["ship_ids"][0] if crew["ship_ids"] else None
+            location = (world.location_of(ship_id)["id"] if ship_id
+                        else self.crew_location(world, crew)["id"])
             succession = world.event_log.append(
-                tick=world.clock.tick, event_type="CAPTAIN_CHANGED",
-                location=world.location_of(ship_id)["id"],
+                tick=world.clock.tick, event_type="CAPTAIN_CHANGED", location=location,
                 actors=[{"role": "new_captain", "entity_id": successor}],
                 targets=[{"role": "crew", "entity_id": crew["id"]}],
                 data={"crew_id": crew["id"], "former_captain_id": character_id,
@@ -486,7 +759,7 @@ class CrewShipSystem:
             )
             world.event_log.append(
                 tick=world.clock.tick, event_type="CAPTAIN_APPOINTED",
-                location=world.location_of(ship_id)["id"],
+                location=location,
                 actors=[{"role": "captain", "entity_id": successor}],
                 targets=[{"role": "crew", "entity_id": crew["id"]}],
                 data={"crew_id": crew["id"], "ship_id": ship_id,
@@ -497,9 +770,10 @@ class CrewShipSystem:
             crew["captain_id"] = successor
             crew["roles"]["captain"] = successor
             crew["last_event_id"] = succession.id
-            ship = world.entities[ship_id]
-            ship["owner_char"] = successor
-            ship["history"].append(succession.id)
+            if ship_id is not None:
+                ship = world.entities[ship_id]
+                ship["owner_char"] = successor
+                ship["history"].append(succession.id)
             world.entities[successor]["last_event_id"] = succession.id
         character["crew_id"] = None
         character["ship_id"] = None
@@ -658,6 +932,12 @@ class CrewShipSystem:
         rules = self.data["rules"]
         for crew_id in sorted(self.crews):
             crew = self.crews[crew_id]
+            if not crew["ship_ids"]:
+                self._pay_daily_wages(world, crew_id, day)
+                crew["distress_days"] += 1
+                if crew["distress_days"] % 30 == 0:
+                    self._seek_stranded_employment(world, crew_id)
+                continue
             ship_id = crew["ship_ids"][0]
             if ship_id not in world.entities:
                 continue
@@ -697,6 +977,130 @@ class CrewShipSystem:
             self._try_desertion(world, crew_id, day)
         self.last_updated_day = day
 
+    def _seek_stranded_employment(self, world, stranded_crew_id: str, *,
+                                  opportunity_event_id: str | None = None,
+                                  preferred_employer_crew_id: str | None = None) -> str | None:
+        stranded = self.crews.get(stranded_crew_id)
+        if stranded is None or stranded["ship_ids"]:
+            return None
+        location = self.crew_location(world, stranded)
+        captain_id = stranded["captain_id"]
+        eligible_employers = []
+        blocked_reasons: dict[str, int] = {}
+        stranded_members_active = all(
+            member_id in world.entities
+            and world.entities[member_id].get("missing_at_sea") is None
+            for member_id in stranded["roster"])
+        held_prisoner = any(
+            prisoner.get("status") == "held"
+            and prisoner.get("former_crew_id") == stranded_crew_id
+            for prisoner in world.encounters.prisoners.values())
+        source_faction = world.politics.factions.get(stranded.get("faction_id"))
+        marine_crew = (
+            (source_faction is not None and source_faction.get("kind") == "marine")
+            or "marine" in stranded.get("ideology_tags", ())
+            or any(world.entities.get(ship_id, {}).get("owner_type") == "marine"
+                   for ship_id in stranded.get("ship_ids", ())))
+        source_wallets = set(world.economy.crew_accounts[stranded_crew_id]["member_wallets"])
+
+        def block(reason: str) -> None:
+            blocked_reasons[reason] = blocked_reasons.get(reason, 0) + 1
+
+        for employer_id, employer in sorted(self.crews.items()):
+            if employer_id == stranded_crew_id:
+                continue
+            if not employer["ship_ids"]:
+                block("employer_has_no_hull")
+                continue
+            ship_id = employer["ship_ids"][0]
+            if ship_id not in world.entities:
+                block("employer_hull_inactive")
+                continue
+            if not ship_is_commandable(world, ship_id):
+                block("employer_hull_not_commandable")
+                continue
+            if world.location_of(ship_id) != location:
+                block("employer_not_at_stranded_island")
+                continue
+            if len(employer["roster"]) + len(stranded["roster"]) > self.data["rules"]["crew_roster_max"]:
+                block("employer_lacks_roster_capacity")
+                continue
+            if not stranded_members_active:
+                block("stranded_crew_has_missing_or_inactive_member")
+                continue
+            if held_prisoner:
+                block("stranded_crew_has_held_prisoner")
+                continue
+            if marine_crew:
+                block("marine_organization_cannot_use_civilian_employment")
+                continue
+            employer_wallets = set(world.economy.crew_accounts[employer_id]["member_wallets"])
+            if source_wallets & employer_wallets:
+                block("overlapping_personal_wallet_accounts")
+                continue
+            eligible_employers.append(employer_id)
+
+        request_causes = [stranded["last_event_id"]]
+        if opportunity_event_id is not None:
+            world.event_log.get(opportunity_event_id)
+            request_causes.append(opportunity_event_id)
+        request = world.event_log.append(
+            tick=world.clock.tick, event_type="CREW_EMPLOYMENT_SOUGHT",
+            location=location["id"], actors=[{"role": "requesting_captain", "entity_id": captain_id}],
+            targets=[{"role": "stranded_crew", "entity_id": stranded_crew_id}],
+            data={"crew_id": stranded_crew_id, "captain_id": captain_id,
+                  "stranded_days": stranded["distress_days"],
+                  "member_count": len(stranded["roster"]), "location": location,
+                  "eligible_employer_crew_ids": eligible_employers,
+                  "blocked_candidate_reasons": dict(sorted(blocked_reasons.items()))},
+            caused_by=list(dict.fromkeys(request_causes)),
+            causes_tags=["stranded_crew", "employment_search", "crew_distress"],
+            magnitude=0.3)
+        stranded["last_event_id"] = request.id
+        if eligible_employers:
+            employer_id = (preferred_employer_crew_id
+                           if preferred_employer_crew_id in eligible_employers
+                           else eligible_employers[0])
+            return self.employ_stranded_crew(
+                world, stranded_crew_id, employer_id, caused_by=request.id)
+        return request.id
+
+    def on_commanded_ship_arrival(self, world, ship_id: str, arrival_event_id: str) -> list[str]:
+        """Offer co-located stranded crews an immediate, causal employment/rescue opportunity."""
+        if not ship_is_commandable(world, ship_id):
+            return []
+        location = world.location_of(ship_id)
+        if location.get("kind") != "island":
+            return []
+        arriving_crew_id = world.entities[ship_id]["controller_crew_id"]
+        resolved = []
+        for stranded_crew_id in sorted(self.crews):
+            stranded = self.crews[stranded_crew_id]
+            if (stranded_crew_id == arriving_crew_id or stranded["ship_ids"]
+                    or self.crew_location(world, stranded) != location):
+                continue
+            # A commanded arrival at the recorded search island is a concrete
+            # rescue opportunity for this stranded crew. Resolve only people
+            # whose persisted missing-person state points to this location;
+            # successful rescue restores the same identity and does not invent
+            # a population gain.
+            for person_id in sorted(stranded["roster"]):
+                person = world.entities.get(person_id)
+                missing = person.get("missing_at_sea") if person else None
+                if (not isinstance(missing, dict)
+                        or missing.get("search_location") != location):
+                    continue
+                rescue_id = world.encounters.resolve_missing_person(
+                    world, person_id, "found_alive", caused_by=arrival_event_id,
+                    rescuer_ship_id=ship_id)
+                resolved.append(rescue_id)
+            result_id = self._seek_stranded_employment(
+                world, stranded_crew_id, opportunity_event_id=arrival_event_id,
+                preferred_employer_crew_id=arriving_crew_id)
+            if result_id is not None:
+                resolved.append(result_id)
+        return resolved
+
     def update_actor_budgets(self, day: int, world) -> None:
         """Recruit after settlement monthly and before annual budget samples."""
         days_per_year = world.config["time"]["days_per_year"]
@@ -724,7 +1128,11 @@ class CrewShipSystem:
                 island_id = self._least_populated_ship_island(world, band)
                 cause = world.event_log.by_type("WORLD_GENERATED")[0].id
                 if band == "merchant":
-                    merchant_name = f"Budget Merchant {len(world.economy.merchants) + 1:03d}"
+                    island_name = world.geography.islands[island_id].name
+                    regional_count = sum(
+                        merchant.get("home_island") == island_id
+                        for merchant in world.economy.merchants.values())
+                    merchant_name = f"{island_name} Trading Company {regional_count + 1}"
                     merchant_id, merchant_event_id = world.economy.create_merchant(
                         world, merchant_name, island_id, silver=0, capacity_milli=100_000)
                     crew_id = self.provision_recruited_merchant(
@@ -736,16 +1144,18 @@ class CrewShipSystem:
                         actors=[{"role": "captain", "entity_id": captain_id}],
                         targets=[{"role": "acquired_ship", "entity_id": ship_id}],
                         data={"method": "build", "owner_type": band,
-                              "merchant_id": merchant_id, "crew_id": crew_id},
+                              "merchant_id": merchant_id, "crew_id": crew_id,
+                              "legal_owner_kind": "merchant", "legal_owner_id": merchant_id,
+                              "controller_crew_id": crew_id},
                         caused_by=[merchant_event_id, self.crews[crew_id]["last_event_id"]],
                         causes_tags=["ship_acquisition", "actor_budget_recruitment", band],
                         magnitude=0.3)
                     self.crews[crew_id]["last_event_id"] = acquired.id
+                    world.assign_ship_title(
+                        ship_id, owner_kind="merchant", owner_id=merchant_id,
+                        controller_crew_id=crew_id, event_id=acquired.id)
                 else:
-                    historical_ships = sum(
-                        entity.get("kind") == "ship"
-                        for entity in (*world.entities.values(), *world.archive.values()))
-                    name = f"{band.title()} Vessel {historical_ships + 1:06d}"
+                    name = self._regional_actor_vessel_name(world, island_id, band)
                     ship_id, ship_event_id = world.create_vessel(name, island_id)
                     crew_id = self.provision_recruited_vessel(
                         world, ship_id, band, caused_by=ship_event_id)
@@ -758,12 +1168,26 @@ class CrewShipSystem:
         self._promote_major_legend(world, day)
 
     @staticmethod
+    def _regional_actor_vessel_name(world, island_id: str, band: str) -> str:
+        labels = {"pirate": "Corsair", "marine": "Patrol", "privateer": "Privateer"}
+        if band not in labels or island_id not in world.geography.islands:
+            raise ValueError("Actor vessel naming requires a known region and actor band")
+        base = f"{world.geography.islands[island_id].name} {labels[band]} Sloop"
+        known_names = {ship.get("name", "").casefold()
+                       for ship in (*world.entities.values(), *world.archive.values())
+                       if ship.get("kind") == "ship"}
+        ordinal = 1
+        while f"{base} {ordinal}".casefold() in known_names:
+            ordinal += 1
+        return f"{base} {ordinal}"
+
+    @staticmethod
     def _active_actor_ship_count(world, band: str) -> int:
         total = 0
         for ship in world.entities.values():
             if (ship.get("kind") != "ship" or ship.get("sunk")
                     or ship.get("state") == "sunk"
-                    or ship.get("captured_by_crew_id") is not None):
+                    or not ship_is_commandable(world, ship["id"])):
                 continue
             owner_type = ship.get("owner_type")
             if band == "merchant" and any(
@@ -919,8 +1343,8 @@ class CrewShipSystem:
         pirates = sorted(
             ship_id for ship_id, ship in world.entities.items()
             if ship.get("kind") == "ship" and ship.get("owner_type") == "pirate"
-            and ship.get("captured_by_crew_id") is None
-            and ship_id not in world.travel.transits and ship.get("crew_id") in self.crews)
+            and ship_id not in world.travel.transits
+            and ship_is_commandable(world, ship_id))
         for pirate_id in pirates:
             pirate = world.entities[pirate_id]
             location = world.location_of(pirate_id)
@@ -1010,7 +1434,7 @@ class CrewShipSystem:
             crew["wages_paid_silver"] += paid
             wage_event = world.event_log.append(
                 tick=world.clock.tick, event_type="WAGES_PAID",
-                location=world.location_of(crew["ship_ids"][0])["id"],
+                location=self.crew_location(world, crew)["id"],
                 targets=[{"role": "crew", "entity_id": crew_id}],
                 data={"crew_id": crew_id, "day": day, "silver": paid,
                       "member_shares": shares,
@@ -1025,7 +1449,7 @@ class CrewShipSystem:
             crew["arrears_silver"] += unpaid
             event = world.event_log.append(
                 tick=world.clock.tick, event_type="WAGES_UNPAID",
-                location=world.location_of(crew["ship_ids"][0])["id"],
+                location=self.crew_location(world, crew)["id"],
                 targets=[{"role": "crew", "entity_id": crew_id}],
                 data={"crew_id": crew_id, "day": day, "unpaid_silver": unpaid,
                       "arrears_silver": crew["arrears_silver"]},
@@ -1046,10 +1470,10 @@ class CrewShipSystem:
             rng = world.rng.stream(f"crew:{crew_id}:desertion:{character_id}")
             if rng.randbelow(10000) >= rules["desertion_basis_points_per_day"]:
                 continue
-            ship_id = crew["ship_ids"][0]
+            ship_id = crew["ship_ids"][0] if crew["ship_ids"] else None
             event = world.event_log.append(
                 tick=world.clock.tick, event_type="DESERTION",
-                location=world.location_of(ship_id)["id"],
+                location=self.crew_location(world, crew)["id"],
                 actors=[{"role": "deserter", "entity_id": character_id}],
                 data={"crew_id": crew_id, "ship_id": ship_id, "day": day,
                       "morale": crew["morale"]},
@@ -1063,7 +1487,7 @@ class CrewShipSystem:
             person = world.entities[character_id]
             person["crew_id"] = None
             person["ship_id"] = None
-            person["location"] = world.location_of(ship_id)
+            person["location"] = self.crew_location(world, crew)
             person["last_event_id"] = event.id
             crew["last_event_id"] = event.id
             crew["morale"] = max(0, crew["morale"] - 2)
@@ -1080,21 +1504,39 @@ class CrewShipSystem:
                for ship_id in expected_ship_ids):
             raise ValueError("Ship supply account references an unknown active ship")
         for crew_id, crew in self.crews.items():
-            if crew["id"] != crew_id or crew["ship_ids"][0] not in world.entities:
-                raise ValueError(f"Invalid crew identity or ship link: {crew_id}")
-            ship = world.entities[crew["ship_ids"][0]]
-            if ship.get("crew_id") != crew_id or ship.get("supplies") != world.economy.ship_supplies[ship["id"]]:
-                raise ValueError(f"Ship and crew supply state disagree: {crew_id}")
-            merchant = next((row for row in world.economy.merchants.values()
-                             if row["ship_id"] == ship["id"]), None)
-            if merchant is not None and ship.get("cargo") != merchant["cargo_milli"]:
-                raise ValueError(f"Ship and merchant cargo state disagree: {ship['id']}")
+            if crew["id"] != crew_id:
+                raise ValueError(f"Invalid crew identity: {crew_id}")
+            if crew["ship_ids"]:
+                ship_id = crew["ship_ids"][0]
+                if ship_id not in world.entities:
+                    raise ValueError(f"Crew vessel is not active: {crew_id}")
+                ship = world.entities[ship_id]
+                if (ship.get("crew_id") != crew_id
+                        or ship.get("supplies") != world.economy.ship_supplies[ship["id"]]):
+                    raise ValueError(f"Ship and crew supply state disagree: {crew_id}")
+                merchant = next((row for row in world.economy.merchants.values()
+                                 if row["ship_id"] == ship["id"]), None)
+                if merchant is not None and ship.get("cargo") != merchant["cargo_milli"]:
+                    raise ValueError(f"Ship and merchant cargo state disagree: {ship['id']}")
+                stranded_location = None
+            else:
+                stranded_location = self.crew_location(world, crew)
             if len(set(crew["roster"])) != len(crew["roster"]):
                 raise ValueError(f"Duplicate crew roster member: {crew_id}")
             for character_id in crew["roster"]:
                 character = world.entities.get(character_id)
+                expected_ship_id = crew["ship_ids"][0] if crew["ship_ids"] else None
+                missing_at_sea = character.get("missing_at_sea") if character else None
+                stranded_location_matches = (
+                    stranded_location is None
+                    or character.get("location") == stranded_location
+                    or (isinstance(missing_at_sea, dict)
+                        and character.get("location")
+                        == missing_at_sea.get("last_known_location")))
                 if (not character or character.get("kind") != "character"
-                        or character.get("crew_id") != crew_id or character.get("ship_id") != ship["id"]):
+                        or character.get("crew_id") != crew_id
+                        or character.get("ship_id") != expected_ship_id
+                        or not stranded_location_matches):
                     raise ValueError(f"Crew roster member has inconsistent links: {character_id}")
             if crew["captain_id"] not in crew["roster"] or crew["roles"].get("captain") != crew["captain_id"]:
                 raise ValueError(f"Crew captain is not an active roster member: {crew_id}")
@@ -1125,11 +1567,23 @@ class CrewShipSystem:
                         treasury_adjustment += event.data.get("silver", 0)
                     if event.data.get("loser_crew_id") == crew_id:
                         treasury_adjustment -= event.data.get("silver", 0)
+                elif event.type == "CREW_ASSETS_TRANSFERRED":
+                    if event.data.get("to_crew_id") == crew_id:
+                        treasury_adjustment += event.data.get("treasury_silver", 0)
+                    if event.data.get("from_crew_id") == crew_id:
+                        treasury_adjustment -= event.data.get("treasury_silver", 0)
                 elif event.type == "RANSOM_PAID":
                     if any(actor.get("entity_id") == crew_id for actor in event.actors):
                         treasury_adjustment -= event.data.get("silver", 0)
                     if any(target.get("entity_id") == crew_id for target in event.targets):
                         treasury_adjustment += event.data.get("silver", 0)
+                elif (event.type == "AGENT_ACTION"
+                      and event.data.get("action_id") == "hunt_rival"
+                      and event.data.get("crew_id") == crew_id):
+                    cost = event.data.get("silver_cost", 0)
+                    if type(cost) is not int or cost < 0:
+                        raise ValueError(f"Invalid crew action expense: {event.id}")
+                    treasury_adjustment -= cost
             if len(fund_events) != 1:
                 raise ValueError(f"Crew funding history is missing or duplicated: {crew_id}")
             funded_silver = fund_events[0].data.get("funded_silver")
@@ -1139,24 +1593,37 @@ class CrewShipSystem:
                     or funded_silver - paid_silver + treasury_adjustment != crew["treasury_silver"]):
                 raise ValueError(f"Crew treasury disagrees with its funding/payroll events: {crew_id}")
             expected_wallets = {}
-            for event in wage_events:
-                shares = event.data.get("member_shares")
-                if (not isinstance(shares, Mapping)
-                        or sum(shares.values()) != event.data.get("silver")):
-                    raise ValueError(f"Invalid crew wage distribution event: {event.id}")
-                for member_id, amount in shares.items():
-                    expected_wallets[member_id] = expected_wallets.get(member_id, 0) + amount
-            for event in world.event_log.by_type("CREW_MEMBER_DEFECTED"):
-                member_id = event.actors[0]["entity_id"]
-                if event.data.get("from_crew_id") == crew_id:
-                    expected_wallets.pop(member_id, None)
-                elif event.data.get("to_crew_id") == crew_id:
-                    expected_wallets[member_id] = (expected_wallets.get(member_id, 0)
-                                                   + event.data.get("wallet_silver", 0))
+            for event in world.event_log:
+                if event.type == "WAGES_PAID" and event.data.get("crew_id") == crew_id:
+                    shares = event.data.get("member_shares")
+                    if (not isinstance(shares, Mapping)
+                            or sum(shares.values()) != event.data.get("silver")):
+                        raise ValueError(f"Invalid crew wage distribution event: {event.id}")
+                    for member_id, amount in shares.items():
+                        expected_wallets[member_id] = expected_wallets.get(member_id, 0) + amount
+                elif event.type in {"CREW_MEMBER_DEFECTED", "CREW_MEMBER_TRANSFERRED",
+                                    "CREW_WALLET_TRANSFERRED"}:
+                    member_id = event.data.get("character_id")
+                    if member_id is None and event.actors:
+                        member_id = event.actors[0].get("entity_id")
+                    if event.data.get("from_crew_id") == crew_id:
+                        expected_wallets.pop(member_id, None)
+                    elif event.data.get("to_crew_id") == crew_id:
+                        wallet_silver = event.data.get("wallet_silver", 0)
+                        if event.type == "CREW_MEMBER_DEFECTED":
+                            expected_wallets[member_id] = (
+                                expected_wallets.get(member_id, 0) + wallet_silver)
+                        else:
+                            expected_wallets[member_id] = wallet_silver
             if any(expected_wallets.get(member_id, 0) != balance
                    for member_id, balance in account["member_wallets"].items()):
                 raise ValueError(f"Crew wallets disagree with payroll history: {crew_id}")
             arrears = sum(event.data.get("unpaid_silver", -1) for event in unpaid_events)
+            for event in world.event_log.by_type("CREW_ASSETS_TRANSFERRED"):
+                if event.data.get("to_crew_id") == crew_id:
+                    arrears += event.data.get("arrears_silver", 0)
+                if event.data.get("from_crew_id") == crew_id:
+                    arrears -= event.data.get("arrears_silver", 0)
             if arrears != crew["arrears_silver"]:
                 raise ValueError(f"Crew wage arrears disagree with payroll history: {crew_id}")
             try:
@@ -1182,7 +1649,10 @@ class CrewShipSystem:
                     or type(crew.get("arrears_silver")) is not int or crew["arrears_silver"] < 0
                     or type(crew.get("treasury_silver")) is not int or crew["treasury_silver"] < 0
                     or type(crew.get("wages_paid_silver")) is not int or crew["wages_paid_silver"] < 0
-                    or not isinstance(crew.get("ship_ids"), list) or len(crew["ship_ids"]) != 1
+                    or not isinstance(crew.get("ship_ids"), list)
+                    or len(crew["ship_ids"]) not in {0, 1}
+                    or (not crew["ship_ids"] and "stranded_location" not in crew)
+                    or (crew["ship_ids"] and "stranded_location" in crew)
                     or not isinstance(crew.get("last_event_id"), str)):
                 raise ValueError(f"Invalid crew record: {crew_id}")
 

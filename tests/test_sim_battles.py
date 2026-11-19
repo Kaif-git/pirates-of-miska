@@ -8,12 +8,45 @@ from sim.systems.battles import BattleSystem, _validate_data
 
 
 def _hostile_encounter(world):
-    ships = sorted(entity_id for entity_id, row in world.entities.items()
-                   if row.get("kind") == "ship")
-    first, second = ships[:2]
-    crew_id = world.entities[first]["crew_id"]
-    cause = world.crew_ships.crews[crew_id]["last_event_id"]
-    location = world.location_of(first)["id"]
+    merchant_faction = next(faction for faction in world.politics.factions.values()
+                            if faction["kind"] != "marine")
+    merchant_crew_id = merchant_faction["member_crew_ids"][0]
+    merchant_ship_id = world.crew_ships.crews[merchant_crew_id]["ship_ids"][0]
+    island_id = next(island_id for island_id in sorted(world.geography.islands)
+                     if island_id not in world.politics.island_rulers)
+    pirate_crew_ids = []
+    for suffix in ("A", "B"):
+        ship_id, created = world.create_vessel(f"Battle Fixture Raider {suffix}", island_id)
+        pirate_crew_ids.append(world.crew_ships.provision_recruited_vessel(
+            world, ship_id, "pirate", caused_by=created))
+    founder_crew_id = pirate_crew_ids[0]
+    founder_id = world.crew_ships.crews[founder_crew_id]["captain_id"]
+    founder = world.entities[founder_id]
+    founder["traits"]["ambition"] = max(
+        founder["traits"]["ambition"],
+        world.politics.data["rules"]["faction_founder_min_ambition"])
+    founder["stats"]["leadership"] = max(
+        founder["stats"]["leadership"],
+        world.politics.data["rules"]["faction_founder_min_leadership"])
+    world.politics.found_faction(
+        world, member_crew_ids=pirate_crew_ids, founder_id=founder_id,
+        anchorage_island_id=island_id, purpose="test_interception_defense",
+        name=f"{founder['display_name']}'s Battle Privateers",
+        kind="pirate_coalition",
+        caused_by=[world.crew_ships.crews[crew_id]["last_event_id"]
+                   for crew_id in pirate_crew_ids])
+    used_traits = {trait_id for row in world.entities.values()
+                   if row.get("kind") == "character" and row.get("tier") == "LEGEND"
+                   for trait_id in row.get("legend_traits", ())}
+    trait = next(row for row in world.battles.data["legend_traits"]
+                 if row["id"] not in used_traits)
+    founder.update({"tier": "LEGEND", "legend_traits": [trait["id"]],
+                    "legend_since_event_id": None})
+    world.entities[merchant_ship_id]["location"] = {"kind": "island", "id": island_id}
+    world.battles.refresh_fleet_commands(world)
+    first, second = merchant_ship_id, world.crew_ships.crews[founder_crew_id]["ship_ids"][0]
+    cause = world.crew_ships.crews[merchant_crew_id]["last_event_id"]
+    location = island_id
     return world.event_log.append(
         tick=world.clock.tick, event_type="ENCOUNTER_RESOLVED", location=location,
         actors=[{"role": "combatant", "entity_id": first},
@@ -45,7 +78,7 @@ def test_world_seeds_named_legend_commanders_and_persistent_fleet_doctrine():
     assert all(command["doctrine"] in world.battles.data["doctrines"]
                for command in world.battles.fleet_commands.values())
     assert not world.event_log.by_type("LEGEND_RECOGNIZED")
-    assert world.to_snapshot()["snapshot_schema_version"] == 17
+    assert world.to_snapshot()["snapshot_schema_version"] == 19
 
 
 def test_hostile_legend_encounter_resolves_a_causal_multiround_battle_and_duel():
@@ -131,9 +164,9 @@ def test_battle_defeat_can_create_a_causal_faction_power_vacuum():
 
 def test_battle_stalemate_still_has_causal_political_aftermath():
     world = WorldState.create("battle-stalemate")
-    factions = sorted(world.crew_ships.crews)[:2]
-    captains = [world.crew_ships.crews[faction_id]["captain_id"] for faction_id in factions]
-    cause = world.crew_ships.crews[factions[0]]["last_event_id"]
+    factions = sorted(world.politics.factions)[:2]
+    captains = [world.politics.factions[faction_id]["leader_id"] for faction_id in factions]
+    cause = world.politics.factions[factions[0]]["last_event_id"]
     result = world.event_log.append(
         tick=world.clock.tick, event_type="BATTLE_CONCLUDED",
         actors=[{"role": "commander", "entity_id": captain} for captain in captains],
@@ -147,15 +180,19 @@ def test_battle_stalemate_still_has_causal_political_aftermath():
 
     heat = [event for event in world.event_log.by_type("HEAT_CHANGED")
             if event.data["reason"] == "set_piece_battle_stalemate"]
-    assert len(heat) == 2
+    # The Marine government faction has no crew roster to charge heat to.
+    assert len(heat) == 1
     assert all(event.caused_by == (result.id,) for event in heat)
 
 
 def test_routed_faction_collapses_but_the_crew_and_archive_remain_valid():
     world = WorldState.create("battle-faction-collapse")
-    faction_id, faction = sorted(world.politics.factions.items())[0]
+    faction_id, faction = next((fid, faction) for fid, faction
+                               in sorted(world.politics.factions.items())
+                               if faction["kind"] != "marine")
     captain_id = faction["leader_id"]
-    crew = world.crew_ships.crews[faction_id]
+    crew_id = faction["member_crew_ids"][0]
+    crew = world.crew_ships.crews[crew_id]
     cause = faction["last_event_id"]
     result = world.event_log.append(
         tick=world.clock.tick, event_type="BATTLE_CONCLUDED",
@@ -167,18 +204,18 @@ def test_routed_faction_collapses_but_the_crew_and_archive_remain_valid():
     world.politics.data["rules"]["heat_per_hostile_combat"] = 1
 
     world.battles._political_aftermath(
-        world, result, [faction_id, "crew_000002"],
-        [captain_id, world.crew_ships.crews["crew_000002"]["captain_id"]],
+        world, result, [faction_id, world.politics.marine_command["faction_id"]],
+        [captain_id, world.politics.marine_command["commander_id"]],
         [0, 100], defeated_side=0,
     )
 
     assert faction_id in world.politics.archived_factions
     assert faction_id not in world.politics.factions
-    assert crew["faction_id"] == faction_id
+    assert crew["faction_id"] is None
     assert world.politics.archived_factions[faction_id]["dissolved_event_id"]
     restored = WorldState.from_snapshot(world.to_snapshot())
     assert faction_id in restored.politics.archived_factions
-    assert restored.crew_ships.crews[faction_id]["ship_ids"] == crew["ship_ids"]
+    assert restored.crew_ships.crews[crew_id]["ship_ids"] == crew["ship_ids"]
 
 
 def test_battle_chronicler_narrates_legends_and_persistent_morale_aftermath():

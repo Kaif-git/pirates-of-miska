@@ -10,6 +10,7 @@ from hashlib import blake2b
 import heapq
 import math
 
+from pirates import sea_encounter
 from pirates.economy import PORTS, MERCHANTS, CATALOG, build_port
 from tales_sim.clock import TICKS_PER_DAY
 
@@ -357,6 +358,32 @@ class VoyageSystem:
                 rows.append("Delivery objective: none recorded for this destination.")
         else:
             rows.append("Legacy save: departure/arrival ledger checkpoints are unavailable.")
+        undertakings = sorted(
+            ((sailor_id, row["undertaking"]) for sailor_id, row in
+             world.economy.employment.records.items() if row.get("undertaking")),
+            key=lambda pair: pair[0])
+        if undertakings:
+            rows.append("Crew undertakings:")
+            for sailor_id, undertaking in undertakings:
+                sailor = world.ship.sailor(sailor_id)
+                name = sailor.name if sailor else next(
+                    (row["name"] for row in world.ship.crew_history if row["id"] == sailor_id),
+                    sailor_id)
+                where = PORTS[undertaking["destination"]]["name"]
+                if undertaking["status"] == "open":
+                    rows.append(f"  {name}: reach {where} by day {undertaking['deadline_day']} "
+                                "(open; needs them alive and aboard while ashore there).")
+                else:
+                    rows.append(f"  {name}: {where} by day {undertaking['deadline_day']} — "
+                                f"{undertaking['status']} on day {undertaking['closed_day']}.")
+        reviews = [world.ship.sailor(sailor_id) for sailor_id, row in
+                   world.economy.employment.records.items()
+                   if row["status"] == "active" and row["review"]
+                   and row["review"]["status"] == "offered"]
+        reviews = [sailor.name for sailor in reviews if sailor is not None]
+        if reviews:
+            rows.append(f"Follow-up: {', '.join(reviews)} asked to discuss amended terms "
+                        "at the crew roster ashore.")
         outcomes = voyage.get("outcomes", [])
         rows.append("Consequential voyage outcomes:")
         rows.extend(f"  {text}" for text in outcomes[-8:])
@@ -413,6 +440,7 @@ class VoyageSystem:
         if npc_sighting:
             v["status"] = "encounter"
             v["encounter"] = npc_sighting
+            sea_encounter.contact_of(npc_sighting)
             self._record(f"Lookouts sight {npc_sighting['name']} nearby at {SEA_NODES[self.position]['name']}.")
             world.message(f"LOOKOUTS: {npc_sighting['name']} nearby! The voyage pauses; the ship is yours to command.")
             return
@@ -610,6 +638,8 @@ class VoyageSystem:
     def continue_after_sighting(self):
         if not self.voyage or self.voyage["status"] != "encounter":
             raise ValueError("There is no active ship sighting")
+        if sea_encounter.request_pending(self.voyage):
+            raise ValueError("Resolve the pending encounter request before resuming the voyage")
         self._record(f"Captain holds course after sighting {self.voyage['encounter']['name']}.")
         self.voyage["encounter"] = None
         self.voyage["status"] = "underway"
@@ -617,6 +647,8 @@ class VoyageSystem:
     def turn_back(self, world):
         if not self.voyage or self.voyage["status"] != "encounter":
             raise ValueError("Turn back is available only during a sighting")
+        if sea_encounter.request_pending(self.voyage):
+            raise ValueError("Resolve the pending encounter request before turning back")
         current = self.position
         ports = [node for node, row in SEA_NODES.items() if row.get("port")]
         target = min(ports, key=lambda p: self.route_distance(current, p))
@@ -659,21 +691,120 @@ class VoyageSystem:
                 f"{SEA_NODES[storm_event['node']]['name']} (low confidence)."
             )
 
-    def begin_naval_combat(self, world):
-        if not self.voyage or self.voyage["status"] != "encounter":
-            raise ValueError("A ship sighting is required to begin cannon combat")
-        sighting = self.voyage.get("encounter") or {}
-        target = next((ship for ship in world.npcs.ships if ship["id"] == sighting.get("id")), None)
-        if target is None:
-            raise ValueError("The sighted vessel is no longer available")
-        if sighting.get("combat", {}).get("status") == "active":
-            return sighting["combat"]
-        seed_bytes = blake2b(f"{world.clock.total_ticks}:{target['id']}".encode(), digest_size=8).digest()
-        sighting["combat"] = {"status": "active", "seed": int.from_bytes(seed_bytes, "big"),
-                               "exchange": 0, "log": []}
-        self._record(f"Captain ordered cannon engagement with {target['name']}.")
-        world.message(f"Cannon engagement opened with {target['name']}. Loaded guns and shot are finite.")
-        return sighting["combat"]
+    def _encounter_state(self, world, *, allow_pending=False):
+        """Return the live sighting and contact, rejecting other encounter actions."""
+        if not self.voyage or self.voyage.get("status") != "encounter":
+            raise ValueError("There is no active ship sighting")
+        encounter = self.voyage.get("encounter")
+        contact = sea_encounter.contact_of(encounter)
+        if isinstance(encounter.get("id"), str):
+            world.npcs._encountered_ship(world, encounter["id"])
+        if encounter.get("combat", {}).get("status") == "active":
+            raise ValueError("A saved legacy artillery exchange is active; use its combat menu")
+        if not allow_pending and (contact.get("crossing") is not None
+                                  or contact.get("combat_pending") is not None):
+            raise ValueError("A pending encounter request blocks further encounter actions")
+        return encounter, contact
+
+    def signal_sighting(self, world, intent):
+        """Exchange one bounded signal subject at a real one-minute cost."""
+        encounter, _contact = self._encounter_state(world)
+        if world.combat.active:
+            raise ValueError("Signal exchanges are unavailable during active combat")
+        record = sea_encounter.signal(encounter, world.clock.total_ticks, intent)
+        self.advance_encounter_action_time(world, 6000)
+        self._record(f"Signals exchanged with {encounter['name']} "
+                     f"({intent.replace('_', ' ')}); no private intent disclosed.")
+        world.message(record["reply"])
+        return record
+
+    def approach_sighting(self, world):
+        """Close the encounter range when the other captain permits it."""
+        encounter, _contact = self._encounter_state(world)
+        if world.combat.active:
+            raise ValueError("Approach is unavailable during active combat")
+        result = sea_encounter.approach(encounter, world.clock.total_ticks)
+        self.advance_encounter_action_time(world, 30000)
+        self._record(result["text"])
+        world.message(result["text"])
+        return result
+
+    def evade_sighting(self, world):
+        """Attempt to break contact; a failure worsens the contact range."""
+        encounter, _contact = self._encounter_state(world)
+        if world.combat.active:
+            raise ValueError("Evasion is unavailable during active combat")
+        result = sea_encounter.evade(world, encounter, world.clock.total_ticks)
+        self.advance_encounter_action_time(world, 30000)
+        self._record(result["text"])
+        if result["escaped"]:
+            self.voyage["encounter"] = None
+            self.voyage["status"] = "underway"
+        world.message(result["text"])
+        return result
+
+    def parley_sighting(self, world, topic):
+        """Raise one encounter-local parley subject at close range."""
+        encounter, _contact = self._encounter_state(world)
+        if world.combat.active:
+            raise ValueError("Parley is unavailable during active combat")
+        result = sea_encounter.parley(encounter, topic)
+        self.advance_encounter_action_time(world, 6000)
+        self._record(result["text"])
+        world.message(result["text"])
+        return result
+
+    def request_crossing(self, world, mode, escorts=()):
+        """Record a peaceful transfer or hand off a refused crossing to combat."""
+        encounter, contact = self._encounter_state(world, allow_pending=True)
+        if world.combat.active:
+            raise ValueError("A crossing request is unavailable during active combat")
+        resolved = sea_encounter.manifest(world, mode, escorts)
+        already_pending = bool(contact.get("combat_pending") or contact.get("crossing"))
+        request = sea_encounter.request_crossing(
+            world, encounter, world.clock.total_ticks, mode, resolved)
+        if not already_pending:
+            self.advance_encounter_action_time(world, 6000)
+        if request.get("cause") == "forced_boarding":
+            text = (f"{encounter['name']} has not clearly welcomed the crossing. A durable boarding "
+                    "request is pending for the combat system; nobody moved and no clash was resolved.")
+        else:
+            text = (f"{encounter['name']} welcomes a peaceful personnel transfer. "
+                    "The crossing is recorded as a pending request; nobody has moved yet.")
+        if not already_pending:
+            self._record(text)
+            world.message(text)
+        return request
+
+    def withdraw_crossing_request(self, world):
+        """Cancel a pending crossing request without time or side effects."""
+        if not self.voyage or self.voyage.get("status") != "encounter":
+            raise ValueError("There is no active ship sighting")
+        encounter = self.voyage.get("encounter")
+        request = sea_encounter.withdraw_crossing(encounter)
+        self._record("Captain withdrew the pending peaceful crossing request.")
+        world.message("The peaceful crossing request is withdrawn. No person moved.")
+        return request
+
+    def request_naval_combat(self, world, cannon):
+        """Create the cannon-fire handoff; never fire or consume ammunition here."""
+        encounter, contact = self._encounter_state(world, allow_pending=True)
+        if world.combat.active:
+            raise ValueError("Cannon intent is unavailable during active combat")
+        already_pending = contact.get("combat_pending") is not None
+        request = sea_encounter.request_cannon(world, encounter, world.clock.total_ticks, cannon)
+        if not already_pending:
+            text = (f"Cannon-fire intent is recorded for {encounter['name']}. "
+                    "The combat system owns firing, ammunition, damage and outcome resolution.")
+            self._record(text)
+            world.message(text)
+        return request
+
+    def begin_naval_combat(self, world, cannon=None):
+        """Compatibility entry point now creates a handoff instead of a battle."""
+        if cannon is None:
+            raise ValueError("Choose a loaded, installed cannon before creating the combat handoff")
+        return self.request_naval_combat(world, cannon)
 
     @staticmethod
     def _combat_roll(combat, exchange, side, gun):
@@ -682,6 +813,8 @@ class VoyageSystem:
 
     def cannon_exchange(self, world, cannon):
         sighting = self.voyage.get("encounter") if self.voyage else None
+        if sighting and sea_encounter.request_pending({"encounter": sighting}):
+            raise ValueError("Cannon exchange belongs to the pending combat handoff")
         combat = sighting.get("combat") if sighting else None
         if not combat or combat.get("status") != "active":
             raise ValueError("There is no active cannon engagement")
@@ -826,6 +959,12 @@ class VoyageSystem:
                 raise ValueError("Invalid voyage distance")
             if voyage["status"] == "encounter" and not isinstance(voyage.get("encounter"), dict):
                 raise ValueError("Encounter requires a sighting record")
+            if voyage["status"] == "encounter":
+                living_ids = [crew.id for crew in world.ship.crew if crew.health > 0]
+                sea_encounter.validate_sighting(
+                    voyage["encounter"], valid_nodes=SEA_NODES,
+                    valid_people=set(living_ids) | {world.player.id},
+                    living_people=living_ids, captain_id=world.player.id)
             storm = voyage.get("storm_event")
             if storm is not None:
                 if (not isinstance(storm, dict)
@@ -986,6 +1125,8 @@ class NpcFleetSystem:
 
     def hail_ship(self, world, ship_id):
         ship = self._encountered_ship(world, ship_id)
+        if sea_encounter.request_pending(world.voyages.voyage):
+            raise ValueError("A pending encounter request blocks further signals")
         if world.combat.active:
             raise ValueError("Cannot exchange signals during active combat")
         if ship["threat"] == "pirates":
@@ -1007,14 +1148,19 @@ class NpcFleetSystem:
 
     def assist_ship(self, world, ship_id):
         ship = self._encountered_ship(world, ship_id)
+        if sea_encounter.request_pending(world.voyages.voyage):
+            raise ValueError("A pending encounter request blocks repair aid")
         if world.combat.active:
             raise ValueError("Cannot offer repair aid during active combat")
         record = self.player_contacts.get(ship_id)
         if ship["threat"] == "pirates":
             raise ValueError("Do not transfer repair stores to a hostile pirate vessel")
-        if not record or not record["hailed"]:
+        encounter = world.voyages.voyage.get("encounter")
+        contact = sea_encounter.contact_of(encounter, create=False)
+        signaled = any(row["outcome"] == "answered" for row in contact["signals"])
+        if not signaled and (not record or not record["hailed"]):
             raise ValueError("Exchange signals with the vessel before offering assistance")
-        if record["aid_count"]:
+        if record and record["aid_count"]:
             raise ValueError("Repair assistance to this vessel has already been given")
         if ship["condition"] > 60:
             raise ValueError("The vessel is not visibly distressed enough to warrant repair aid")
@@ -1026,7 +1172,11 @@ class NpcFleetSystem:
         world.economy.remove("iron", 1)
         repair = min(20, 100 - ship["condition"])
         ship["condition"] += repair
-        record["last_hour"] = world.clock.total_ticks // 360000
+        hour = world.clock.total_ticks // 360000
+        if record is None:
+            record = {"first_hour": hour, "last_hour": hour, "hailed": False, "aid_count": 0}
+            self.player_contacts[ship_id] = record
+        record["last_hour"] = hour
         record["aid_count"] = 1
         self._event(f"The Wayward gave {ship['name']} one iron cargo unit; their observed vessel condition improved by {repair}.")
         world.voyages._record(f"The crew gave one iron cargo unit to repair {ship['name']} by {repair} condition.")
@@ -1034,23 +1184,25 @@ class NpcFleetSystem:
         world.voyages.advance_encounter_action_time(world, 6000)
         return repair
 
-    def advance_second(self, world, player_node, sighting_enabled=False):
+    def advance_second(self, world, player_node, sighting_enabled=False, reserved_ship_ids=()):
         # One fleet activity pulse per simulated hour. Ships move only on charted
         # lanes; their cargo, purses and captive headcounts remain conserved.
         if world.clock.total_ticks // 360000 <= self.hour:
             return None
         self.hour = world.clock.total_ticks // 360000
+        reserved = set(reserved_ship_ids)
         for ship in self.ships:
-            if ship["node"] == ship["destination"]:
-                self._activity(world, ship)
-                choices = [b if a == ship["node"] else a for a, b in LANES if a == ship["node"] or b == ship["node"]]
-                if choices:
-                    # Deterministic faction-specific route preference.
-                    ship["destination"] = sorted(choices)[(self.hour + len(ship["id"])) % len(choices)]
-            else:
-                route, _ = VoyageSystem.shortest_route(self, ship["node"], ship["destination"])
-                if len(route) > 1:
-                    ship["node"] = route[1]
+            if ship["id"] not in reserved:
+                if ship["node"] == ship["destination"]:
+                    self._activity(world, ship)
+                    choices = [b if a == ship["node"] else a for a, b in LANES if a == ship["node"] or b == ship["node"]]
+                    if choices:
+                        # Deterministic faction-specific route preference.
+                        ship["destination"] = sorted(choices)[(self.hour + len(ship["id"])) % len(choices)]
+                else:
+                    route, _ = VoyageSystem.shortest_route(self, ship["node"], ship["destination"])
+                    if len(route) > 1:
+                        ship["node"] = route[1]
             player_xy = SEA_NODES[player_node]["xy"] if isinstance(player_node, str) else player_node
             ship_xy = SEA_NODES[ship["node"]]["xy"]
             nearby = math.hypot(ship_xy[0] - player_xy[0], ship_xy[1] - player_xy[1]) <= 1.25

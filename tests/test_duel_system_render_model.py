@@ -27,6 +27,18 @@ def test_read_only_model_and_formatter_are_40_columns_with_persistent_state():
         model.player_state = "anything"
 
 
+def test_player_bleed_readout_reports_capped_ten_tick_rate_and_treatment_by_wound():
+    session = DuelSession.new(guide_mode="off")
+    session.player.wounds = [Wound(Zone.TORSO, Severity.DEEP, 19),
+                             Wound(Zone.ARM, Severity.CUT, 4, bandaged=True)]
+    model = session.render_model()
+    assert any("Bleeding 20 blood per turn (10 ticks)" in alert for alert in model.functional_alerts)
+    assert any("torso" in line.lower() and "bleed 19/turn (untreated)" in line
+               for line in model.player_injury_rows)
+    assert any("arm" in line.lower() and "bleed 1.6/turn (partially bandaged)" in line
+               for line in model.player_injury_rows)
+
+
 def test_grounded_readout_restricts_controls_and_explains_stability_and_rise():
     from pirates.duel_layout import context_labels
 
@@ -56,13 +68,21 @@ def test_stability_meter_help_uses_stable_stat_key_and_tactical_actions_are_reac
     session = DuelSession.new(guide_mode="off")
     ui = DuelUI(session, rounds=True)
     model = ui.model()
+    labels = context_labels(ui.sidebar_rows(model), model)
+    assert {"Defend", "Thrust", "Dash+Light", "Feint", "Shove", "Disarm",
+            "Disengage", "Move", "Run"} <= set(labels)
+    defend = next(option for option in model.actions if option.label == "Defend")
+    assert "No committed threat is visible" in defend.details
+    assert "bounded" in defend.details.lower()
+    assert {"Defend", "Feint", "Shove", "Disarm", "Disengage", "Thrust"} <= set(
+        context_labels(format_ascii(model), model))
     assert "Stability" in STATS
     help_rows = stat_rows(model, "Stability (bal 44)")
     assert "Stability:" in help_rows[0]
     assert "current balance reserve" in help_rows[1].lower()
     assert f"{model.player_stability:.1f} / 100" in help_rows[0]
 
-    # The contextual menu intentionally nests the six tactics under More > Tactics.
+    # Keep Tactics discoverable on the main row and retain the More-menu alias.
     ui.activate("More")
     assert "Tactics" in context_labels(ui.sidebar_rows(ui.model()))
     ui.activate("Tactics")
@@ -70,6 +90,26 @@ def test_stability_meter_help_uses_stable_stat_key_and_tactical_actions_are_reac
         "Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline", "Back"]
     options = {option.label for option in ui.model().actions}
     assert {"Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline"} <= options
+
+
+def test_accuracy_help_and_wound_rows_do_not_claim_condition_reduces_accuracy():
+    from pirates.duel_stat_help import stat_rows
+    from pirates.duel_system.model import Status
+
+    session = DuelSession.new(guide_mode="off")
+    player = session.player
+    authored = player.accuracy
+    player.level = 8
+    player.fatigue, player.pain, player.blood = 90, 90, 20
+    player.anger, player.morale, player.nervousness = 90, 0, 1
+    player.permanent_injuries.eyes_damaged = 2
+    player.statuses.append(Status("concussed", until_tick=20, accuracy_mult=0.1))
+    model = session.render_model()
+    assert dict(model.player_sheet)["Accuracy"] == f"{authored:.1f} (base {authored:g})"
+    text = " ".join(stat_rows(model, "Accuracy")).lower()
+    assert "permanent authored skill" in text
+    assert "do not modify your accuracy" in text
+    assert "accuracy reduced" not in " ".join(model.player_injury_rows).lower()
 
 
 def test_fall_cause_and_fallen_state_are_visible_without_mutating_during_render():
@@ -102,6 +142,39 @@ def test_danger_and_glyph_come_from_committed_attack_not_hypothetical_ai():
     assert model.danger
     assert (enemy.pos[0]-1, enemy.pos[1]) in model.danger
     assert "!" in "\n".join(format_ascii(model))
+
+
+def test_opponent_read_separates_observed_commitment_opportunity_and_condition():
+    session = DuelSession.new(guide_mode="off")
+    model = session.render_model()
+    assert model.enemy_commitment == "Ready; no committed action visible."
+    assert "next choice unknown" in model.enemy_opportunity.lower()
+    assert "No obvious visible" in model.enemy_condition
+    assert "COMMITMENT:" in "\n".join(format_ascii(model))
+
+    enemy = session.enemy
+    commit_action(session.state, enemy.id, Choice(ActionKind.HEAVY, Zone.TORSO,
+                                                  target_id=session.player.id))
+    model = session.render_model()
+    assert "Committed Heavy" in model.enemy_commitment
+    assert "tracking west, locks t" in model.enemy_commitment
+    assert "contact t" in model.enemy_commitment
+    light = next(option for option in model.actions if option.label == "Light")
+    assert "Intent: quick cut" in light.details
+    assert "Current commitments overlap" in light.details or "before your contact" in light.details
+
+
+def test_opponent_read_hides_unseen_solo_enemy_state_and_actions():
+    session = DuelSession.new(guide_mode="off")
+    commit_action(session.state, session.enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=session.player.id))
+    session.enemy.pos = (12, 6)
+    model = session.render_model()
+    assert not model.enemy_visible
+    assert model.enemy_action == "UNKNOWN"
+    assert "No visible commitment" in model.enemy_commitment
+    assert "unknown" in model.enemy_opportunity.lower()
+    assert "hidden" not in model.enemy_condition.lower()  # no claim about an unseen state
 
 
 def test_attack_preview_shows_zone_exposure_cost_fatigue_and_timelines():

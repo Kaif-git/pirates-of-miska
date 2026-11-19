@@ -15,8 +15,8 @@ def describe_choice(data):
     return label
 
 
-def summarize_exchange(events, names, *, deep_threshold=None):
-    """Three short lines: choices, outcome, and one decisive recorded check."""
+def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=()):
+    """Compact choices, bodily outcomes and causal explanation; never score damage."""
     choices = {event.actor: event for event in events if event.type.value == "ACTION_START"}
     def who(actor):
         return names.get(actor, actor or "Fight")
@@ -31,11 +31,6 @@ def summarize_exchange(events, names, *, deep_threshold=None):
             label += f" · {data.get('tiles', 1)} {compass.get(tuple(data['direction']), '?')}"
         return label
     outcomes, checks = [], []
-    hits = [event for event in events if event.type.value == "HIT" and "net" in event.deltas]
-    if len({event.actor for event in hits}) > 1:
-        compared = " | ".join(f"{who(event.actor)} {event.deltas['net']:.1f} {event.severity.value.lower()}" for event in hits[:2])
-        cutoff = f"; deep ≥ {deep_threshold:g}" if deep_threshold is not None else ""
-        checks.append((95, f"Trade: {compared}{cutoff}."))
     for event in events:
         kind, data = event.type.value, event.deltas
         actor, target = who(event.actor), who(event.target)
@@ -46,9 +41,11 @@ def summarize_exchange(events, names, *, deep_threshold=None):
             checks.append((70, "Reach: " + reason))
         elif kind == "HIT":
             possessive = "your" if target == "You" else f"{target}'s"
-            outcomes.append(f"{actor} hit {possessive} {event.zone.value.lower()} ({event.severity.value.lower()}).")
+            site = data.get("site", event.zone.value).replace("_", " ").lower()
+            side = f"{data['side'].lower()} " if data.get("side") else ""
+            outcomes.append(f"{actor} hit {possessive} {side}{site} ({event.severity.value.lower()}).")
             if data.get("structure"):
-                checks.append((60, f"Injury: {data.get('damage_type', 'cutting').lower()} contact reached "
+                checks.append((60, f"Injury: {side}{site}; {data.get('damage_type', 'cutting').lower()} contact reached "
                                f"{data.get('depth', event.severity.value.lower()).lower()} "
                                f"{data['structure'].replace('_', ' ').lower()}; "
                                f"function: {data.get('function', 'bleeding and pain only').replace('_', ' ')}."))
@@ -64,9 +61,6 @@ def summarize_exchange(events, names, *, deep_threshold=None):
                 other = choices.get(event.target)
                 if other and other.deltas.get('strike_tick', event.tick) > event.tick:
                     checks.append((85, f"Timing: light landed at t{event.tick}, before heavy at t{other.deltas['strike_tick']}."))
-            if "power" in data:
-                armor = data.get("armor", data['power']-data.get('net', data['power']))
-                checks.append((20, f"Impact: power {data['power']:.1f} − armor {armor:.1f} = {data.get('net', data['power']):.1f}."))
         elif kind == "GUARD_BREAK":
             guard = "your guard" if target == "You" else f"{target}'s guard"
             outcomes.append(f"{actor} broke {guard}.")
@@ -100,7 +94,9 @@ def summarize_exchange(events, names, *, deep_threshold=None):
         elif kind == "FEINT":
             if data.get("outcome") == "GUARD_DISRUPTED":
                 outcomes.append(f"{actor}'s feint disrupted {target}'s guard.")
-                checks.append((65, f"Feint: drained {data.get('guard_stamina_drained', 0):.1f} guard stamina; riposte consumed={bool(data.get('riposte_consumed'))}."))
+                checks.append((65, f"Feint: guard interrupted through t{data.get('opening_until_tick')}; "
+                               f"drained {data.get('guard_stamina_drained', 0):.1f} stamina; "
+                               f"riposte consumed={bool(data.get('riposte_consumed'))}."))
             else:
                 outcomes.append(f"{actor}'s feint had no effect.")
                 checks.append((65, "Feint: no active guard was in reach at completion."))
@@ -142,13 +138,17 @@ def summarize_exchange(events, names, *, deep_threshold=None):
             outcomes.append(f"{actor}'s {data.get('name', 'weapon')} broke from {data.get('contact', 'contact').lower()} stress.")
         elif kind == "WEAPON_PICKUP":
             outcomes.append(f"{actor} picked up {data.get('name', 'a weapon')} at {data['condition']:.0f}% condition.")
+        elif kind == "SEVER":
+            side = f"{data['side'].lower()} " if data.get("side") else ""
+            outcome = ("weapon hand lost; weapon use is disabled" if data.get("weapon_hand_lost")
+                       else "supporting hand lost; one-handed weapon remains usable")
+            outcomes.append(f"{target} lost the {side}hand ({outcome}).")
         elif kind == "EYE_INJURY":
             outcomes.append(f"{target} sustained a permanent eye injury ({data['eyes_damaged_after']} eye(s) impaired).")
-            checks.append((95, f"Eye injury: clean {data['damage_type'].lower()} eye contact; net after armor "
-                           f"{data['net_after_armor']:.1f}. Accuracy penalty is persistent."))
+            checks.append((95, "Eye injury: clean qualifying contact caused a persistent vision impairment."))
         elif kind == "DECAPITATION":
             outcomes.append(f"{target} died from a clean heavy cutting head strike.")
-            checks.append((100, f"Decapitation: net {data['net_after_armor']:.1f} ≥ {data['required_net']:g}; no critical roll."))
+            checks.append((100, "Decapitation: clean heavy cutting head contact met the fatal injury condition."))
         elif kind == "INCAPACITATED":
             outcomes.append(f"{target} was incapacitated by {data.get('cause', 'injury').replace('_', ' ').lower()}.")
     if not outcomes:
@@ -165,13 +165,80 @@ def summarize_exchange(events, names, *, deep_threshold=None):
         moving = next((choice for choice in choices.values() if choice.deltas.get('direction') and 'speed' in choice.deltas), None)
         if moving:
             checks.append((10, f"Movement: Speed {moving.deltas['speed']:.1f} set step timing."))
-    # The recap never grows into a ledger. Detailed events remain in format_exchange.
+    consequences = []
+    bleed_totals, forced_steps = {}, {}
+    for event in events:
+        kind, data = event.type.value, event.deltas
+        actor = who(event.actor)
+        if kind == "POOL_CHANGE" and data.get("bleed_loss", 0) > 0:
+            bleed_totals[event.actor] = bleed_totals.get(event.actor, 0) + data["bleed_loss"]
+        elif kind == "HIT":
+            zone = event.zone.value.lower() if event.zone else "body"
+            site = data.get("site", zone.replace(" ", "_")).replace("_", " ").lower()
+            if data.get("side"):
+                site = data["side"].lower() + " " + site
+            structure = data.get("structure", "tissue").replace("_", " ").lower()
+            depth = data.get("depth", event.severity.value if event.severity else "wound").lower()
+            function = data.get("function", "bleeding and pain only").replace("_", " ")
+            injury = structure if depth.replace("_", " ") == structure else f"{depth} {structure}"
+            consequences.append(f"{who(event.target)}: {zone} ({site}) {injury} injury; "
+                                f"pain +{data.get('pain', 0):g}; {function}")
+        elif kind == "WOUND":
+            bleed = data.get("bleed_per_turn", 0)
+            if data.get("initial_blood_loss", 0) > 0:
+                site = data.get("site", event.zone.value).replace("_", " ").lower()
+                side = f"{data['side'].lower()} " if data.get("side") else ""
+                amount = ("one-off superficial loss; amount unknown" if event.target in private_actor_ids
+                          else f"one-off blood loss {data['initial_blood_loss']:.2f}")
+                consequences.append(f"{who(event.target)}: {side}{site} graze caused {amount}; "
+                                    "no continuing bleed")
+            if bleed > 0:
+                site = data.get("site", event.zone.value).replace("_", " ").lower()
+                side = f"{data['side'].lower()} " if data.get("side") else ""
+                consequences.append(f"{who(event.target)}: {side}{site} bleeding {bleed:g}/turn")
+        elif kind == "STATUS" and data.get("status"):
+            consequences.append(f"{actor}: {data['status'].replace('_', ' ').lower()}")
+        elif kind == "STABILITY" and "loss" in data:
+            if event.actor in private_actor_ids:
+                consequences.append(f"{actor} off-balance")
+            else:
+                loss = f"{data['loss']:.1f}".rstrip("0").rstrip(".")
+                consequences.append(f"{actor} −{loss} stability")
+        elif kind == "STABILITY" and "gain" in data:
+            if event.actor in private_actor_ids:
+                consequences.append(f"{actor} steadied")
+            else:
+                gain = f"{data['gain']:.1f}".rstrip("0").rstrip(".")
+                consequences.append(f"{actor} +{gain} stability")
+        elif kind == "MOVE" and data.get("forced"):
+            forced_steps[event.actor] = forced_steps.get(event.actor, 0) + 1
+        elif kind == "FALL":
+            consequences.append(f"{actor} grounded")
+        elif kind == "INCAPACITATED":
+            consequences.append(f"{who(event.target)} incapacitated")
+        elif kind == "STATUS" and "BANDAGE_COMPLETED" in event.cause_tags:
+            consequences.append(f"{actor} treated a wound")
+    for actor, amount in bleed_totals.items():
+        consequences.append(f"{who(actor)} bleeding; amount unknown" if actor in private_actor_ids
+                            else f"{who(actor)} −{amount:.1f} blood")
+    for actor, steps in forced_steps.items():
+        consequences.append(f"{who(actor)} pushed {steps} tile{'s' if steps != 1 else ''}")
+    for actor, choice in choices.items():
+        if actor not in private_actor_ids and choice.deltas.get("paid", 0) > 0:
+            consequences.append(f"{who(actor)} paid {choice.deltas['paid']:.1f} stamina"
+                                + (f"; fatigue +{choice.deltas['fatigue_added']:.1f}"
+                                   if choice.deltas.get("fatigue_added", 0) > 0 else ""))
+    # Keep the summary bounded and preserve separate detailed facts behind Details.
+    consequence_line = "Effects: " + (
+        "; ".join(list(dict.fromkeys(consequences))[:4]) if consequences
+        else "no additional control, injury, bleeding or recovery change")
     return (" | ".join(f"{who(actor)}: {short_choice(choice.deltas)}" for actor, choice in choices.items()),
             " ".join(outcomes[:2]) or "No strike exchanged.",
+            consequence_line,
             max(checks, key=lambda item: item[0])[1] if checks else "No attack check was needed.")
 
 
-def format_exchange(events, names, *, before=None, fighters=()):
+def format_exchange(events, names, *, before=None, fighters=(), private_actor_ids=()):
     """Choice, result and measured reason; older saved events omit unknown numbers."""
     choices = {event.actor: event for event in events if event.type.value == "ACTION_START"}
     rows = [f"{names.get(actor, actor)} chose: {describe_choice(event.deltas)}."
@@ -188,9 +255,6 @@ def format_exchange(events, names, *, before=None, fighters=()):
         elif kind == "HIT":
             zone = event.zone.value.lower()
             reason = []
-            if "strength" in data:
-                reason.append(f"Strength {data['strength']:.1f} produced power {data['power']:.1f}; "
-                              f"armor {data['armor']:.1f} left net {data['net']:.1f}")
             if "accuracy" in data:
                 rolled, needed = data['rolled_accuracy'], data['required_accuracy']
                 comparison = ">=" if rolled >= needed else "<"
@@ -211,17 +275,24 @@ def format_exchange(events, names, *, before=None, fighters=()):
             if "LIGHT_CATCHES_RECOVERY" in tags:
                 reason.append("target was still recovering")
             if not reason:
-                reason.append(f"strike power {data.get('power', 0):.1f} minus armor gave net {data.get('net', 0):.1f}")
+                reason.append("contact reached the target; see the wound and function below")
             if data.get("defender_phase") == "STAGGER":
                 reason.append("staggered target granted the clean-hit power bonus")
             possessive = "your" if target == "You" else f"{target}'s"
-            rows.append(f"{actor}: hit {possessive} {zone} ({event.severity.value.lower()}). Why: " + "; ".join(reason)+".")
+            site = data.get("site", zone.upper()).replace("_", " ").lower()
+            if data.get("side"):
+                site = data["side"].lower() + " " + site
+            rows.append(f"{actor}: hit {possessive} {zone} ({site}; {event.severity.value.lower()}). Why: "
+                        + "; ".join(reason)+".")
             if data.get("structure"):
                 rows.append(f"{actor}: {data.get('damage_type', 'cutting').lower()} contact reached "
                             f"{data.get('depth', event.severity.value.lower()).lower()} "
-                            f"{data['structure'].replace('_', ' ').lower()} in the {zone}; "
-                            f"function: {data.get('function', 'bleeding and pain only').replace('_', ' ')}. "
-                            "After-armor net set depth; this is not a random critical hit.")
+                            f"{data['structure'].replace('_', ' ').lower()} at {site} ({zone}); "
+                            f"function: {data.get('function', 'bleeding and pain only').replace('_', ' ')}; "
+                            f"pain increased by {data.get('pain', 0):g}.")
+            else:
+                rows.append(f"{target}: {zone} {event.severity.value.lower()} contact; "
+                            "see current condition for resulting function and bleeding.")
         elif kind in {"PARRY", "BLOCK", "GUARD_BREAK"}:
             if kind == "PARRY":
                 reason = (f"inside the {data['parry_window']}-tick parry window; defender Strength {data['defender_strength']:.1f} "
@@ -260,7 +331,8 @@ def format_exchange(events, names, *, before=None, fighters=()):
             if data.get("outcome") == "GUARD_DISRUPTED":
                 rows.append(f"{actor}: feint disrupted {target}'s committed guard; "
                             f"{data.get('guard_stamina_drained', 0):.1f} guard stamina drained, "
-                            f"stored riposte consumed={bool(data.get('riposte_consumed'))}.")
+                            f"stored riposte consumed={bool(data.get('riposte_consumed'))}; "
+                            f"opening until t{data.get('opening_until_tick')}.")
             else:
                 rows.append(f"{actor}: feint had no effect; no active guard was in reach at completion.")
         elif kind == "SHOVE":
@@ -297,6 +369,13 @@ def format_exchange(events, names, *, before=None, fighters=()):
             location = tuple(data.get("position", ()))
             blocker = who(event.target)
             rows.append(f"{actor}: movement blocked at {location}; {blocker} occupied the destination when the step resolved.")
+        elif kind == "STATUS" and "BANDAGE_COMPLETED" in event.cause_tags:
+            if event.actor in private_actor_ids:
+                rows.append(f"{actor}: bandaged a {data['zone'].lower()} wound; remaining bleeding is uncertain.")
+            else:
+                rows.append(f"{actor}: bandaged the {data['zone'].lower()} {data['severity'].lower()} wound; "
+                            f"bleed rate {data['rate_before']:g} → {data['rate_after']:g} per turn; "
+                            f"{data['bandages_remaining']} bandage(s) remain.")
         elif kind == "FIGHT_END":
             rows.append(f"Fight ended: {data['reason']}.")
     for actor in choices:
@@ -309,6 +388,27 @@ def format_exchange(events, names, *, before=None, fighters=()):
         if ended and choices[actor].deltas['kind'] in {"WAIT", "GUARD", "BANDAGE", "EAT", "DRINK", "PICKUP"}:
             rows.append(f"{who(actor)}: {choices[actor].deltas['kind'].lower()} completed."
                         + (" No strike was attempted." if choices[actor].deltas['kind'] == "WAIT" else ""))
+    bleed_totals, bleed_rates = {}, {}
+    initial_loss_totals = {}
+    for event in events:
+        if event.type.value == "POOL_CHANGE" and event.deltas.get("bleed_loss", 0) > 0:
+            bleed_totals[event.actor] = bleed_totals.get(event.actor, 0) + event.deltas["bleed_loss"]
+            bleed_rates[event.actor] = max(bleed_rates.get(event.actor, 0),
+                                           event.deltas.get("bleed_rate_per_turn", 0))
+        elif event.type.value == "POOL_CHANGE" and event.deltas.get("initial_blood_loss", 0) > 0:
+            initial_loss_totals[event.actor] = (initial_loss_totals.get(event.actor, 0)
+                                                + event.deltas["initial_blood_loss"])
+    for actor, amount in bleed_totals.items():
+        if actor in private_actor_ids:
+            rows.append(f"{who(actor)} appears to be bleeding; exact blood loss and rate are unknown.")
+        else:
+            rows.append(f"{who(actor)} bleeding: lost {amount:.2f} blood during this exchange "
+                        f"(observed rate up to {bleed_rates[actor]:g}/turn before exertion).")
+    for actor, amount in initial_loss_totals.items():
+        if actor in private_actor_ids:
+            rows.append(f"{who(actor)} sustained a superficial wound; exact blood loss is unknown.")
+        else:
+            rows.append(f"{who(actor)} superficial graze: one-off blood loss {amount:.2f}; no continuing bleed.")
     for actor, event in choices.items():
         data = event.deltas
         if "speed" in data:

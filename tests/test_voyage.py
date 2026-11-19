@@ -201,7 +201,7 @@ def test_contact_and_aid_cannot_become_free_actions_during_combat():
     assert world.economy.cargo["iron"] == 1 and target["condition"] == 40
 
 
-def test_non_hostile_encounter_menu_adds_contact_without_shifting_continue_action():
+def test_non_hostile_encounter_menu_signals_and_preserves_continue_choice():
     from pirates.management import voyage_menu
 
     class Scripted:
@@ -222,13 +222,13 @@ def test_non_hostile_encounter_menu_adds_contact_without_shifting_continue_actio
     world.voyages.voyage["encounter"] = deepcopy(target)
     world.enter_sea()
     start = world.clock.total_ticks
-    voyage_menu(Scripted([6, 3, None]), world)
-    assert world.npcs.player_contacts[target["id"]]["hailed"]
+    voyage_menu(Scripted([6, 1, 0, None]), world)
+    assert world.voyages.voyage["encounter"]["contact"]["signals"][0]["intent"] == "identify"
     assert world.clock.total_ticks == start + 6000
 
     world.voyages.voyage["status"] = "encounter"
     world.voyages.voyage["encounter"] = deepcopy(target)
-    voyage_menu(Scripted([6, 1, None]), world)
+    voyage_menu(Scripted([6, 4, None]), world)
     assert world.voyages.voyage["status"] == "underway"
 
 
@@ -875,7 +875,7 @@ def test_departure_review_binds_active_delivery_to_selected_chart_route():
             if title.startswith("Voyage command"):
                 return 4
             if title == "Choose destination; officers will review the plan":
-                return 0  # Cinder Quay is the first destination from Verdant Reach.
+                return 1  # The Glass Shoals is first; Cinder Quay is second.
             if title == "Choose a chart route":
                 return 1
             if title == "Commit this voyage order?":
@@ -925,12 +925,13 @@ def test_voyage_ui_resolves_nearby_ship_in_normal_game_scene():
     world.enter_sea()
     world.voyages.voyage["status"] = "encounter"
     world.voyages.voyage["encounter"] = {"name": "Marine cutter", "faction": "World Government"}
-    voyage_menu(Scripted([6, 1, None]), world)
+    voyage_menu(Scripted([6, 4, None]), world)
     assert world.voyages.voyage["status"] == "underway"
     assert world.at_sea
 
 
-def test_pirate_sighting_breaches_real_hull_and_starts_shipboard_combat():
+def test_pirate_sighting_crossing_stops_at_combat_handoff_without_breach_or_resolution():
+    from pirates import sea_encounter
     from pirates.management import voyage_menu
 
     class Scripted:
@@ -946,22 +947,23 @@ def test_pirate_sighting_breaches_real_hull_and_starts_shipboard_combat():
     world = quiet_world()
     world.voyages.confirm(world, "deepwater")
     world.enter_sea()
+    target = next(ship for ship in world.npcs.ships if ship["threat"] == "pirates")
     world.voyages.voyage["status"] = "encounter"
-    world.voyages.voyage["encounter"] = {
-        "id": "boarding_test", "name": "Rogue pirate brig", "faction": "Free Syndicate",
-        "threat": "pirates", "crew": 6,
-    }
+    world.voyages.voyage["encounter"] = deepcopy(target)
+    world.voyages.voyage["encounter"]["contact"] = sea_encounter.new_contact()
+    world.voyages.voyage["encounter"]["contact"]["range"] = "close"
     world.set_lockdown(True)
-    voyage_menu(Scripted([6, 1]), world)
-    assert world.combat.active and len(world.combat.enemies) == 2
-    assert world.hazards.breaches
-    assert world.voyages.voyage["status"] == "encounter"
-    for enemy in world.combat.enemies:
-        enemy.hp = 0
-    world.combat.exit(world)
+    hull = world.ship.hull
+    hazard_state = deepcopy(world.hazards.breaches)
+    voyage_menu(Scripted([6, 2, None]), world)
     assert not world.combat.active
-    assert world.voyages.voyage["status"] == "underway"
-    assert world.hazards.breaches
+    assert not world.hazards.breaches
+    assert world.hazards.breaches == hazard_state
+    assert world.ship.hull == hull
+    assert world.voyages.voyage["status"] == "encounter"
+    request = world.voyages.voyage["encounter"]["contact"]["combat_pending"]
+    assert request["cause"] == "forced_boarding"
+    assert request["participants"] == [world.player.id]
 
 
 def test_turnback_at_a_port_node_resolves_sighting_and_save_validates(tmp_path):
@@ -1012,12 +1014,19 @@ def cannon_world():
     world.voyages.assign_role(world, "captain", "tavi")
     world.ship.ammo["port_cannon"] = 1
     world.ship.ammo["starboard_cannon"] = 1
-    world.voyages.begin_naval_combat(world)
+    return world
+
+
+def legacy_cannon_world():
+    """Fixture for preserving resolution of an artillery save already in progress."""
+    world = cannon_world()
+    world.voyages.voyage["encounter"]["combat"] = {
+        "status": "active", "seed": 31, "exchange": 0, "log": []}
     return world
 
 
 def test_ship_cannon_exchange_is_deterministic_and_conserves_both_sides_shot():
-    first, second = cannon_world(), cannon_world()
+    first, second = legacy_cannon_world(), legacy_cannon_world()
     for world in (first, second):
         target = next(ship for ship in world.npcs.ships if ship["id"] == "government_1")
         before_shot = target["cargo"]["shot"]
@@ -1031,7 +1040,7 @@ def test_ship_cannon_exchange_is_deterministic_and_conserves_both_sides_shot():
     assert first.npcs.ships[1]["condition"] == second.npcs.ships[1]["condition"]
 
 
-def test_voyage_sighting_ui_opens_a_commandable_cannon_exchange():
+def test_voyage_sighting_ui_requires_confirmation_and_stops_at_cannon_handoff():
     from pirates.management import voyage_menu
 
     class Scripted:
@@ -1045,16 +1054,19 @@ def test_voyage_sighting_ui_opens_a_commandable_cannon_exchange():
             pass
 
     world = cannon_world()
-    world.voyages.voyage["encounter"].pop("combat")
-    # Sightings open the saved encounter, then select cannons by their real loaded state.
-    voyage_menu(Scripted([6, 0, 0, None]), world)
+    ammo = world.ship.ammo["port_cannon"]
+    voyage_menu(Scripted([6, 6, 0, 0, None]), world)
     assert world.voyages.voyage["status"] == "encounter"
-    assert world.voyages.voyage["encounter"]["combat"]["exchange"] == 1
-    assert world.ship.ammo["port_cannon"] == 0
+    request = world.voyages.voyage["encounter"]["contact"]["combat_pending"]
+    assert request["cause"] == "cannon_fire"
+    assert request["requested_action"] == {"kind": "fire_cannon", "cannon": "port_cannon"}
+    assert world.ship.ammo["port_cannon"] == ammo
+    assert not world.combat.active
+    assert "combat" not in world.voyages.voyage["encounter"]
 
 
 def test_cannon_exchange_saves_and_resumes_the_same_deterministic_battle(tmp_path):
-    world, uninterrupted = cannon_world(), cannon_world()
+    world, uninterrupted = legacy_cannon_world(), legacy_cannon_world()
     world.voyages.cannon_exchange(world, "port_cannon")
     uninterrupted.voyages.cannon_exchange(uninterrupted, "port_cannon")
     path = tmp_path / "mid-cannon-fight.json"
@@ -1069,7 +1081,7 @@ def test_cannon_exchange_saves_and_resumes_the_same_deterministic_battle(tmp_pat
 
 
 def test_cannon_requires_loaded_installed_gun_and_enemy_can_be_forced_to_withdraw():
-    world = cannon_world()
+    world = legacy_cannon_world()
     world.ship.ammo["port_cannon"] = 0
     with pytest.raises(ValueError, match="loaded charge"):
         world.voyages.cannon_exchange(world, "port_cannon")

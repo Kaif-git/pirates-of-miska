@@ -10,6 +10,7 @@
     "loop_max_sequence_length": 3,
     "loop_repeat_limit": 2,
     "loop_penalty": 1000,
+    "grudge_target_cooldown_days": 180,
     "debug_history_limit": 500
   },
   "actions": {
@@ -62,7 +63,7 @@
       "precondition": "living_character_with_grudge",
       "handler": "pursue_grudge",
       "time_cost_ticks": 24,
-      "silver_cost": 0,
+      "silver_cost": 10,
       "risk_permille": 250,
       "expected_gain": 28,
       "expected_loss": 8,

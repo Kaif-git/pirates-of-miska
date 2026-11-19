@@ -52,6 +52,9 @@ class Observation:
     opponent_phase: str
     opponent_hand_exposed: bool
     recent_attacks: tuple[str, ...]
+    own_bleed_rate: float = 0
+    opponent_unsteady: bool = False
+    opponent_push_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,14 +75,17 @@ def observe(state, fighter_id):
         other = state.other(fighter)
         other_pos = other.pos
         visible = True
+        group_combat = False
     else:
         contact = state.perceived_hostile_position(fighter_id)
         if contact is None:
             other, visible = None, False
             other_pos = (fighter.pos[0] + state.config["group"]["vision_range"] + 1, fighter.pos[1])
+            group_combat = True
         else:
             identity, other_pos, visible = contact
             other = state.fighter(identity) if visible else None
+            group_combat = True
     cfg, rule = state.config, state.config["ai"]
     gap = distance(fighter.pos, other_pos) - weapon_reach(fighter, cfg)
     limits = rule["gap_bands"]
@@ -125,13 +131,55 @@ def observe(state, fighter_id):
     full = FullKey(public, blood_band, fear_band, pain_band)
     recent = tuple(item for item in fighter.action_history
                    if item in {"LIGHT", "HEAVY", "DASH_LIGHT", "THRUST", "DISARM"})
+    bleed_rate = min(cfg["blood"]["total_bleed_cap_per_turn"], sum(
+        wound.bleed_per_turn * (1-cfg["blood"]["bandage_reduction"] if wound.bandaged else 1)
+        for wound in fighter.wounds))
+    if group_combat:
+        # A group fighter may only reason from witnessed cues, not the visible
+        # target's hidden simulation pools, wound list or authored attributes.
+        witnessed_wounds = [event for event in state.event_log
+                            if event.type == EventType.WOUND and event.target == (other.id if other else None)
+                            and fighter.id in event.witnesses
+                            and event.deltas.get("bleed_per_turn", 0) > 0]
+        opponent_bleeding = bool(witnessed_wounds)
+        opponent_blood = cfg["blood"]["start"]  # no exact public blood pool in group combat
+        opponent_strength = cfg["defaults"]["strength"]
+        witnessed_state = next((event for event in reversed(state.event_log)
+                                if event.actor == (other.id if other else None)
+                                and fighter.id in event.witnesses
+                                and state.tick - event.tick <= cfg["time"]["ticks_per_turn"]
+                                and event.type in {EventType.STABILITY, EventType.FALL, EventType.RISE}), None)
+        opponent_unsteady = bool((other is not None and visible and other.grounded)
+                                 or (witnessed_state and (
+                                     witnessed_state.type == EventType.FALL
+                                     or witnessed_state.type == EventType.STABILITY
+                                     and witnessed_state.deltas.get("band") in {"OFF_BALANCE", "STUMBLING"})))
+        opponent_pos = other.pos if other is not None else None
+        push_open = False
+        if other is not None and visible:
+            dx = (other.pos[0] > fighter.pos[0]) - (other.pos[0] < fighter.pos[0])
+            dy = (other.pos[1] > fighter.pos[1]) - (other.pos[1] < fighter.pos[1])
+            destination = (other.pos[0]+dx, other.pos[1]+dy)
+            occupied = {item.pos for item in state.fighters if item.id != other.id and state.combat_active(item)}
+            push_open = (destination not in occupied and destination in (state.walkable or set()))
+    else:
+        opponent_bleeding = any(w.bleed_per_turn > 0 for w in other.wounds)
+        opponent_blood = other.blood
+        opponent_strength = effective_stats(other, cfg, state.tick).strength
+        from .stability import stability_band
+        opponent_unsteady = stability_band(other, cfg) in {"OFF_BALANCE", "STUMBLING", "GROUNDED"}
+        dx = (other.pos[0] > fighter.pos[0]) - (other.pos[0] < fighter.pos[0])
+        dy = (other.pos[1] > fighter.pos[1]) - (other.pos[1] < fighter.pos[1])
+        destination = (other.pos[0]+dx, other.pos[1]+dy)
+        occupied = {item.pos for item in state.fighters if item.id != other.id and state.combat_active(item)}
+        push_open = destination not in occupied and destination in (state.walkable or set())
     return Observation(public, full, gap, fighter.anger, pct, fighter.fatigue, own_fear,
                         fighter.blood, fighter.pain, fighter.exhausted,
                         effective_stats(fighter, cfg, state.tick),
-                        effective_stats(other, cfg, state.tick).strength if other is not None else cfg["defaults"]["strength"],
-                        other.blood if other is not None else cfg["blood"]["start"],
-                        any(w.bleed_per_turn > 0 for w in other.wounds) if other is not None else False,
-                        kind, remaining, strike_delay, phase, hand_exposed, recent)
+                        opponent_strength,
+                        opponent_blood, opponent_bleeding,
+                        kind, remaining, strike_delay, phase, hand_exposed, recent,
+                        bleed_rate, opponent_unsteady, push_open)
 
 
 def movement_choice(state, fighter, kind, *, toward, aim=None):
@@ -181,7 +229,7 @@ def attack_zone(state, fighter, view, kind):
         zone = Zone(name)
         if zone == Zone.HAND and not view.opponent_hand_exposed:
             continue
-        difficulty = cfg["zones"]["difficulty"][name] + cfg["actions"][kind.value].get("acc_mod", 0)
+        difficulty = cfg["zones"]["difficulty"][name]
         if zone == Zone.HAND and view.opponent_phase == "GUARD_HOLD":
             difficulty += cfg["zones"]["guard_hand_extra"]
         if zone == Zone.TORSO or view.stats.accuracy >= difficulty:
@@ -363,6 +411,34 @@ def score_actions(state, fighter_id):
               and view.opponent_strike_delay > phase_ticks(
                   state.config["actions"]["DISENGAGE"]["per_tile"], view.stats.speed, state.config)):
             add("P5_DISENGAGE_WINDOW", tactical_score[category])
+        if category == "SHOVE" and view.opponent_unsteady:
+            add("I5_SHOVE_UNSTEADY", tactical_score["SHOVE_UNSTEADY"])
+        if category == "SHOVE" and view.opponent_push_open:
+            add("I5_SHOVE_SPACE", tactical_score["SHOVE_OPEN_SPACE"])
+        if category == "BANDAGE" and view.own_bleed_rate > 0:
+            urgency = min(1, view.own_bleed_rate / state.config["blood"]["total_bleed_cap_per_turn"])
+            urgency *= 1 + (1-view.blood/state.config["blood"]["start"])
+            add("I5_BANDAGE_BLEED", tactical_score["BANDAGE_BLEEDING"] * urgency)
+            treatment_ticks = phase_ticks(state.config["actions"]["BANDAGE"]["windup"],
+                                          view.stats.speed, state.config)
+            safe_action_window = (view.public_key.opp_state in {"STAGGERED", "RECOVERING", "WHIFFED"}
+                                  and view.opponent_remaining >= treatment_ticks)
+            if not safe_action_window:
+                add("I5_BANDAGE_EXPOSED",
+                    -tactical_score["BANDAGE_UNSAFE_PENALTY"] * (1+urgency))
+        if (category == "WAIT" and not fighter.grounded
+                and fighter.stability < state.config["stability"]["stable_threshold"]
+                and view.gap > 0):
+            recovery_need = (state.config["stability"]["stable_threshold"]-fighter.stability) / max(
+                1, state.config["stability"]["stable_threshold"])
+            add("I5_WAIT_STABILITY", tactical_score["WAIT_STABILITY"] * recovery_need)
+        if view.opponent_bleeding and category in {"WAIT", "WALK_OUT", "DASH_OUT"}:
+            # In group combat this is only a witnessed wound cue, not an exact
+            # pool/rate estimate. Solo legacy scoring retains its blood band.
+            if len(state.fighters) > 2:
+                patience = traits["patience"]
+                add("I5_WITNESSED_BLEED_PATIENCE",
+                    tactical_score["BLEED_PATIENCE"] * patience)
         aggressive_categories = attacks | {"SHOVE", "THRUST", "DISARM", "DASH_IN", "WALK_IN", "RUN_IN"}
         aggression_factor = 1 if category in aggressive_categories else -0.35 if category in {
             "GUARD", "DASH_OUT", "WALK_OUT", "RUN_OUT", "WAIT",
@@ -440,7 +516,9 @@ def score_actions(state, fighter_id):
         repeats = rule["repeat_count"]
         if category in attacks and len(view.recent_attacks) >= repeats and all(item == category for item in view.recent_attacks[-repeats:]):
             add("R10_VARIETY", -rule["repeat_penalty"] * repeats, "discipline")
-        if view.opponent_bleeding and view.opponent_blood < rule["patience_blood"] and category in {"DASH_OUT", "WALK_OUT"}:
+        if (len(state.fighters) <= 2 and view.opponent_bleeding
+                and view.opponent_blood < rule["patience_blood"]
+                and category in {"DASH_OUT", "WALK_OUT"}):
             add("R11_PATIENCE", rule["patience_escape"], "patience")
         if 1 <= view.gap <= rule["close_gap"]:
             if category == "DASH_LIGHT":

@@ -14,6 +14,7 @@ import numpy as np
 from omnisim.world import tile as T
 from pirates.ship_storage import UNIT_MASS, resource_quantity
 from pirates.crew_recruitment import RecruitmentPool
+from pirates.employment import EmploymentLedger
 
 CATALOG = json.loads((Path(__file__).resolve().parents[1] / "content/trade_items.json").read_text(encoding="utf-8"))
 RULES = json.loads((Path(__file__).resolve().parents[1] / "content/trade_rules.json").read_text(encoding="utf-8"))
@@ -246,6 +247,7 @@ class Economy:
         self.contracts = []
         self.drilling = None  # Synchronous drill session; never background simulation.
         self.recruitment = RecruitmentPool()
+        self.employment = EmploymentLedger(day)
         self.harbors = {key: {"explored": np.zeros((64, 45), bool).tolist(),
                               "doors": np.zeros((64, 45), bool).tolist(), "ground": {}} for key in PORTS}
 
@@ -413,9 +415,21 @@ class Economy:
             raise ValueError("That candidate is no longer available at this port")
         if self.money < candidate["asking_price"]:
             raise ValueError(f"Not enough Marks for {candidate['name']}'s {candidate['asking_price']}-Mark signing advance")
-        sailor = world.ship.add_recruit(world, candidate)
-        self.recruitment.mark_recruited(candidate_id, self.port)
-        self.money -= candidate["asking_price"]
+        agreement = self.employment.prepare(candidate, world.clock.day)
+        sailor_id = f"hire:{candidate_id}"
+        old_layout, old_crew = world.fixtures, list(world.ship.crew)
+        old_events, old_money = world.ship.events, self.money
+        try:
+            sailor = world.ship.add_recruit(world, candidate)
+            self.recruitment.mark_recruited(candidate_id, self.port)
+            self.employment.commit(agreement)
+            self.money -= candidate["asking_price"]
+        except Exception:
+            self.money = old_money
+            self.employment.remove(sailor_id)
+            self.recruitment.statuses[candidate_id] = "available"
+            world.ship.rollback_recruit(world, old_layout, old_crew, old_events, sailor_id)
+            raise
         self.record(f"Recruited {sailor.name} at {PORTS[self.port]['name']} for {candidate['asking_price']} Marks.")
         world.message(f"{sailor.name} joined the crew. A hammock berth is now installed aboard.")
         return sailor
@@ -738,8 +752,8 @@ class Economy:
                 "gear_condition": deepcopy(self.gear_condition), "gear_ids": deepcopy(self.gear_ids),
                 "next_gear_id": self.next_gear_id, "weapon_xp": dict(self.weapon_xp),
                 "last_day": self.last_day, "markets": deepcopy(self.markets), "history": list(self.history), "harbors": harbors,
-                "recruitment": self.recruitment.snapshot(), "trader_reputation": self.trader_reputation,
-                "contracts": deepcopy(self.contracts)}
+                "recruitment": self.recruitment.snapshot(), "employment": self.employment.snapshot(),
+                "trader_reputation": self.trader_reputation, "contracts": deepcopy(self.contracts)}
 
     @classmethod
     def restore(cls, data, world):
@@ -861,6 +875,14 @@ class Economy:
         former = {row["id"] for row in world.ship.crew_history if row["id"].startswith("hire:")}
         if recruited != active | former:
             raise ValueError("Recruitment pool disagrees with active/former ship crew")
+        economy.employment = EmploymentLedger.restore(data.get("employment"), world.clock.day)
+        for sailor_id, agreement in economy.employment.records.items():
+            if sailor_id not in active | former:
+                raise ValueError("Employment agreement has no matching sailor")
+            if agreement["status"] == "active" and sailor_id not in active:
+                raise ValueError("Active employment agreement is not on the roster")
+            if agreement["status"] == "closed" and sailor_id not in former:
+                raise ValueError("Closed employment agreement is still on the roster")
         if not isinstance(economy.harbors, dict) or set(economy.harbors) != set(PORTS):
             raise ValueError("Invalid harbor memories")
         for port, harbor in economy.harbors.items():

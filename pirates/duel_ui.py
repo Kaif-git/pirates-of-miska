@@ -13,7 +13,7 @@ import tcod.event
 from tcod.event import KeySym
 
 from pirates.duel_system.engine import Choice
-from pirates.duel_system.model import ActionKind, Zone
+from pirates.duel_system.model import ActionKind, Event, EventType, Zone
 from pirates.duel_system.render_model import format_ascii, map_lines
 from pirates.duel_system.session import DuelSession
 from pirates.duel_system.exchange_log import format_exchange, summarize_exchange
@@ -49,11 +49,13 @@ class DuelUI:
                       if event.type.value == "ACTION_START" and event.actor == session.player.id
                       and event.tick == session.inputs[-1]["tick"]]
             if starts:
-                self.round_result = format_exchange(session.state.event_log[starts[-1]:],
-                    {fighter.id: "You" if fighter.id == session.player.id else fighter.name for fighter in session.state.fighters})
-                self.round_summary = summarize_exchange(session.state.event_log[starts[-1]:],
-                    {fighter.id: "You" if fighter.id == session.player.id else fighter.name for fighter in session.state.fighters},
-                    deep_threshold=session.state.config['wound_net']['deep'])
+                events = self._public_exchange_events(session.state.event_log[starts[-1]:])
+                names = self._exchange_names()
+                private = self._private_exchange_actors()
+                self.round_result = format_exchange(events, names, private_actor_ids=private)
+                self.round_summary = summarize_exchange(events, names,
+                    deep_threshold=session.state.config['wound_net']['deep'],
+                    private_actor_ids=private)
         self.playback = ()
         self._model_cache = None
         self.panel = "main"
@@ -73,6 +75,47 @@ class DuelUI:
                         "Choose one action. Both fighters act once per exchange." if rounds else
                         "Arrows: move preview | Space: light | H: help | Esc: pause")
 
+    def _public_exchange_events(self, events):
+        state, player = self.session.state, self.session.player
+        if len(state.fighters) <= 2:
+            return events
+        return [event for event in events
+                if player.id in event.witnesses or event.actor == player.id]
+
+    def _exchange_names(self):
+        state, player = self.session.state, self.session.player
+        if len(state.fighters) <= 2:
+            return {fighter.id: "You" if fighter.id == player.id else fighter.name
+                    for fighter in state.fighters}
+        return {fighter.id: "You" if fighter.id == player.id else
+                fighter.name if state.can_see(player, fighter) else "Unknown hostile"
+                for fighter in state.fighters}
+
+    def _private_exchange_actors(self):
+        state, player = self.session.state, self.session.player
+        return {fighter.id for fighter in state.fighters
+                if len(state.fighters) > 2 and fighter.id != player.id}
+
+    def _include_boundary_commitments(self, events, active_actions):
+        """Keep already-running, publicly observed commitments in this exchange recap."""
+        present = {event.actor for event in events if event.type == EventType.ACTION_START}
+        result = list(events)
+        for fighter, action in active_actions:
+            if fighter.id in present:
+                continue
+            if len(self.session.state.fighters) > 2 and not self.session.state.can_see(self.session.player, fighter):
+                continue
+            result.append(Event(self.session.state.tick, EventType.ACTION_START, actor=fighter.id,
+                                target=action.target_id,
+                                deltas={"kind": action.kind.value,
+                                        "aim": action.aim.value if action.aim else None,
+                                        "direction": action.direction,
+                                        "tiles": len(action.path) or 1,
+                                        "strike_tick": action.strike_tick,
+                                        "end_tick": action.end_tick,
+                                        "boundary_commitment": True}))
+        return result
+
     def model(self):
         state = self.session.state
         # The live decision state is paused. Include mutable fighter fields so
@@ -80,21 +123,19 @@ class DuelUI:
         key = (id(self.session), state.tick, len(state.event_log), repr(state.fighters),
                self.session.selected, self.session.guide_mode, self.timeline, state.end_reason, state.winner,
                self.panel, self.target_id, self.target_page,
-               self.panel == 'zones' and self.kind == ActionKind.HEAVY)
+                self.panel == 'zones' and self.kind == ActionKind.HEAVY)
         if self._model_cache is None or self._model_cache[0] != key:
             # The round dashboard displays observed outcomes, not a tactical
             # recommendation. Never run its unused combinatorial solver here.
             self._model_cache = (key, self.session.render_model(timeline=self.timeline, include_advice=not self.rounds))
-            if self.panel == 'zones' and self.kind == ActionKind.HEAVY and not (self.session.selected and self.session.selected.kind == ActionKind.HEAVY):
-                base = self._model_cache[1]
-                extra = dict(base.combat_rules).get('heavy_accuracy', 0)
-                self._model_cache = (key, replace(base, zones=tuple(replace(z, difficulty=z.difficulty+extra) for z in base.zones)))
         return self._model_cache[1]
 
     def _preview(self, choice):
         if self.rounds:
             before = {f.id: (f.blood, f.stamina, f.fatigue) for f in self.session.state.fighters}
             cursor = len(self.session.state.event_log)
+            active_actions = [(fighter, fighter.action) for fighter in self.session.state.fighters
+                              if fighter.id != self.session.player.id and fighter.action is not None]
             preview = self.session.select(choice)
             self.session.cancel()
             if not preview.valid:
@@ -107,10 +148,15 @@ class DuelUI:
                                                 guide_mode=self.session.guide_mode, playback=True))
             if self.session.resolve_round(choice, observe=observe):
                 self.playback = tuple(frames)
-                names = {f.id: "You" if f.id == self.session.player.id else f.name for f in self.session.state.fighters}
-                events = self.session.state.event_log[cursor:]
-                self.round_result = format_exchange(events, names, before=before, fighters=self.session.state.fighters)
-                self.round_summary = summarize_exchange(events, names, deep_threshold=self.session.state.config['wound_net']['deep'])
+                names = self._exchange_names()
+                events = self._public_exchange_events(self.session.state.event_log[cursor:])
+                events = self._include_boundary_commitments(events, active_actions)
+                self.round_result = format_exchange(events, names, before=before,
+                                                    fighters=self.session.state.fighters,
+                                                    private_actor_ids=self._private_exchange_actors())
+                self.round_summary = summarize_exchange(
+                    events, names, deep_threshold=self.session.state.config['wound_net']['deep'],
+                    private_actor_ids=self._private_exchange_actors())
                 self.message = "Round resolved. Choose your next action."
                 self.panel, self.pending = "main", None
             else:
@@ -209,8 +255,8 @@ class DuelUI:
             self.target_page = max(0, min((count-1)//5, self.target_page + (-1 if label == "Prev Targets" else 1)))
             self._model_cache = None
             return
-        combat = {"Light", "Heavy", "Guard", "Dash", "Move", "Run", "Dash+Light", "Wait",
-                  "Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline",
+        combat = {"Light", "Heavy", "Defend", "Guard", "Dash", "Move", "Run", "Dash+Light", "Wait",
+                  "Feint", "Shove", "Thrust", "Disarm", "Adrenaline",
                   "Rise", "Crawl", "Cover",
                   "Bandage", "Eat", "Drink", "Pickup", "Eye", "Head", "Torso", "Arm", "Hand", "Leg"}
         unavailable = next((option for option in self.model().actions
@@ -231,15 +277,18 @@ class DuelUI:
         elif label == "Dash+Light":
             self.kind = ActionKind.DASH_LIGHT
             self._begin_dash_light()
-        elif label in {"Dash", "Move", "Run", "Disengage"}:
+        elif label == "Defend":
+            from pirates.duel_system.defense import choose_defend
+            plan = choose_defend(self.session.state, self.session.player.id)
+            self._preview(plan.choice)
+            if self.panel == "preview":
+                self.message = f"Defend → {plan.response}. {plan.reason} Enter confirms; Esc cancels."
+        elif label in {"Dash", "Move", "Run"}:
             self.target_id = None
-            self.kind = {"Dash": ActionKind.DASH, "Move": ActionKind.WALK, "Run": ActionKind.RUN,
-                         "Disengage": ActionKind.DISENGAGE}[label]
-            self.tiles = 1 if self.kind in {ActionKind.WALK, ActionKind.DISENGAGE} else 3
-            if self.kind == ActionKind.DISENGAGE:
-                self._choose_target_panel("direction")
-            else:
-                self.panel = "direction"
+            self.kind = {"Dash": ActionKind.DASH, "Move": ActionKind.WALK,
+                         "Run": ActionKind.RUN}[label]
+            self.tiles = 1 if self.kind == ActionKind.WALK else 3
+            self.panel = "direction"
             self.message = (f"{label}: {self.tiles} tiles selected. Choose 1/2/3 tiles before direction if needed; "
                             "an occupied tile or arena edge rejects the route.")
         elif label in {"Guard", "Cover"}:
@@ -435,7 +484,7 @@ class DuelUI:
             else:
                 self._preview(Choice(ActionKind.WAIT))
             return
-        commands = {KeySym.SPACE: "Light", KeySym.F: "Heavy", KeySym.G: "Guard", KeySym.D: "Dash",
+        commands = {KeySym.SPACE: "Light", KeySym.F: "Heavy", KeySym.G: "Defend", KeySym.D: "Dash",
                     KeySym.M: "Move", KeySym.R: "Run", KeySym.J: "Dash+Light", KeySym.PERIOD: "Wait",
                     KeySym.T: "Tactics", KeySym.C: "More", KeySym.K: "Notebook", KeySym.L: "Log", KeySym.H: "Help",
                     KeySym.I: "Guide", KeySym.TAB: "Timeline", KeySym.B: "Bandage", KeySym.E: "Eat",
@@ -538,7 +587,14 @@ class DuelUI:
                         f"LV {model.player_level} XP {model.player_xp:.0f}/{model.player_xp_next}",
                         *wrapped[self.scroll:self.scroll+page], "PgUp/PgDn: scroll | [Back]"]
         else:
-            rows = list(format_ascii(model))
+            display_model = model
+            if self.panel == "targets" and self.kind == ActionKind.DASH_LIGHT:
+                reachable = set(self._dash_light_choices)
+                display_model = replace(
+                    model,
+                    threats=tuple(actor for actor in model.target_options if actor.actor_id in reachable),
+                    threat_overflow=0)
+            rows = list(format_ascii(display_model))
             if self.panel == "targets":
                 target_options = self._current_target_options()
                 start = self.target_page * 5
@@ -548,10 +604,12 @@ class DuelUI:
                     f"{'tile' if actor.distance == 1 else 'tiles'} · {actor.posture}"
                     for index, actor in enumerate(visible, start+1)),
                     *(('[Prev Targets]' if start > 0 else ''),
-                      ('[Next Targets]' if start+5 < len(model.target_options) else ''))])
+                      ('[Next Targets]' if start+5 < len(target_options) else ''))])
             elif self.panel == "zones":
                 rows.extend(["Choose target: [Eye][Head][Torso]", "[Arm][Hand][Leg] (E/H/T/A/X/L)"])
-                rows.extend(f"{z.zone.value}: {z.difficulty:g} ACC {'OPEN' if z.exposed else 'closed'} / you {z.accuracy:.1f}" for z in model.zones)
+                rows.extend(f"{z.zone.value}: {z.difficulty:g} ACC {'OPEN' if z.exposed else 'closed'} / you {z.accuracy:.1f}"
+                            + (f" / unavailable: {z.blocked_reason}" if z.blocked_reason else "")
+                            for z in model.zones)
             elif self.panel == "direction":
                 rows.extend([f"{self.kind.value}: choose direction", f"Arrows/numpad or click. Tiles: {self.tiles}", "1/2/3 changes distance. Esc cancels."])
             if self.panel == "preview":
@@ -577,10 +635,16 @@ class DuelUI:
                     "ENEMY STATS (learned by fighting)", *(f"{key}: {value}" for key, value in model.enemy_sheet), "[Back]")
         if self.panel == "preview" and model.preview:
             p = model.preview
-            details = (next((option.details for option in model.actions
-                             if option.label.upper() == p.kind), "")
-                       if p.kind in {"FEINT", "SHOVE", "DISENGAGE", "THRUST", "DISARM", "ADRENALINE"}
-                       else "")
+            selected = self.session.selected
+            label = ({ActionKind.LIGHT: "Light", ActionKind.HEAVY: "Heavy",
+                      ActionKind.THRUST: "Thrust", ActionKind.DASH_LIGHT: "Dash+Light",
+                      ActionKind.WALK: "Move", ActionKind.RUN: "Run", ActionKind.DASH: "Dash",
+                      ActionKind.DISENGAGE: "Disengage", ActionKind.FEINT: "Feint",
+                      ActionKind.SHOVE: "Shove", ActionKind.DISARM: "Disarm",
+                      ActionKind.GUARD: "Defend" if selected and selected.contextual_defense else "Cover",
+                      ActionKind.WAIT: "Wait", ActionKind.BANDAGE: "Bandage",
+                      ActionKind.ADRENALINE: "Adrenaline"}.get(selected.kind) if selected else None)
+            details = next((option.details for option in model.actions if option.label == label), "")
             no_strike = ("No strike: adrenaline activates only after this action completes."
                          if p.kind == "ADRENALINE" else
                          "No strike: movement, defense or recovery." if p.strike_tick is None else
@@ -588,17 +652,24 @@ class DuelUI:
             return ("REVIEW YOUR ACTION", p.kind.replace("_", " ").title(),
                     f"Target: {p.aim.title()}" if p.aim else "No body-part target.",
                     "", f"Stamina cost: {p.stamina:.1f}", f"Fatigue gained: {p.fatigue:.1f}",
-                    no_strike,
-                    f"Ready again in {p.end_tick-model.tick} ticks." if p.end_tick is not None else "Hold until released.",
-                    "", "ACTION DETAILS", details,
-                    "RISK / REQUIREMENTS", p.risk or "No specific warning. Enemy intentions remain unknown.",
+                     no_strike,
+                     f"Ready again in {p.end_tick-model.tick} ticks." if p.end_tick is not None else "Hold until released.",
+                     "", "ACTION DETAILS", details,
+                     f"OPPONENT COMMITMENT: {model.enemy_commitment}",
+                     f"OPPORTUNITY: {model.enemy_opportunity}",
+                     "RISK / REQUIREMENTS", p.risk or "No specific warning. Enemy intentions remain unknown.",
                     p.error if not p.valid else "", "",
                     "Time has not advanced.", "Confirm commits; Back cancels for free.", "[Confirm][Back]")
         if self.panel == "zones":
-            return (f"{self.kind.value.replace('_', ' ')} — CHOOSE TARGET",
+            title = ("DASH + LIGHT — CHOOSE HIT ZONE" if self.kind == ActionKind.DASH_LIGHT
+                     else f"{self.kind.value.replace('_', ' ')} — CHOOSE TARGET")
+            return (title,
+                    self.message,
                     "Click a body part to resolve this round." if self.rounds else "Choose a body part, then review before committing.", "",
                     *(f"{z.zone.value.title()}: needs {z.difficulty:g} accuracy; yours {z.accuracy:.1f}. "
-                      f"{'Exposed' if z.exposed else 'Covered: may drift to another part'}." for z in model.zones),
+                      f"{'Exposed' if z.exposed else 'Covered: may drift to another part'}."
+                      + (f" Unavailable: {z.blocked_reason}." if z.blocked_reason else "")
+                      for z in model.zones),
                     "", "Choose target: [Head][Torso][Arm]", "[Hand][Leg]", "[Back]")
         if self.panel == "direction":
             step = dict(model.movement_timing).get(self.kind.value)
@@ -630,9 +701,12 @@ class DuelUI:
                     if model.wounds else ("No bleeding wounds.",))
         rows.extend(["", ("VISIBLE THREATS" if model.group_combat else
                            f"{model.enemy_name.upper()} — {model.enemy_mood}"),
-                     f"Action: {model.enemy_action.lower().replace('_', ' ')}",
-                     f"Action completes/hits in {model.enemy_remaining} ticks." if model.enemy_remaining is not None else "No timed action underway.",
-                     "", "CURRENT STATS: YOU vs ENEMY", *model.comparison,
+                      f"Action: {model.enemy_action.lower().replace('_', ' ')}",
+                      f"Action completes/hits in {model.enemy_remaining} ticks." if model.enemy_remaining is not None else "No timed action underway.",
+                      f"Commitment: {model.enemy_commitment}",
+                      f"Opportunity: {model.enemy_opportunity}",
+                      f"Condition: {model.enemy_condition}",
+                      "", "CURRENT STATS: YOU vs ENEMY", *model.comparison,
                      "Strength: strike force and guard contests.",
                       "Speed: affects this exchange, never extra actions." if self.rounds else "Speed: faster windup, recovery and movement.",
                      "Accuracy: which body parts can be hit reliably.",
@@ -700,7 +774,7 @@ class DuelDisplay:
         top = padding
         self.buttons = []
         self.header_rect = (left, top, model.columns * cell_w, line_h * 4)
-        known_buttons = {"Light", "Heavy", "Guard", "Dash", "Move", "Wait", "More", "Run", "Dash+Light",
+        known_buttons = {"Light", "Heavy", "Defend", "Guard", "Dash", "Move", "Wait", "More", "Run", "Dash+Light",
                          "Bandage", "Eat", "Drink", "Pickup", "Notebook", "Guide", "Log", "Help", "Timeline",
                           "Tactics", "Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline",
                           "Sheet", "Back", "Eye", "Head", "Torso", "Arm", "Hand", "Leg", "Confirm", "Retry", "Next"}
@@ -777,6 +851,7 @@ class DuelDisplay:
                     "Light": "Quick sword strike. Choose a body part, then read the timing and Confirm. Can interrupt a heavy windup; may be parried.",
                     "Heavy": "Slow, powerful strike. Strong against guard or long recovery; risky if a faster attack lands first. Choose target for exact timing.",
                     "Guard": "Raise your guard, then hold it. Early blocks can parry. Hand and leg attacks bypass guard. Click Guard again to release.",
+                    "Defend": "Read visible committed threats. Defend chooses a supported timely parry or the least-cost legal step that leaves every visible attack sector; otherwise it commits a bounded brace. It never assumes an idle opponent's next choice.",
                     "Dash": "Fast movement, not invincibility. Choose direction and distance for exact time and stamina cost. Attacks can interrupt you.",
                     "Move": "Walk one tile. Choose a direction to preview time and cost before confirming. You are vulnerable while moving.",
                     "Wait": "Rest briefly to recover stamina and fatigue. Risky while an enemy attack is about to land.",
@@ -862,4 +937,90 @@ def _run_sword_duel(renderer, world):
     renderer.context.sdl_window.min_size = (640, 600)
     pressed_enemy = None
     while not ui.closed:
-        frame_started = time.per
+        frame_started = time.perf_counter()
+        model = ui.model()
+        if ui.playback:
+            from pirates.duel_scene import ExchangePlayback
+            reduced_motion = bool(session.state.config["ui"]["reduced_motion"])
+            movement_seconds = renderer.settings.movement_animation_ms/1000
+            if reduced_motion:
+                movement_seconds = min(movement_seconds, .045)
+            display.playback = ExchangePlayback(ui.playback, movement_seconds=movement_seconds,
+                                                reduced_motion=reduced_motion)
+            ui.playback = ()
+        display.rounds = ui.rounds
+        display.message = ui.message
+        display.round_result = ui.round_result
+        display.round_summary = ui.round_summary
+        display.stat_enemy = ui.stat_enemy
+        display.coach_enabled = ui.coach_enabled
+        display.exchange_number = max(1, len(ui.session.inputs))
+        display.selected_distance = f"{ui.tiles} tile" + ("s" if ui.tiles != 1 else "") if ui.panel == "direction" else ""
+        display.draw(renderer, model, ui.sidebar_rows(model))
+        # SDL present already waits for vsync. Do not add another whole frame
+        # of sleeping afterwards (that halves the animation/input frame rate).
+        frame_budget = min(16, dict(model.presentation)["frame_ms"])/1000
+        for event in tcod.event.wait(max(0, frame_budget-(time.perf_counter()-frame_started))):
+            if isinstance(event, tcod.event.Quit):
+                ui.closed = ui.quit = True
+            elif isinstance(event, tcod.event.KeyDown):
+                if ui.playback or getattr(display, "animating", False):
+                    if event.sym == KeySym.ESCAPE:
+                        ui.closed = True
+                    elif event.sym in {KeySym.RETURN, KeySym.SPACE}:
+                        display.playback = None
+                        ui.playback = ()
+                    continue
+                ui.handle_key(event.sym, repeat=event.repeat)
+                display.hover_action = None
+                if event.sym in {KeySym.PAGEUP, KeySym.PAGEDOWN}:
+                    display.scroll += -10 if event.sym == KeySym.PAGEUP else 10
+            elif isinstance(event, tcod.event.MouseWheel):
+                display.scroll = max(0, min(display.max_scroll, display.scroll-event.y*3))
+            elif isinstance(event, tcod.event.MouseMotion):
+                display.hover_action = display.button_at(event.position)
+                tile = display.tile_at(event.position)
+                x, y = event.position
+                left, top, width, height = display.header_rect
+                display.hover_sheet = tile == model.enemy_pos or left <= x < left+width and top <= y < top+height
+            elif isinstance(event, tcod.event.MouseButtonDown):
+                button = display.button_at(event.position)
+                if ui.playback or getattr(display, "animating", False):
+                    if button == "Skip":
+                        display.playback = None
+                        ui.playback = ()
+                    continue
+                if button:
+                    ui.activate(button)
+                    display.hover_action = None
+                    display.scroll = 0
+                else:
+                    tile = display.tile_at(event.position)
+                    if tile == model.enemy_pos:
+                        if event.button == tcod.event.MouseButton.RIGHT:
+                            ui.activate("Sheet")
+                        else:
+                            pressed_enemy = time.monotonic()
+                    elif tile and 0 <= tile[0] < model.width and 0 <= tile[1] < model.height:
+                        dx, dy = tile[0]-model.player_pos[0], tile[1]-model.player_pos[1]
+                        if dx or dy:
+                            ui.choose_direction(((dx > 0)-(dx < 0), (dy > 0)-(dy < 0)))
+            elif isinstance(event, tcod.event.MouseButtonUp) and pressed_enemy is not None:
+                if (time.monotonic()-pressed_enemy)*1000 >= dict(model.presentation)["long_press_ms"]:
+                    ui.activate("Sheet")
+                pressed_enemy = None
+        if not ui.closed and not display.flashing:
+            ui.tick()
+    world.duel_journal = ui.session.to_data()
+    world.duel_journal['coach_enabled'] = ui.coach_enabled
+    renderer._pending_events.clear()
+    return "quit" if ui.quit else "paused"
+
+
+def run_sword_duel(renderer, world):
+    window = renderer.context.sdl_window
+    original_min = window.min_size
+    try:
+        return _run_sword_duel(renderer, world)
+    finally:
+        window.min_size = original_min

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from pirates.duel_system.config import load_config
+from pirates.duel_system.config import load_config, validate_config
 from pirates.duel_system.model import (
     ActionKind, CombatState, Equipment, EventType, Fighter, PreFightState,
     Status, Weapon, Wound, Zone, Severity,
@@ -26,14 +26,27 @@ def bare_fighter(identifier="player", **overrides):
 def test_config_is_complete_isolated_and_json_serializable():
     cfg = load_config()
     assert cfg["time"]["ticks_per_turn"] == 10
-    assert cfg["actions"]["LIGHT"]["windup"] == 4
-    assert cfg["actions"]["DASH_LIGHT"]["stamina"] == 14
+    assert cfg["actions"]["LIGHT"]["windup"] == 2.9
+    assert cfg["actions"]["DASH_LIGHT"]["stamina"] == 12.26
     assert cfg["zones"]["difficulty"]["HAND"] == 20
     assert cfg["wounds"]["TORSO"]["CUT"]["bleed"] == 3
     assert cfg["ronin"]["reaction_delay"] == 4
     assert json.loads(json.dumps(cfg)) == cfg
     cfg["actions"]["LIGHT"]["windup"] = 999
-    assert load_config()["actions"]["LIGHT"]["windup"] == 4
+    assert load_config()["actions"]["LIGHT"]["windup"] == 2.9
+
+
+@pytest.mark.parametrize("change", [
+    lambda cfg: cfg["stats"].__setitem__("fatigue_accuracy", 0.1),
+    lambda cfg: cfg["anger"].__setitem__("acc_penalty", 0.1),
+    lambda cfg: cfg["actions"]["HEAVY"].__setitem__("acc_mod", 1),
+    lambda cfg: cfg["wounds"]["HEAD"]["DEEP"].__setitem__("accuracy_mult", 0.5),
+])
+def test_current_config_rejects_accuracy_debuff_tuning(change):
+    cfg = load_config()
+    change(cfg)
+    with pytest.raises(ValueError, match="Accuracy must be invariant|unknown configuration keys"):
+        validate_config(cfg)
 
 
 def test_invalid_config_rejected(tmp_path):
@@ -148,7 +161,7 @@ def test_m1_exhaustion_pays_once_converts_shortfall_and_recovers():
     assert not fighter.exhausted
 
 
-def test_m1_pipeline_matches_formula_and_has_base_relative_floors():
+def test_physical_effective_stats_preserve_permanent_accuracy():
     cfg = load_config()
     fighter = bare_fighter(level=4, speed=18, strength=16, accuracy=19,
                           endurance=11, fatigue=60, pain=40, blood=35,
@@ -162,8 +175,7 @@ def test_m1_pipeline_matches_formula_and_has_base_relative_floors():
     assert fear(fighter, cfg) == 25
     assert eff.speed == pytest.approx(18 * lvl * (1-fat) * (1-.5*pain) * (1-blood) * 1.075)
     assert eff.strength == pytest.approx(16 * lvl * (1-.8*fat) * (1-.5*pain) * (1-blood) * 1.125)
-    assert eff.accuracy == pytest.approx(19 * lvl * (1-.7*fat) * (1-pain) * (1-blood)
-                                         * .85 * .95 * .9)
+    assert eff.accuracy == 19
     fighter.fatigue = fighter.pain = 100
     fighter.blood = 1
     fighter.exhausted = True
@@ -171,7 +183,7 @@ def test_m1_pipeline_matches_formula_and_has_base_relative_floors():
     eff = effective_stats(fighter, cfg)
     assert eff.speed == 18 * .25
     assert eff.strength == 16 * .25
-    assert eff.accuracy == 19 * .25
+    assert eff.accuracy == 19
 
 
 def test_status_modifiers_expire_at_their_deadline():

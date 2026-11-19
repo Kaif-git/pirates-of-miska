@@ -20,7 +20,7 @@ def test_latest_exchange_names_both_exact_choices_and_observed_causes():
     assert "You chose: Light at torso." in text
     assert "Ronin chose: Dash + Light at torso, 3 tiles west." in text
     assert "Why:" in text and "weapon reach" in text
-    assert "Strength" in text and "armor" in text and "Speed" in text
+    assert not any(term in text.lower() for term in ("damage trade", "net damage", "power - armor"))
     assert "You resources:" in text
 
 
@@ -44,17 +44,17 @@ def test_zone_drift_reports_strike_time_accuracy_and_actual_fallback():
     assert hit.deltas["rolled_accuracy"] < hit.deltas["required_accuracy"]
     assert "aim drifted from head to torso" in text
     assert f"Accuracy {hit.deltas['accuracy']:.1f}" in text
-    assert f"net {hit.deltas['net']:.1f}" in text
+    assert hit.deltas["site"].replace("_", " ").lower() in text
+    assert "net " not in text.lower()
     assert "You chose: Light at head." in text
 
 
-@pytest.mark.parametrize("speed,kind,expected", [(10, ActionKind.LIGHT, "parried"),
-                                                  (6, ActionKind.LIGHT, "too early/late")])
-def test_guard_explains_strength_and_actual_parry_window(speed, kind, expected):
+@pytest.mark.parametrize("speed,kind", [(10, ActionKind.LIGHT), (6, ActionKind.LIGHT)])
+def test_guard_explains_strength_and_actual_parry_window(speed, kind):
     state = guarded(attacker_speed=speed, kind=kind)
     advance_to(state, state.fighters[0].action.strike_tick)
     text = "\n".join(format_exchange(state.event_log, NAMES))
-    assert expected in text
+    assert "parried" in text
     assert "Strength" in text and "parry window" in text
 
 

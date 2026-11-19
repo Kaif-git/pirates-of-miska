@@ -36,7 +36,8 @@ def main():
             model = ui.model()
             before = ui.session.state.to_data()
             display.rounds, display.message, display.round_result = ui.rounds, ui.message, ui.round_result
-            display.round_summary, display.stat_enemy = ui.round_summary, ui.stat_enemy
+            display.round_summary, display.round_assessment, display.stat_enemy = (
+                ui.round_summary, ui.round_assessment, ui.stat_enemy)
             display.coach_enabled = ui.coach_enabled
             display.selected_distance = f"{ui.tiles} tile" + ("s" if ui.tiles != 1 else "") if ui.panel == "direction" else ""
             display.draw(renderer, model, ui.sidebar_rows(model), present=False)
@@ -350,7 +351,7 @@ def main():
         ui.activate('Torso')
         display.playback = None
         capture('trade-light-light-recap')
-        assert 'You 14.0 cut' in ui.round_summary[2] and 'deep ≥ 16' in ui.round_summary[2]
+        assert 'You 14.0 cut' in ui.round_summary[3] and 'deep ≥ 16' in ui.round_summary[3]
         ui.session.player.fatigue = 75
         capture('trade-fatigue-consequences')
         ui.activate('Strategy')

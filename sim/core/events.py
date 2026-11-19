@@ -17,6 +17,67 @@ import zlib
 
 _EVENT_TYPE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _EVENT_CLASSES = {"routine", "narrative", "structural"}
+EVENT_CLASS_POLICY = {
+    "AGENT_ACTION": {
+        "class": "routine",
+        "reason": "decision intent is counted through its consequential result, not the attempt row",
+    },
+    "ENCOUNTER_DETECTED": {
+        "class": "routine",
+        "reason": "contact detection is not an outcome",
+    },
+    "DREAM_PROGRESS": {
+        "class": "routine",
+        "reason": "incremental plan progress is not a completed consequential outcome",
+    },
+    "ENCOUNTER_RESOLVED": {
+        "class": "outcome-dependent",
+        "reason": "uneventful withdrawal/parley is routine; damage or disposition is narrative",
+    },
+    "FEUD_RAID_ATTEMPTED": {
+        "class": "outcome-dependent",
+        "reason": "repelled no-impact grudge pressure is routine; material consequence is narrative",
+    },
+    "GRUDGE_PURSUED": {
+        "class": "routine",
+        "reason": "grudge pressure is not a hostile consequence by itself",
+    },
+    "RAIDER_TARGET_SELECTED": {
+        "class": "routine",
+        "reason": "target selection is planning, not contact or loss",
+    },
+    "RUMOR_SHARED": {
+        "class": "outcome-dependent",
+        "reason": "undistorted confidence propagation is routine; actual distortion is narrative",
+    },
+}
+_UNEVENTFUL_ENCOUNTERS = {"mutual_withdrawal", "parley_ended_fight"}
+
+
+def classify_event(event_type: str, data: Mapping[str, Any],
+                   requested_class: str) -> tuple[str, str | None]:
+    """Apply consequence-aware overrides and return class plus policy rationale key."""
+    if event_type == "ENCOUNTER_RESOLVED":
+        no_effect = (data.get("outcome") in _UNEVENTFUL_ENCOUNTERS
+                     and not data.get("damage_event_ids")
+                     and not data.get("outcome_event_ids")
+                     and not any(data.get("gunnery_damage", ())))
+        return ("routine", "uneventful_encounter") if no_effect else ("narrative", None)
+    if event_type == "FEUD_RAID_ATTEMPTED":
+        has_consequence = (data.get("material_transfer") is True
+                           or any(data.get(key) for key in (
+                               "damage_event_ids", "injury_event_ids", "consequence_event_ids")))
+        return (("narrative", None) if has_consequence
+                else ("routine", "no_impact_feud_attempt"))
+    if event_type == "RUMOR_SHARED":
+        actual_distortion = (data.get("distorted") is True
+                            and data.get("value") != data.get("original_value"))
+        return (("narrative", None) if actual_distortion
+                else ("routine", "undistorted_rumor"))
+    policy = EVENT_CLASS_POLICY.get(event_type)
+    if policy is not None and policy["class"] in _EVENT_CLASSES:
+        return policy["class"], event_type
+    return requested_class, None
 
 
 def _freeze(value: Any) -> Any:
@@ -140,6 +201,7 @@ class EventLog:
         self._events: list[Event] = []
         self._by_id: dict[str, Event] = {}
         self._by_entity: dict[str, list[str]] = defaultdict(list)
+        self._by_entity_type: dict[tuple[str, str], list[str]] = defaultdict(list)
         self._by_location: dict[str, list[str]] = defaultdict(list)
         self._by_type: dict[str, list[str]] = defaultdict(list)
         self._by_type_positions: dict[str, list[int]] = defaultdict(list)
@@ -161,6 +223,7 @@ class EventLog:
                           else self.event_classes.get(event_type, "narrative"))
         if event_type == "NATURAL_EVENT" and data.get("kind") == "WEATHER_CHANGED":
             resolved_class = "routine"
+        resolved_class, _ = classify_event(event_type, data, resolved_class)
         self._validate_event(tick, event_type, location, actors, targets, data,
                              caused_by, causes_tags, magnitude, resolved_class)
         event_id = f"event_{len(self._events) + 1:06d}"
@@ -182,6 +245,7 @@ class EventLog:
         self._by_id[event.id] = event
         for entity_id in sorted({item["entity_id"] for item in (*event.actors, *event.targets)}):
             self._by_entity[entity_id].append(event.id)
+            self._by_entity_type[(entity_id, event_type)].append(event.id)
         if location is not None:
             self._by_location[location].append(event.id)
         self._by_type[event_type].append(event.id)
@@ -247,6 +311,11 @@ class EventLog:
 
     def by_entity(self, entity_id: str) -> tuple[Event, ...]:
         return tuple(self._by_id[event_id] for event_id in self._by_entity.get(entity_id, ()))
+
+    def by_entity_type(self, entity_id: str, event_type: str) -> tuple[Event, ...]:
+        """Return only indexed events involving an entity with the requested type."""
+        return tuple(self._by_id[event_id]
+                     for event_id in self._by_entity_type.get((entity_id, event_type), ()))
 
     def by_location(self, location: str) -> tuple[Event, ...]:
         return tuple(self._by_id[event_id] for event_id in self._by_location.get(location, ()))

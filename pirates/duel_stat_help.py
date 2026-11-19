@@ -4,14 +4,14 @@ POOL_NAMES = {"Blood": "BLD", "Stamina": "STA", "Fatigue": "FAT", "Pain": "PAIN"
 MEANINGS = {
     "Strength": "Strike force and guard contests. Strike power also includes the action multiplier and weapon edge; armor is subtracted afterwards.",
     "Speed": "Shortens action windup, recovery and movement. It changes when an action lands, never how many actions you get per exchange.",
-    "Accuracy": "Checks whether an aimed body part can be reached reliably. Below its requirement, aim drifts to a fallback part. A covered hand can force drift even with enough accuracy.",
+    "Accuracy": "Permanent authored skill; it never falls with level, fatigue, pain, blood, fear, anger, eye injury or status. Target difficulty, visibility and exposure still constrain contact.",
     "Endurance": "Reduces fatigue gained from exertion and pain, and softens some fatigue/pain penalties. It is not the stamina pool size.",
     "Blood": "Remaining life reserve. Bleeding drains it; low blood weakens effective stats and can cause collapse. Zero blood is fatal.",
     "Stamina": "Available action fuel. Actions and blocks spend it; rest restores it. Unpaid costs turn into fatigue and exhaustion, not a free action.",
     "Fatigue": "Accumulated strain, not spare stamina. Higher fatigue can reduce effective stats; endurance mitigates its pressure. Rest reduces it.",
     "Pain": "Wounds create pain, which can weaken effective stats and add fatigue. Endurance mitigates pain; anger can temporarily suppress it.",
-    "Anger": "Can raise strength and speed and suppress pain, but lowers accuracy. High anger can lead to a crash; it is not an unconditional bonus.",
-    "Morale": "Confidence under pressure. Low morale can create fear, reduce accuracy and eventually trigger yielding or flight.",
+    "Anger": "Can raise strength and speed and suppress pain. High anger can lead to a crash; it is not an unconditional bonus.",
+    "Morale": "Confidence under pressure. Low morale can create fear and eventually trigger yielding or flight; Accuracy remains fixed.",
     "Stability": "Current balance reserve. Heavy overreach and successful fast turns can reduce it; zero causes a fall. Standing Wait restores it, while a hit can interrupt an exposed Rise.",
 }
 
@@ -40,10 +40,12 @@ def stat_rows(model, name, *, enemy=False):
         elif name == 'Strength':
             rows.append(f"Practical effect: light power {own['light_power']:.1f} now vs {own['fresh_light_power']:.1f} fresh, before armor. Cut starts at net {rules['cut']:g}; deep at {rules['deep']:g}.")
         elif name == 'Accuracy':
-            rows.append('Practical effect: '+ '; '.join(f"{z.zone.value.title()} needs {z.difficulty:g}" for z in model.zones)+f". Variation ±{rules['jitter']:g}; heavy adds {rules['heavy_accuracy']:g}. Torso remains the fallback.")
-        rows.extend(model.functional_alerts[:2])
+            rows.append('Practical effect: '+ '; '.join(f"{z.zone.value.title()} needs {z.difficulty:g}" for z in model.zones)+f". Seeded roll variation ±{rules['jitter']:g}; action and injury do not modify your Accuracy. Torso remains the fallback.")
+        if name != "Accuracy":
+            rows.extend(model.functional_alerts[:2])
     if not enemy and name in {"Strength", "Speed", "Accuracy", "Endurance"}:
         rows += ["Current/base values above include active combat effects.",
-                 *(f"{label} pressure: {value*100:.1f}%" for label, value in model.player_penalties if value > 0),
-                 "Pressure factors have stat-specific weights; they are not identical flat deductions from every stat."]
+                 *(f"{label} pressure: {value*100:.1f}%" for label, value in model.player_penalties
+                   if value > 0 and not (name == "Accuracy" and label in {"Fatigue", "Pain", "Blood", "Fear", "Anger", "Status", "Eye injury"})),
+                 "Accuracy is permanent; physical pressure changes only its explicitly supported functions."]
     return tuple(rows)

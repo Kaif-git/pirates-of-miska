@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from sim.core.ownership import ship_is_commandable
+
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 GOODS_PATH = DATA_DIR / "goods.json"
@@ -866,6 +868,9 @@ class EconomySystem:
             "last_route_attempt_day": -7,
             "home_island": island_id,
         }
+        world.assign_ship_title(
+            ship_id, owner_kind="merchant", owner_id=merchant_id,
+            controller_crew_id=None, event_id=ship_event)
         self._record_merchant_endowment(event.id, silver, cargo)
         return merchant_id, event.id
 
@@ -924,6 +929,9 @@ class EconomySystem:
         if (not isinstance(ship_id, str) or not ship or ship.get("kind") != "ship"
                 or ship_id in world.archive):
             raise ValueError("Merchant must have an active ship to trade")
+        if (not ship_is_commandable(world, ship_id)
+                or ship.get("legal_owner") != {"kind": "merchant", "id": merchant_id}):
+            raise ValueError("Merchant no longer owns or commands this vessel")
         if ship_id in world.travel.transits:
             raise ValueError("Merchant must be berthed to trade")
         location = ship.get("location", {})
@@ -1005,6 +1013,10 @@ class EconomySystem:
         self._prepare_route_cache(world)
         merchant = self._merchant(merchant_id)
         ship_id = merchant["ship_id"]
+        ship = world.entities.get(ship_id)
+        if (not ship or not ship_is_commandable(world, ship_id)
+                or ship.get("legal_owner") != {"kind": "merchant", "id": merchant_id}):
+            return None
         if ship_id in world.travel.transits:
             return None
         location = world.entities[ship_id].get("location", {})
@@ -1098,6 +1110,10 @@ class EconomySystem:
         merchant = self._merchant(merchant_id)
         if plan.get("merchant_id") != merchant_id or plan.get("origin") not in self.islands:
             raise ValueError("Trade route plan does not belong to this merchant")
+        ship = world.entities.get(merchant["ship_id"])
+        if (not ship or not ship_is_commandable(world, merchant["ship_id"])
+                or ship.get("legal_owner") != {"kind": "merchant", "id": merchant_id}):
+            raise ValueError("Merchant no longer owns or commands this vessel")
         current = world.entities[merchant["ship_id"]].get("location", {})
         if current.get("kind") != "island" or current.get("id") != plan["origin"]:
             raise ValueError("Merchant is not at planned route origin")
@@ -1116,6 +1132,10 @@ class EconomySystem:
         self._prepare_route_cache(world)
         merchant = self._merchant(merchant_id)
         ship_id = merchant["ship_id"]
+        ship = world.entities.get(ship_id)
+        if (not ship or not ship_is_commandable(world, ship_id)
+                or ship.get("legal_owner") != {"kind": "merchant", "id": merchant_id}):
+            return None
         if ship_id in world.travel.transits:
             return None
         current = world.entities[ship_id].get("location", {}).get("id")

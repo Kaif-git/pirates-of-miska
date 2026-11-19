@@ -237,7 +237,11 @@ class World:
             sighting = None
         else:
             previous_npc_events = list(self.npcs.events[-80:])
-            sighting = self.npcs.advance_second(self, self.voyages.map_coordinate(), sighting_enabled=underway)
+            reserved = ({encounter["id"]} if encounter and isinstance(encounter.get("id"), str)
+                        and self.voyages.voyage.get("status") == "encounter" else set())
+            sighting = self.npcs.advance_second(
+                self, self.voyages.map_coordinate(), sighting_enabled=underway,
+                reserved_ship_ids=reserved)
             self.society.advance(self, previous_npc_events)
         if sighting:
             sighting = next((deepcopy(ship) for ship in self.npcs.ships if ship["id"] == sighting["id"]), sighting)
@@ -254,6 +258,12 @@ class World:
         self.voyages.arrival_interrupt = False
         self.ship.advance(self, ticks)
         self.economy.update_day(self.clock.day)
+        # Defensive idempotent pass: the per-second ship hook owns normal
+        # boundaries, but a loaded or externally advanced clock must not skip pay.
+        self.economy.employment.settle_day(self, self.clock.day)
+        # Arrival and walking ashore also flow through here, so a delivered
+        # undertaking closes as soon as the captain is ashore at the destination.
+        self.economy.employment.settle_undertakings(self)
         voyage = self.voyages.voyage
         if (voyage and voyage.get("status") == "arrived"
                 and voyage.get("arrival_snapshot", {}).get("ticks") == self.clock.total_ticks):

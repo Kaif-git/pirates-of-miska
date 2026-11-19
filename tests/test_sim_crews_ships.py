@@ -37,6 +37,7 @@ def test_recruited_merchant_gets_a_provisioned_captain_and_causal_crew():
     ship = world.entities[crew["ship_ids"][0]]
 
     assert crew["captain_id"] in crew["roster"]
+    assert crew["faction_id"] is None
     assert world.entities[crew["captain_id"]]["tier"] == "MINOR"
     assert ship["owner_type"] == "merchant"
     assert ship["crew_id"] == crew_id
@@ -44,6 +45,9 @@ def test_recruited_merchant_gets_a_provisioned_captain_and_causal_crew():
     assert any(event.type == "CAPTAIN_APPOINTED"
                and event.data.get("appointment") == "recruited_merchant_captain"
                for event in world.event_log)
+    assert not any(event.type == "FACTION_FOUNDED"
+                   and event.data.get("faction_id") == crew_id
+                   for event in world.event_log)
     world.economy.ledger.assert_balanced(world.economy)
     world.crew_ships.validate_world(world)
 
@@ -71,6 +75,42 @@ def test_monthly_actor_recruiter_uses_real_ship_crew_and_promotion_events():
     assert not any(set(key.split("|")) & actor_factions for key in world.politics.treaties)
     world.economy.ledger.assert_balanced(world.economy)
     world.to_snapshot()
+
+
+def test_actor_budget_recruitment_uses_regional_display_names_not_internal_budget_labels():
+    world = WorldState.create("regional-actor-names")
+    bands = world.config["world"]["actors"]["ship_bands"]
+    for rules in bands.values():
+        rules["minimum_per_island_milli"] = 0
+    bands["merchant"]["minimum_per_island_milli"] = 1000
+    before_ids = set(world.economy.merchants)
+
+    world.crew_ships._recruit_actor_bands(world, 30)
+
+    new_merchants = [merchant for merchant_id, merchant in world.economy.merchants.items()
+                     if merchant_id not in before_ids]
+    assert len(new_merchants) == 5  # the configured monthly cap, not a hidden naming quota
+    for merchant in new_merchants:
+        island_name = world.geography.islands[merchant["home_island"]].name
+        assert merchant["name"].startswith(f"{island_name} Trading Company ")
+        assert "budget" not in merchant["name"].casefold()
+        ship = world.entities[merchant["ship_id"]]
+        assert "budget" not in ship["name"].casefold()
+        crew = world.crew_ships.crews[ship["crew_id"]]
+        assert any(event.type == "CREW_FOUNDED"
+                   and event.data.get("crew_id") == crew["id"]
+                   and event.actors[0]["entity_id"] == crew["captain_id"]
+                   for event in world.event_log)
+
+    island_id = new_merchants[0]["home_island"]
+    first_name = world.crew_ships._regional_actor_vessel_name(world, island_id, "pirate")
+    ship_id, created = world.create_vessel(first_name, island_id)
+    world.crew_ships.provision_recruited_vessel(world, ship_id, "pirate", caused_by=created)
+    second_name = world.crew_ships._regional_actor_vessel_name(world, island_id, "pirate")
+    assert first_name.startswith(f"{world.geography.islands[island_id].name} Corsair Sloop ")
+    assert second_name != first_name
+    assert "vessel" not in first_name.casefold()
+    world.crew_ships.validate_world(world)
 
 
 def test_pirate_dispatch_records_route_and_cargo_beliefs():

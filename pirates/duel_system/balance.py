@@ -233,7 +233,8 @@ def run_fight(first_bot, second_bot, *, seed, config=None, level_gap=0, mirror=F
                                             if fighter.adrenaline_debt_pending),
              "seat": "second" if swap else "first"}
     if trace:
-        relevant = {"ACTION_START", "HIT", "BLOCK", "PARRY", "GUARD_BREAK", "WHIFF", "FEAR_BREAK",
+        relevant = {"ACTION_START", "HIT", "WOUND", "POOL_CHANGE", "STATUS", "STAGGER", "INTERRUPT",
+                    "MOVE", "BLOCK", "PARRY", "GUARD_BREAK", "WHIFF", "FEAR_BREAK",
                     "STABILITY", "FALL", "RISE", "FIGHT_END", "FEINT", "SHOVE", "DISARM", "ADRENALINE",
                     "SEVER", "WEAPON_STRESS", "WEAPON_DROP", "WEAPON_BREAK", "WEAPON_PICKUP",
                     "EYE_INJURY", "DECAPITATION", "INCAPACITATED"}

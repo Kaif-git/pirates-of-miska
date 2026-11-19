@@ -154,7 +154,8 @@ def test_hard_contact_wear_respects_material_and_current_condition():
 
 
 def test_only_clean_heavy_cutting_hand_contact_severs_and_head_incapacity_is_not_death():
-    state = arena()
+    # Seed 2 resolves the clean hand contact to the right wrist severance site.
+    state = arena(rng_seed=2)
     player, ronin = state.fighters
     player.strength, player.accuracy = 100, 100
     state.config["accuracy"]["jitter"] = 0
@@ -162,7 +163,10 @@ def test_only_clean_heavy_cutting_hand_contact_severs_and_head_incapacity_is_not
     commit_action(state, player.id, Choice(ActionKind.HEAVY, Zone.HAND))
     advance_to(state, player.action.strike_tick)
     assert ronin.hand_severed
+    assert ronin.permanent_injuries.severed_hands == ["RIGHT"]
     assert ronin.equipment.weapon is None
+    hit = next(event for event in state.event_log if event.type == EventType.HIT)
+    assert hit.deltas["function"] == "weapon hand severed; cannot hold a weapon"
     assert any(event.type == EventType.SEVER for event in state.event_log)
 
     state = arena()
@@ -187,7 +191,28 @@ def test_only_clean_heavy_cutting_hand_contact_severs_and_head_incapacity_is_not
     assert carried_winner.player.can_act(0)
 
 
-def test_explicit_clean_eye_contact_causes_bounded_persistent_penalty_but_drift_does_not():
+def test_supporting_hand_severance_persists_without_disabling_weapon_hand():
+    state = arena()
+    attacker, defender = state.fighters
+    weapon = defender.equipment.weapon
+    apply_wound(state, attacker, defender, Zone.HAND, Severity.SEVERED,
+                30, 30, site="WRIST", side="LEFT")
+
+    assert defender.permanent_injuries.severed_hands == ["LEFT"]
+    assert not defender.hand_severed
+    assert not defender.disarmed
+    assert defender.equipment.weapon is weapon
+    assert commit_action(state, defender.id, Choice(ActionKind.LIGHT, Zone.TORSO))
+    wound = next(event for event in state.event_log if event.type == EventType.WOUND)
+    assert wound.deltas["function"] == "supporting hand severed; one-handed weapon remains usable"
+    restored = type(state).from_data(state.to_data())
+    carried = restored.fighter(defender.id)
+    assert carried.permanent_injuries.severed_hands == ["LEFT"]
+    assert carried.weapon_hand == "RIGHT"
+    assert not carried.hand_severed
+
+
+def test_explicit_clean_eye_contact_is_persistent_without_changing_accuracy():
     state = arena()
     state.config["accuracy"]["jitter"] = 0
     player, ronin = state.fighters
@@ -199,12 +224,12 @@ def test_explicit_clean_eye_contact_causes_bounded_persistent_penalty_but_drift_
     assert any(event.type == EventType.EYE_INJURY for event in state.event_log)
     baseline = deepcopy(ronin)
     baseline.permanent_injuries.eyes_damaged = 0
-    assert effective_stats(ronin, state.config, state.tick).accuracy < effective_stats(
-        baseline, state.config, state.tick).accuracy
+    assert effective_stats(ronin, state.config, state.tick).accuracy == effective_stats(
+        baseline, state.config, state.tick).accuracy == ronin.accuracy
 
     player.action = None
     player.riposte = False
-    player.accuracy = 30
+    player.accuracy = 20
     player.idle_since = state.tick
     ronin.action = None
     ronin.pos = (player.pos[0]+1, player.pos[1])
@@ -216,13 +241,16 @@ def test_explicit_clean_eye_contact_causes_bounded_persistent_penalty_but_drift_
 
 
 def test_only_clean_heavy_cutting_head_contact_at_threshold_decapitates():
-    state = arena()
+    # Seed 7 resolves the actual contact to the configured neck subsite.
+    state = arena(rng_seed=7)
     player, ronin = state.fighters
     player.strength, player.accuracy = 100, 100
     player.equipment.weapon.damage_type = "CUTTING"
     commit_action(state, player.id, Choice(ActionKind.HEAVY, Zone.HEAD))
     advance_to(state, player.action.strike_tick)
     assert ronin.decapitated
+    hit = next(event for event in state.event_log if event.type == EventType.HIT)
+    assert hit.deltas["site"] == "NECK"
     assert state.end_reason == "death" and state.winner == player.id
     assert not ronin.hand_severed
     assert any(event.type == EventType.DECAPITATION for event in state.event_log)
@@ -233,6 +261,16 @@ def test_only_clean_heavy_cutting_head_contact_at_threshold_decapitates():
     labels = [popup.text for popup in rendered.popups]
     assert labels.count("DEATH — decapitation") == 1
     assert not any(label in {"DEEP head · concussion", "concussed", "No reflex"} for label in labels)
+
+    state = arena(rng_seed=0)
+    player, ronin = state.fighters
+    player.strength, player.accuracy = 100, 100
+    player.equipment.weapon.damage_type = "CUTTING"
+    commit_action(state, player.id, Choice(ActionKind.HEAVY, Zone.HEAD))
+    advance_to(state, player.action.strike_tick)
+    hit = next(event for event in state.event_log if event.type == EventType.HIT)
+    assert hit.deltas["site"] != "NECK"
+    assert not ronin.decapitated
 
     state = arena()
     player, ronin = state.fighters
@@ -311,14 +349,37 @@ def test_temporary_concussion_expires_without_healing_permanent_eye_injury():
     assert player.permanent_injuries.eyes_damaged == 1
 
 
-def test_eye_accuracy_penalty_remains_inside_the_global_effective_stat_floor():
+def test_eye_injury_nervousness_and_status_do_not_change_authored_accuracy():
     state = arena()
     player = state.fighters[0]
     player.accuracy = 1
     player.nervousness = 1
     player.permanent_injuries.eyes_damaged = 2
-    assert effective_stats(player, state.config, state.tick).accuracy == pytest.approx(
-        player.accuracy * state.config["stats"]["floor_pct"])
+    player.statuses.append(Status("dizzy", until_tick=20, accuracy_mult=0.01))
+    assert effective_stats(player, state.config, state.tick).accuracy == player.accuracy
+
+
+def test_bilateral_eye_impairment_blocks_precise_targeting_without_accuracy_debuff():
+    state = arena()
+    attacker, target = state.fighters
+    attacker.permanent_injuries.eyes_damaged = 1
+    target.permanent_injuries.eyes_damaged = 1
+    eye_shot = Choice(ActionKind.LIGHT, Zone.EYE, target_id=target.id)
+    assert legality(state, attacker.id, eye_shot) == ""
+
+    target.permanent_injuries.eyes_damaged = 2
+    assert legality(state, attacker.id, eye_shot) == "No functioning eye remains to target"
+    target.permanent_injuries.eyes_damaged = 0
+    attacker.permanent_injuries.eyes_damaged = 2
+    assert legality(state, attacker.id, eye_shot) == \
+        "Bilateral eye injury prevents acquiring a precise eye target"
+    assert effective_stats(attacker, state.config, state.tick).accuracy == attacker.accuracy
+
+    from pirates.duel_system.notebook import Notebook
+    from pirates.duel_system.render_model import build_render_model
+    model = build_render_model(state, Notebook(state.config).public_view(), timeline=False)
+    eye_option = next(option for option in model.zones if option.zone == Zone.EYE)
+    assert "Bilateral eye injury" in eye_option.blocked_reason
 
 
 def test_unconscious_or_dead_fighter_cannot_carry_to_another_duel():
@@ -352,7 +413,7 @@ def test_v5_session_migration_adds_weapon_eye_and_ground_item_defaults():
     data["state"].pop("ground_weapons", None)
 
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 7
+    assert restored.state.config["schema_version"] == 18
     assert all(fighter.permanent_injuries.hand_severed for fighter in restored.state.fighters)
     assert all(fighter.equipment.weapon is None for fighter in restored.state.fighters)
     assert {item.weapon.item_id for item in restored.state.ground_weapons} == {"player:weapon", "ronin:weapon"}
@@ -383,7 +444,7 @@ def test_v5_migration_preserves_active_action_deadline_and_world_journal_continu
     loaded = World.load(save_path)
     restored = DuelSession.from_data(loaded.duel_journal)
     assert restored.player.action.end_tick == old_deadline
-    assert restored.state.config["schema_version"] == 7
+    assert restored.state.config["schema_version"] == 18
     assert restored.state.to_data()["rng_draws"] == session.state.to_data()["rng_draws"]
     replay = DuelSession.from_data(loaded.duel_journal)
     from pirates.duel_system.engine import advance_one_tick

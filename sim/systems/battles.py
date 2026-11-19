@@ -406,20 +406,28 @@ class BattleSystem:
                                     morale: list[int], winner_side: int | None) -> None:
         rules = self.data["rules"]
         for side, faction_id in enumerate(factions):
-            crew = world.crew_ships.crews.get(faction_id)
-            if crew is None:
+            crew_ids = sorted({world.entities[ship_id].get("crew_id")
+                               for ship_id in side_ships[side]
+                               if ship_id in world.entities
+                               and world.entities[ship_id].get("crew_id")
+                               in world.crew_ships.crews})
+            crews = [world.crew_ships.crews[crew_id] for crew_id in crew_ids]
+            if not crews:
                 continue
-            before = crew["morale"]
-            crew["morale"] = morale[side]
-            if before != morale[side]:
+            for crew_id, crew in zip(crew_ids, crews):
+                before = crew["morale"]
+                crew["morale"] = morale[side]
+                if before == morale[side]:
+                    continue
                 morale_event = world.event_log.append(
                     tick=world.clock.tick, event_type="BATTLE_MORALE_CHANGED",
                     location=result.location,
                     actors=[{"role": "fleet_commander", "entity_id": captains[side]}],
-                    targets=[{"role": "affected_crew", "entity_id": faction_id}],
+                    targets=[{"role": "affected_crew", "entity_id": crew_id}],
                     data={"battle_event_id": result.data["battle_event_id"],
                           "before": before, "after": morale[side],
-                          "side": side, "victory": winner_side == side},
+                          "side": side, "victory": winner_side == side,
+                          "faction_id": faction_id},
                     caused_by=[result.id],
                     causes_tags=["persistent_battle_morale",
                                  "victory" if winner_side == side else "defeat"],
@@ -444,8 +452,8 @@ class BattleSystem:
                                                  caused_by=result.id)
             rng = world.rng.stream(f"battle-casualty:{result.data['battle_event_id']}:{side}")
             casualty_roll = rng.randbelow(10000)
-            available = [member_id for member_id in crew["roster"]
-                         if member_id != captains[side] and member_id in world.entities]
+            available = sorted({member_id for crew in crews for member_id in crew["roster"]
+                                if member_id != captains[side] and member_id in world.entities})
             if available and casualty_roll < rules["defeat_casualty_chance_basis_points"]:
                 casualty_id = sorted(available)[rng.randbelow(len(available))]
                 injury_id = "broken_arm" if casualty_roll % 2 == 0 else "lost_eye"
@@ -457,7 +465,8 @@ class BattleSystem:
                     actors=[{"role": "wounded_crew_member", "entity_id": casualty_id}],
                     targets=[{"role": "defeated_commander", "entity_id": captains[side]}],
                     data={"battle_event_id": result.data["battle_event_id"],
-                          "crew_id": faction_id, "injury_id": injury_id,
+                          "crew_id": world.entities[casualty_id].get("crew_id"),
+                          "faction_id": faction_id, "injury_id": injury_id,
                           "fate": "wounded"},
                     caused_by=[result.id, injury_event],
                     causes_tags=["battle_casualty", "persistent_injury"], magnitude=0.55,
@@ -470,14 +479,16 @@ class BattleSystem:
         if winner_side is None:
             amount = max(1, world.politics.data["rules"]["heat_per_hostile_combat"] // 2)
             for side, captain_id in enumerate(captains):
-                if captain_id in world.entities and factions[side] in world.crew_ships.crews:
+                crew_id = world.entities.get(captain_id, {}).get("crew_id")
+                if captain_id in world.entities and crew_id in world.crew_ships.crews:
                     world.politics._emit_heat(
-                        world, entity_id=captain_id, crew_id=factions[side], amount=amount,
+                        world, entity_id=captain_id, crew_id=crew_id, amount=amount,
                         caused_by=result.id, reason="set_piece_battle_stalemate",
                     )
             return
         loser_captain = captains[defeated_side]
-        crew_id = factions[defeated_side]
+        crew_id = world.entities.get(loser_captain, {}).get("crew_id")
+        faction_id = factions[defeated_side]
         if loser_captain in world.entities and crew_id in world.crew_ships.crews:
             amount = world.politics.data["rules"]["heat_per_hostile_combat"]
             world.politics._emit_heat(
@@ -487,10 +498,10 @@ class BattleSystem:
         power_vacuum = None
         if morale[defeated_side] <= self.data["rules"]["power_vacuum_morale_threshold"]:
             power_vacuum = world.politics.resolve_battle_power_vacuum(
-                world, crew_id, defeated_captain=loser_captain, caused_by=result.id)
+                world, faction_id, defeated_captain=loser_captain, caused_by=result.id)
         if morale[defeated_side] == 0:
-            world.politics.on_crew_dissolved(
-                world, crew_id, caused_by=power_vacuum or result.id,
+            world.politics.dissolve_faction(
+                world, faction_id, caused_by=power_vacuum or result.id,
                 reason="battle_morale_collapse",
             )
 

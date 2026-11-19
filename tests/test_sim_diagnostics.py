@@ -79,6 +79,79 @@ def test_events_have_data_driven_class_and_contextual_weather_class():
                                causes_tags=["invalid-class-test"], event_class="")
 
 
+def test_narrative_classification_requires_a_consequential_outcome():
+    world = WorldState.create("consequence-aware-event-classes")
+    log = world.event_log
+    root = log.by_type("WORLD_GENERATED")[0]
+    detection = log.append(tick=0, event_type="ENCOUNTER_DETECTED",
+                           caused_by=[root.id])
+    withdrawal = log.append(
+        tick=0, event_type="ENCOUNTER_RESOLVED",
+        data={"outcome": "mutual_withdrawal", "damage_event_ids": [],
+              "outcome_event_ids": [], "gunnery_damage": [0, 0]},
+        caused_by=[detection.id])
+    escape = log.append(
+        tick=0, event_type="ENCOUNTER_RESOLVED",
+        data={"outcome": "one_side_flees", "damage_event_ids": [],
+              "outcome_event_ids": [], "gunnery_damage": [0, 0]},
+        caused_by=[detection.id])
+    no_impact_raid = log.append(
+        tick=0, event_type="FEUD_RAID_ATTEMPTED",
+        data={"outcome": "repelled", "material_transfer": False},
+        caused_by=[detection.id])
+    consequential_raid = log.append(
+        tick=0, event_type="FEUD_RAID_ATTEMPTED",
+        data={"outcome": "repelled", "material_transfer": True},
+        caused_by=[detection.id])
+    plain_rumor = log.append(
+        tick=0, event_type="RUMOR_SHARED",
+        data={"distorted": False, "value": 12, "original_value": 12},
+        caused_by=[detection.id])
+    distorted_rumor = log.append(
+        tick=0, event_type="RUMOR_SHARED",
+        data={"distorted": True, "value": 13, "original_value": 12},
+        caused_by=[detection.id])
+    action_intent = log.append(
+        tick=0, event_type="AGENT_ACTION", event_class="narrative",
+        data={"action_id": "pursue_grudge"}, caused_by=[detection.id])
+    selected = log.append(tick=0, event_type="RAIDER_TARGET_SELECTED",
+                          caused_by=[detection.id])
+
+    assert detection.event_class == "routine"
+    assert withdrawal.event_class == "routine"
+    assert escape.event_class == "narrative"
+    assert no_impact_raid.event_class == "routine"
+    assert consequential_raid.event_class == "narrative"
+    assert plain_rumor.event_class == "routine"
+    assert distorted_rumor.event_class == "narrative"
+    assert action_intent.event_class == "routine"
+    assert selected.event_class == "routine"
+
+
+def test_compaction_preserves_routine_causes_directly_used_by_narrative_events():
+    world = WorldState.create("routine-cause-alias")
+    root = world.event_log.by_type("WORLD_GENERATED")[0]
+    contact = world.event_log.append(
+        tick=0, event_type="ENCOUNTER_DETECTED", caused_by=[root.id])
+    withdrawal = world.event_log.append(
+        tick=0, event_type="ENCOUNTER_RESOLVED",
+        data={"outcome": "mutual_withdrawal", "damage_event_ids": [],
+              "outcome_event_ids": [], "gunnery_damage": [0, 0]},
+        caused_by=[contact.id])
+    consequence = world.event_log.append(
+        tick=0, event_type="BOUNTY_SET",
+        data={"amount_silver": 10}, caused_by=[withdrawal.id])
+
+    compact = world.event_log.to_compacted_records()
+    aliases = {event_id for row in compact if row.get("record_kind") == "routine_aggregate"
+               for day in row["days"] for event_id in day.get("event_ids", [])}
+    retained_story = next(row for row in compact if row.get("id") == consequence.id)
+
+    assert contact.event_class == withdrawal.event_class == "routine"
+    assert withdrawal.id in aliases
+    assert retained_story["caused_by"] == [withdrawal.id]
+
+
 def test_major_agents_receive_scheduled_decisions_without_external_event_wakes():
     world = WorldState.create(3)
     world.decisions.event_cursor = len(world.event_log)

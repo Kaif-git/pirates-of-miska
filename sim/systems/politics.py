@@ -31,7 +31,9 @@ def validate_politics_data(data: Any) -> None:
     rules = data["rules"]
     if (not isinstance(rules, dict) or set(rules) != {
             "relation_min", "relation_max", "trade_dependence_per_volume", "trade_dependence_cap",
-            "max_trade_volume", "faction_month_days", "expansion_base_basis_points",
+             "max_trade_volume", "faction_month_days", "faction_founder_min_ambition",
+             "faction_founder_min_leadership", "faction_min_member_crews",
+             "expansion_base_basis_points",
             "expansion_ambition_basis_points", "max_faction_territories",
             "coup_base_basis_points", "coup_ambition_basis_points",
             "coup_success_base_basis_points", "coup_success_leadership_basis_points",
@@ -47,6 +49,9 @@ def validate_politics_data(data: Any) -> None:
             or any(type(value) is not int or value < 0 for value in rules.values())
             or rules["relation_min"] != 0 or rules["relation_max"] != 100
             or rules["trade_dependence_cap"] > 100 or rules["faction_month_days"] < 1
+            or rules["faction_founder_min_ambition"] > 100
+            or rules["faction_founder_min_leadership"] > 100
+            or rules["faction_min_member_crews"] < 2
             or rules["max_faction_territories"] < 1
             or rules["expansion_base_basis_points"] > 10000
             or rules["coup_base_basis_points"] > 10000
@@ -178,9 +183,16 @@ class PoliticsSystem:
 
     def _crew(self, world, faction_id: str) -> dict[str, Any]:
         crew = world.crew_ships.crews.get(faction_id)
-        if crew is None:
-            raise ValueError(f"Unknown faction: {faction_id}")
-        return crew
+        if crew is not None:
+            return crew
+        faction = self.factions.get(faction_id)
+        if faction:
+            member_ids = faction.get("member_crew_ids", ())
+            for crew_id in member_ids:
+                crew = world.crew_ships.crews.get(crew_id)
+                if crew is not None:
+                    return crew
+        raise ValueError(f"Faction has no active member crew: {faction_id}")
 
     def _character(self, world, character_id: str) -> dict[str, Any]:
         character = world.entities.get(character_id)
@@ -191,38 +203,40 @@ class PoliticsSystem:
     def seed_world(self, world) -> None:
         if self.factions or self.island_rulers:
             raise ValueError("Starting factions can only be seeded once")
-        for faction_id, crew in sorted(world.crew_ships.crews.items()):
-            leader = self._character(world, crew["captain_id"])
-            ship_id = crew["ship_ids"][0]
+        merchant_crews = []
+        for crew_id, crew in sorted(world.crew_ships.crews.items()):
+            ship_id = next((candidate for candidate in crew["ship_ids"]
+                            if candidate in world.entities), None)
+            captain = world.entities.get(crew["captain_id"])
+            if (ship_id is None or captain is None
+                    or world.entities[ship_id].get("legal_owner", {}).get("kind")
+                    != "merchant"):
+                continue
             location = world.location_of(ship_id)
-            if location["kind"] != "island":
-                raise ValueError("A founding faction must start on an island")
-            island_id = location["id"]
-            if island_id in self.island_rulers:
-                raise ValueError(f"Starting island already has a ruler: {island_id}")
-            cause = crew["last_event_id"]
-            event = world.event_log.append(
-                tick=world.clock.tick, event_type="FACTION_FOUNDED", location=island_id,
-                actors=[{"role": "faction_leader", "entity_id": leader["id"]}],
-                targets=[{"role": "faction", "entity_id": faction_id}],
-                data={"faction_id": faction_id, "name": crew["name"],
-                      "kind": "merchant_league", "home_island": island_id,
-                      "succession_rule": "council_vote"},
-                caused_by=[cause], causes_tags=["faction_founding", "crew_compact"],
-                magnitude=0.35,
-            )
-            self.factions[faction_id] = {
-                "id": faction_id, "name": crew["name"], "kind": "merchant_league",
-                "leader_id": leader["id"], "council": sorted(crew["roster"]),
-                "succession_rule": "council_vote", "doctrine": {
-                    "order": 30, "freedom": 30, "profit": 70, "glory": 35, "faith": 20},
-                "territory": [island_id], "founded_event_id": event.id,
-                "last_event_id": event.id, "monthly_decisions": 0,
-            }
-            crew["faction_id"] = faction_id
-            ship = world.entities[ship_id]
-            ship["owner_faction"] = faction_id
-            self.island_rulers[island_id] = faction_id
+            if location.get("kind") != "island":
+                continue
+            if self._founder_is_qualified(captain):
+                merchant_crews.append(crew_id)
+        if len(merchant_crews) >= self.data["rules"]["faction_min_member_crews"]:
+            founder_crew_id = min(merchant_crews, key=lambda crew_id: (
+                -(world.entities[world.crew_ships.crews[crew_id]["captain_id"]]
+                  ["stats"]["leadership"] * 2
+                  + world.entities[world.crew_ships.crews[crew_id]["captain_id"]]
+                  ["traits"]["ambition"]),
+                world.crew_ships.crews[crew_id]["captain_id"], crew_id))
+            founder_crew = world.crew_ships.crews[founder_crew_id]
+            founder_ship = next(ship_id for ship_id in founder_crew["ship_ids"]
+                                if ship_id in world.entities)
+            anchorage = world.location_of(founder_ship)["id"]
+            purpose = "mutual_trade_protection"
+            name = (f"{world.entities[founder_crew['captain_id']]['display_name']}"
+                    "'s Trade Compact")
+            causes = sorted({world.crew_ships.crews[crew_id]["last_event_id"]
+                             for crew_id in merchant_crews})
+            self.found_faction(
+                world, member_crew_ids=merchant_crews, founder_id=founder_crew["captain_id"],
+                anchorage_island_id=anchorage, purpose=purpose, name=name,
+                kind="merchant_league", caused_by=causes)
 
         officer_slots = self.data["rules"]["marine_officer_slots"]
         eligible = [row for row in world.entities.values()
@@ -243,7 +257,9 @@ class PoliticsSystem:
             targets=[{"role": "faction", "entity_id": marine_id}],
             data={"faction_id": marine_id, "name": "Royal Marines",
                   "kind": "marine", "home_island": None,
-                  "succession_rule": "council_vote"},
+                  "succession_rule": "council_vote", "member_crew_ids": [],
+                  "founder_id": commander_id, "anchorage_island_id": None,
+                  "purpose": "government_naval_service"},
             caused_by=[world.entities[commander_id]["last_event_id"]],
             causes_tags=["faction_founding", "marine_command"], magnitude=0.5,
         )
@@ -256,6 +272,8 @@ class PoliticsSystem:
                 "order": 90, "freedom": 10, "profit": 20, "glory": 50, "faith": 30},
             "territory": [], "founded_event_id": founder.id,
             "last_event_id": founder.id, "monthly_decisions": 0,
+            "member_crew_ids": [], "founder_id": commander_id,
+            "anchorage_island_id": None, "purpose": "government_naval_service",
         }
         self.marine_command = {
             "faction_id": marine_id, "commander_id": commander_id,
@@ -270,46 +288,118 @@ class PoliticsSystem:
             caused_by="event_000001")
         self.marine_command["budget_funding_event_id"] = funding_event
 
-    def register_recruited_crew(self, world, crew_id: str, *,
-                                owner_type: str, caused_by: str) -> str:
-        """Register a post-bootstrap vessel crew as a real political actor."""
-        crew = world.crew_ships.crews.get(crew_id)
-        if (not crew or crew.get("faction_id") is not None
-                or owner_type not in {"merchant", "pirate", "marine", "privateer"}):
-            raise ValueError("Invalid recruited crew faction registration")
-        world.event_log.get(caused_by)
-        captain_id = crew["captain_id"]
-        ship_id = crew["ship_ids"][0]
-        kind = f"actor_{owner_type}"
+    def _founder_is_qualified(self, character: dict[str, Any]) -> bool:
+        rules = self.data["rules"]
+        return (character.get("kind") == "character"
+                and character.get("death_tick") is None
+                and character.get("departure_tick") is None
+                and character.get("traits", {}).get("ambition", -1)
+                >= rules["faction_founder_min_ambition"]
+                and character.get("stats", {}).get("leadership", -1)
+                >= rules["faction_founder_min_leadership"])
+
+    def found_faction(self, world, *, member_crew_ids: list[str], founder_id: str,
+                      anchorage_island_id: str, purpose: str, name: str,
+                      kind: str, caused_by: list[str] | tuple[str, ...]) -> str:
+        """Found a coalition without conflating its identity with any member crew."""
+        minimum = self.data["rules"]["faction_min_member_crews"]
+        if (not isinstance(member_crew_ids, list) or len(member_crew_ids) < minimum
+                or any(not isinstance(crew_id, str) for crew_id in member_crew_ids)
+                or len(set(member_crew_ids)) != len(member_crew_ids)):
+            raise ValueError(f"Faction founding requires at least {minimum} distinct crews")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(purpose, str) or not purpose.strip()
+                or kind == "marine" or not isinstance(kind, str) or not kind):
+            raise ValueError("Coalition founding requires a name, purpose and non-Marine kind")
+        if anchorage_island_id not in world.geography.islands:
+            raise ValueError("Faction anchorage must be a known island")
+        founder = world.entities.get(founder_id)
+        if not founder or not self._founder_is_qualified(founder):
+            raise ValueError("Faction founder must meet ambition and leadership thresholds")
+        founder_name = founder.get("display_name")
+        if (not isinstance(founder_name, str) or not founder_name.strip()
+                or founder_name.casefold() not in name.casefold()):
+            raise ValueError("Coalition name must be derived from its founder's display name")
+        crews = [world.crew_ships.crews.get(crew_id) for crew_id in member_crew_ids]
+        if any(crew is None or crew.get("faction_id") is not None for crew in crews):
+            raise ValueError("Coalition members must be active and unaffiliated crews")
+        captains = [world.entities.get(crew["captain_id"]) for crew in crews]
+        if founder_id not in {captain.get("id") for captain in captains if captain}:
+            raise ValueError("Faction founder must captain one of the member crews")
+        alignments = [set(crew.get("ideology_tags", ())) for crew in crews]
+        shared_alignment = set.intersection(*alignments) if alignments else set()
+        if not shared_alignment:
+            raise ValueError("Faction members must share at least one alignment")
+        founder_crew = crews[[crew["captain_id"] for crew in crews].index(founder_id)]
+        founder_ships = [world.entities[ship_id] for ship_id in founder_crew["ship_ids"]
+                         if ship_id in world.entities]
+        if not any(world.ship_is_commandable(ship["id"])
+                   and world.entities[ship["id"]].get("controller_crew_id")
+                   == founder_crew["id"]
+                   and world.location_of(ship["id"]).get("kind") == "island"
+                   and world.location_of(ship["id"]).get("id") == anchorage_island_id
+                   for ship in founder_ships):
+            raise ValueError("Faction founder must establish the anchorage at a commanded island")
+        if not caused_by:
+            raise ValueError("Faction founding requires causal crew events")
+        for member_id in caused_by:
+            world.event_log.get(member_id)
+        if any(island_id in self.island_rulers for island_id in [anchorage_island_id]):
+            raise ValueError("Faction anchorage is already governed")
+
+        faction_id = world.ids.next("faction")
+        member_crew_ids = sorted(member_crew_ids)
+        founder_crew_id = founder_crew["id"]
         event = world.event_log.append(
             tick=world.clock.tick, event_type="FACTION_FOUNDED",
-            location=world.location_of(ship_id)["id"],
-            actors=[{"role": "faction_leader", "entity_id": captain_id}],
-            targets=[{"role": "faction", "entity_id": crew_id}],
-            data={"faction_id": crew_id, "name": crew["name"], "kind": kind,
-                  "home_island": world.location_of(ship_id)["id"],
-                  "succession_rule": "council_vote", "recruitment": "actor_budget"},
-            caused_by=[caused_by],
-            causes_tags=["faction_founding", "actor_budget_recruitment", owner_type],
-            magnitude=0.3)
-        crew["faction_id"] = crew_id
-        crew["last_event_id"] = event.id
-        ship = world.entities[ship_id]
-        ship["owner_faction"] = crew_id
-        doctrine = {
-            "merchant": {"order": 30, "freedom": 30, "profit": 70, "glory": 35, "faith": 20},
-            "pirate": {"order": 15, "freedom": 80, "profit": 55, "glory": 70, "faith": 15},
-            "marine": {"order": 90, "freedom": 10, "profit": 20, "glory": 50, "faith": 30},
-            "privateer": {"order": 55, "freedom": 45, "profit": 65, "glory": 65, "faith": 25},
-        }[owner_type]
-        self.factions[crew_id] = {
-            "id": crew_id, "name": crew["name"], "kind": kind,
-            "leader_id": captain_id, "council": [captain_id],
-            "succession_rule": "council_vote", "doctrine": doctrine, "territory": [],
-            "founded_event_id": event.id, "last_event_id": event.id,
-            "monthly_decisions": 0,
+            location=anchorage_island_id,
+            actors=[{"role": "faction_founder", "entity_id": founder_id},
+                    *[{"role": "coalition_captain", "entity_id": crew["captain_id"]}
+                      for crew in crews if crew["captain_id"] != founder_id]],
+            targets=[{"role": "faction", "entity_id": faction_id},
+                     *[{"role": "member_crew", "entity_id": crew_id}
+                       for crew_id in member_crew_ids]],
+            data={"faction_id": faction_id, "name": " ".join(name.split()),
+                  "kind": kind, "home_island": anchorage_island_id,
+                  "anchorage_island_id": anchorage_island_id,
+                  "purpose": purpose.strip(), "founder_id": founder_id,
+                  "member_crew_ids": member_crew_ids,
+                  "member_captain_ids": sorted(crew["captain_id"] for crew in crews),
+                  "founder_display_name": founder_name,
+                  "founder_ambition": founder["traits"]["ambition"],
+                  "founder_leadership": founder["stats"]["leadership"],
+                  "alignment": sorted(shared_alignment),
+                  "succession_rule": "council_vote"},
+            caused_by=sorted(set(caused_by)),
+            causes_tags=["faction_founding", "coalition", *sorted(shared_alignment)],
+            magnitude=0.5)
+        doctrine = {"order": 30, "freedom": 30, "profit": 70,
+                    "glory": 35, "faith": 20}
+        council = sorted({member for crew in crews for member in crew["roster"]})
+        self.factions[faction_id] = {
+            "id": faction_id, "name": " ".join(name.split()), "kind": kind,
+            "leader_id": founder_id, "council": council,
+            "succession_rule": "council_vote", "doctrine": doctrine,
+            "territory": [anchorage_island_id], "founded_event_id": event.id,
+            "last_event_id": event.id, "monthly_decisions": 0,
+            "member_crew_ids": member_crew_ids, "founder_id": founder_id,
+            "anchorage_island_id": anchorage_island_id, "purpose": purpose.strip(),
         }
+        for crew in crews:
+            crew["faction_id"] = faction_id
+            crew["last_event_id"] = event.id
+        self.island_rulers[anchorage_island_id] = faction_id
         return event.id
+
+    def register_recruited_crew(self, world, crew_id: str, *,
+                                owner_type: str, caused_by: str) -> str:
+        """Reject the old invalid behavior of founding a faction for one new crew."""
+        if owner_type not in {"merchant", "pirate", "marine", "privateer"}:
+            raise ValueError("Unknown actor-budget crew type")
+        if crew_id not in world.crew_ships.crews:
+            raise ValueError("Unknown recruited crew")
+        world.event_log.get(caused_by)
+        raise ValueError("A recruited crew needs an explicit coalition before faction founding")
 
     def _faction(self, world, faction_id: str) -> dict[str, Any]:
         faction = self.factions.get(faction_id)
@@ -319,26 +409,118 @@ class PoliticsSystem:
 
     def on_crew_dissolved(self, world, crew_id: str, *, caused_by: str,
                           reason: str) -> str | None:
-        faction = self.factions.get(crew_id)
+        crew = world.crew_ships.crews.get(crew_id)
+        faction_id = crew.get("faction_id") if crew else None
+        faction = self.factions.get(faction_id)
         if faction is None or faction["kind"] == "marine":
             return None
+        remaining_ids = [member_id for member_id in faction["member_crew_ids"]
+                         if member_id != crew_id and member_id in world.crew_ships.crews]
+        departure = world.event_log.append(
+            tick=world.clock.tick, event_type="FACTION_MEMBER_DEPARTED",
+            location=world.location_of(crew_id)["id"] if crew_id in world.entities else None,
+            actors=[{"role": "departing_crew", "entity_id": crew_id}],
+            targets=[{"role": "faction", "entity_id": faction_id}],
+            data={"faction_id": faction_id, "crew_id": crew_id,
+                  "remaining_member_crew_ids": sorted(remaining_ids), "reason": reason},
+            caused_by=[caused_by], causes_tags=["faction_membership", "crew_departure", reason],
+            magnitude=0.35)
+        faction["member_crew_ids"] = sorted(remaining_ids)
+        faction["council"] = sorted({member_id for member_crew_id in remaining_ids
+                                      for member_id in world.crew_ships.crews[member_crew_id]["roster"]
+                                      if member_id in world.entities})
+        faction["last_event_id"] = departure.id
+        if crew is not None:
+            crew["faction_id"] = None
+        # Crew-scoped policing cannot continue after the crew identity ends.
+        # Close those registries causally rather than leaving snapshot-invalid
+        # heat, bounty, or patrol assignments attached to a deleted crew.
+        former_heat = self.crew_heat.pop(crew_id, 0)
+        bounty = self.crew_bounties.pop(crew_id, None)
+        response = self.response_assignments.pop(crew_id, None)
+        if bounty is not None or former_heat or response is not None:
+            closed = world.event_log.append(
+                tick=world.clock.tick, event_type="GOVERNMENT_TARGET_CLOSED",
+                actors=[{"role": "government", "entity_id": self.marine_command["faction_id"]}],
+                targets=[{"role": "former_crew_target", "entity_id": crew_id}],
+                data={"crew_id": crew_id, "faction_id": faction_id,
+                      "heat": former_heat,
+                      "bounty_amount_silver": bounty["amount"] if bounty else 0,
+                      "bounty_event_id": bounty["event_id"] if bounty else None,
+                      "response_event_id": response["event_id"] if response else None,
+                      "reason": reason},
+                caused_by=[departure.id],
+                causes_tags=["government_response", "crew_identity_closed", reason],
+                magnitude=0.2)
+            faction["last_event_id"] = closed.id
+        self.global_tension = min(10000, sum(self.crew_heat.values()))
+        if len(remaining_ids) < self.data["rules"]["faction_min_member_crews"]:
+            return self.dissolve_faction(
+                world, faction_id, caused_by=faction["last_event_id"],
+                reason="coalition_below_minimum_membership")
+        if faction["leader_id"] not in faction["council"]:
+            successor = self._successor(world, faction)
+            succession = self._emit_faction_event(
+                world, faction_id, "FACTION_SUCCESSION", cause_id=departure.id,
+                data={"former_leader_id": faction["leader_id"],
+                      "new_leader_id": successor, "rule": "coalition_council"},
+                target_id=successor, tags=("succession", "crew_departure"),
+                actor_id=successor)
+            faction["leader_id"] = successor
+            return succession.id
+        return departure.id
+
+    def dissolve_faction(self, world, faction_id: str, *, caused_by: str,
+                         reason: str) -> str | None:
+        faction = self.factions.get(faction_id)
+        if faction is None or faction["kind"] == "marine":
+            return None
+        world.event_log.get(caused_by)
+        member_ids = list(faction["member_crew_ids"])
+        assets = sorted(ship_id for crew_id in member_ids
+                        if crew_id in world.crew_ships.crews
+                        for ship_id in world.crew_ships.crews[crew_id]["ship_ids"]
+                        if ship_id in world.entities)
+        member_people = sorted({person_id for crew_id in member_ids
+                                if crew_id in world.crew_ships.crews
+                                for person_id in world.crew_ships.crews[crew_id]["roster"]})
+        silver = sum(world.economy.crew_accounts.get(crew_id, {}).get("treasury_silver", 0)
+                     for crew_id in member_ids)
+        arrears = sum(world.crew_ships.crews.get(crew_id, {}).get("arrears_silver", 0)
+                      for crew_id in member_ids)
         event = world.event_log.append(
             tick=world.clock.tick, event_type="FACTION_DISSOLVED",
-            actors=[{"role": "dissolving_crew", "entity_id": crew_id}],
-            targets=[{"role": "former_faction", "entity_id": crew_id}],
-            data={"faction_id": crew_id, "name": faction["name"], "reason": reason,
-                  "territory": list(faction["territory"])},
+            actors=[{"role": "faction_leader", "entity_id": faction["leader_id"]}],
+            targets=[{"role": "former_faction", "entity_id": faction_id}],
+            data={"faction_id": faction_id, "name": faction["name"], "reason": reason,
+                  "territory": list(faction["territory"]),
+                  "member_crew_ids": member_ids, "member_character_ids": member_people,
+                  "ship_ids": assets, "crew_treasury_silver": silver,
+                  "crew_arrears_silver": arrears,
+                  "successor_faction_id": None,
+                  "successor_crew_ids": sorted(member_ids)},
             caused_by=[caused_by], causes_tags=["faction_dissolution", reason], magnitude=0.8,
         )
         archived = json.loads(json.dumps(faction, sort_keys=True))
         archived["dissolved_event_id"] = event.id
-        self.archived_factions[crew_id] = archived
-        del self.factions[crew_id]
+        self.archived_factions[faction_id] = archived
+        del self.factions[faction_id]
+        for crew_id in member_ids:
+            crew = world.crew_ships.crews.get(crew_id)
+            if crew:
+                crew["faction_id"] = None
+                crew["last_event_id"] = event.id
         for island_id in faction["territory"]:
             self.island_rulers.pop(island_id, None)
             self.fortifications.pop(island_id, None)
-        self.response_assignments.pop(crew_id, None)
+        for crew_id in member_ids:
+            self.response_assignments.pop(crew_id, None)
+        self.battles_cleanup_command(world, faction_id)
         return event.id
+
+    @staticmethod
+    def battles_cleanup_command(world, faction_id: str) -> None:
+        world.battles.fleet_commands.pop(faction_id, None)
 
     def resolve_battle_power_vacuum(self, world, faction_id: str, *,
                                     defeated_captain: str, caused_by: str) -> str | None:
@@ -391,9 +573,12 @@ class PoliticsSystem:
         if not members:
             raise ValueError("Cannot select a faction successor without living council members")
         if faction["succession_rule"] == "captain":
-            crew = world.crew_ships.crews.get(faction["id"])
-            if crew and crew["captain_id"] in {row["id"] for row in members}:
-                return crew["captain_id"]
+            captains = [world.crew_ships.crews[crew_id]["captain_id"]
+                        for crew_id in faction.get("member_crew_ids", ())
+                        if crew_id in world.crew_ships.crews]
+            for captain_id in captains:
+                if captain_id in {row["id"] for row in members}:
+                    return captain_id
         return min(members, key=lambda row: (
             -(row["stats"]["leadership"] * 2 + row["traits"]["loyalty"]
               - row["traits"]["ambition"] // 2), row["id"]))["id"]
@@ -412,10 +597,14 @@ class PoliticsSystem:
         if faction["kind"] == "marine":
             self._monthly_marine_politics(world, faction_id)
             return
-        crew = world.crew_ships.crews.get(faction_id)
-        if crew is None:
+        member_crews = [world.crew_ships.crews[crew_id]
+                        for crew_id in faction.get("member_crew_ids", ())
+                        if crew_id in world.crew_ships.crews
+                        and world.crew_ships.crews[crew_id].get("faction_id") == faction_id]
+        if not member_crews:
             return
-        active_roster = sorted(member for member in crew["roster"] if member in world.entities)
+        active_roster = sorted({member for crew in member_crews for member in crew["roster"]
+                                if member in world.entities})
         faction["council"] = active_roster
         if not active_roster:
             return
@@ -424,7 +613,8 @@ class PoliticsSystem:
             old_leader = faction["leader_id"]
             successor = self._successor(world, faction)
             event = self._emit_faction_event(
-                world, faction_id, "FACTION_SUCCESSION", cause_id=crew["last_event_id"],
+                world, faction_id, "FACTION_SUCCESSION", cause_id=max(
+                    (crew["last_event_id"] for crew in member_crews), default=faction["last_event_id"]),
                 data={"former_leader_id": old_leader, "new_leader_id": successor,
                       "rule": faction["succession_rule"]}, target_id=successor,
                 tags=("succession",), actor_id=successor)
@@ -746,8 +936,9 @@ class PoliticsSystem:
             world, winner_crew_id, loser_crew_id, caused_by=caused_by)
         if breach_event:
             heat_event = breach_event
+        winner_faction_id = world.crew_ships.crews.get(winner_crew_id, {}).get("faction_id")
         if (bounty and claimable_bounty > 0 and loser_crew_id in world.crew_ships.crews
-                and winner_crew_id in self.factions):
+                and winner_faction_id in self.factions):
             payment = min(claimable_bounty, world.economy.government_silver)
             if payment:
                 paid = world.economy.pay_government_bounty(
@@ -769,18 +960,25 @@ class PoliticsSystem:
 
     def _record_hostile_treaty_breach(self, world, first: str, second: str, *,
                                       caused_by: str) -> str | None:
-        key = self._pair_key(first, second)
+        first_crew = world.crew_ships.crews.get(first)
+        second_crew = world.crew_ships.crews.get(second)
+        first_faction = first_crew.get("faction_id") if first_crew else first
+        second_faction = second_crew.get("faction_id") if second_crew else second
+        if not first_faction or not second_faction or first_faction == second_faction:
+            return None
+        key = self._pair_key(first_faction, second_faction)
         treaty = self.treaties.get(key)
-        if (first not in self.factions or second not in self.factions
+        if (first_faction not in self.factions or second_faction not in self.factions
                 or not treaty or treaty["state"] == "war"
                 or "no_hostile_action" not in treaty["terms"]):
             return None
         breach = world.event_log.append(
             tick=world.clock.tick, event_type="TREATY_BREACHED", location=None,
-            actors=[{"role": "attacking_faction", "entity_id": first}],
-            targets=[{"role": "betrayed_faction", "entity_id": second}],
+            actors=[{"role": "attacking_faction", "entity_id": first_faction}],
+            targets=[{"role": "betrayed_faction", "entity_id": second_faction}],
             data={"treaty_event_id": treaty["event_id"], "reason": "hostile_combat",
-                  "factions": sorted((first, second))},
+                  "factions": sorted((first_faction, second_faction)),
+                  "attacking_crew_id": first, "harmed_crew_id": second},
             caused_by=[caused_by, treaty["event_id"]],
             causes_tags=["treaty_breach", "betrayal", "hostile_combat"], magnitude=0.8,
         )
@@ -789,8 +987,8 @@ class PoliticsSystem:
             key, {"trust": 50, "fear": 50, "grievance": 50})
         institutional["trust"] = max(0, institutional["trust"] - 35)
         institutional["grievance"] = min(100, institutional["grievance"] + 40)
-        first_leader = self.factions.get(first, {}).get("leader_id")
-        second_leader = self.factions.get(second, {}).get("leader_id")
+        first_leader = self.factions.get(first_faction, {}).get("leader_id")
+        second_leader = self.factions.get(second_faction, {}).get("leader_id")
         for holder_id, target_id in ((first_leader, second_leader),
                                      (second_leader, first_leader)):
             if holder_id in world.entities and target_id in world.entities:
@@ -798,7 +996,7 @@ class PoliticsSystem:
                     world, holder_id, target_id, "betrayed", event_id=breach.id,
                     intensity_permille=800, valence_permille=-800)
         transition = self.propose_treaty(
-            world, first, second, "war", caused_by=breach.id)
+            world, first_faction, second_faction, "war", caused_by=breach.id)
         return transition
 
     def _monthly_diplomacy(self, world) -> None:
@@ -893,7 +1091,8 @@ class PoliticsSystem:
             if tier is None or crew_id not in world.crew_ships.crews:
                 continue
             label, desired_cost = tier
-            faction = self.factions.get(crew_id)
+            crew = world.crew_ships.crews[crew_id]
+            faction = self.factions.get(crew.get("faction_id"))
             if (not faction or faction["kind"].startswith("actor_")
                     or not faction["territory"]):
                 continue
@@ -952,7 +1151,7 @@ class PoliticsSystem:
         return values
 
     def record_trade(self, first: str, second: str, volume: int, *, world, caused_by: str) -> str:
-        self._crew(world, first); self._crew(world, second)
+        self._faction(world, first); self._faction(world, second)
         if type(volume) is not int or volume <= 0:
             raise ValueError("Trade volume must be a positive integer")
         parent = world.event_log.get(caused_by)
@@ -1121,7 +1320,8 @@ class PoliticsSystem:
         for faction_id, faction in self.factions.items():
             expected = {"id", "name", "kind", "leader_id", "council", "succession_rule",
                         "doctrine", "territory", "founded_event_id", "last_event_id",
-                        "monthly_decisions"}
+                        "monthly_decisions", "member_crew_ids", "founder_id",
+                        "anchorage_island_id", "purpose"}
             if (not isinstance(faction, dict) or set(faction) != expected
                     or faction["id"] != faction_id
                     or not all(isinstance(faction[field], str) and faction[field]
@@ -1141,7 +1341,16 @@ class PoliticsSystem:
                     or any(island not in world.geography.islands
                            for island in faction["territory"])
                     or type(faction["monthly_decisions"]) is not int
-                    or faction["monthly_decisions"] < 0):
+                    or faction["monthly_decisions"] < 0
+                    or not isinstance(faction["member_crew_ids"], list)
+                    or len(set(faction["member_crew_ids"])) != len(faction["member_crew_ids"])
+                    or any(crew_id not in world.crew_ships.crews
+                           for crew_id in faction["member_crew_ids"])
+                    or not isinstance(faction["founder_id"], str)
+                    or faction["founder_id"] not in world.entities | world.archive
+                    or (faction["anchorage_island_id"] is not None
+                        and faction["anchorage_island_id"] not in world.geography.islands)
+                    or not isinstance(faction["purpose"], str) or not faction["purpose"]):
                 raise ValueError(f"Invalid faction state: {faction_id}")
             if faction["leader_id"] not in faction["council"]:
                 if faction["leader_id"] not in world.archive:
@@ -1152,6 +1361,62 @@ class PoliticsSystem:
                     founded.data.get("faction_id"),
                     founded.targets[0]["entity_id"] if founded.targets else None}:
                 raise ValueError("Faction founding event does not match faction record")
+            if founded.data.get("member_crew_ids") is not None:
+                historical_members = set(founded.data.get("member_crew_ids", ()))
+                for transition in world.event_log:
+                    if (transition.id <= founded.id
+                            or transition.data.get("faction_id") != faction_id):
+                        continue
+                    if transition.type == "FACTION_MEMBER_DEPARTED":
+                        historical_members.discard(transition.data.get("crew_id"))
+                    elif transition.type == "FACTION_MEMBER_JOINED":
+                        historical_members.add(transition.data.get("crew_id"))
+                if (historical_members != set(faction["member_crew_ids"])
+                        or founded.data.get("founder_id") != faction["founder_id"]
+                        or founded.data.get("purpose") != faction["purpose"]
+                        or founded.data.get("anchorage_island_id")
+                        != faction["anchorage_island_id"]
+                        or founded.data.get("name") != faction["name"]):
+                    raise ValueError("Faction coalition state disagrees with its founding event")
+                if faction["kind"] == "marine":
+                    if faction["member_crew_ids"] or faction["anchorage_island_id"] is not None:
+                        raise ValueError("Institutional Marine faction cannot claim crew coalition")
+                else:
+                    founding_captains = founded.data.get("member_captain_ids")
+                    founding_actors = sorted(actor.get("entity_id") for actor in founded.actors
+                                             if actor.get("role") in {
+                                                 "faction_founder", "coalition_captain"})
+                    historical_founder = (world.entities.get(faction["founder_id"])
+                                          or world.archive.get(faction["founder_id"]))
+                    if (len(faction["member_crew_ids"])
+                            < self.data["rules"]["faction_min_member_crews"]
+                            or not isinstance(founding_captains, (list, tuple))
+                            or any(not isinstance(member_id, str) or not member_id
+                                   for member_id in founding_captains)
+                            or list(founding_captains) != sorted(set(founding_captains))
+                            or list(founding_captains) != founding_actors
+                            or any(member_id not in world.entities | world.archive
+                                   for member_id in founding_captains)
+                            or not isinstance(founded.data.get("founder_display_name"), str)
+                            or not isinstance(founded.data.get("name"), str)
+                            or founded.data["founder_display_name"].casefold()
+                            not in founded.data.get("name", "").casefold()
+                            or historical_founder is None
+                            or founded.data.get("founder_display_name")
+                            != historical_founder.get("display_name")
+                            or founded.data.get("founder_id") != faction["founder_id"]
+                            or founded.data.get("founder_ambition", -1)
+                            < self.data["rules"]["faction_founder_min_ambition"]
+                            or founded.data.get("founder_leadership", -1)
+                            < self.data["rules"]["faction_founder_min_leadership"]
+                            or not any(actor.get("entity_id") == faction["founder_id"]
+                                       for actor in founded.actors)
+                            or faction["anchorage_island_id"] is None
+                            or not faction["purpose"].strip()):
+                        raise ValueError("Faction founding lacks coalition prerequisites")
+                    for crew_id in faction["member_crew_ids"]:
+                        if world.crew_ships.crews[crew_id].get("faction_id") != faction_id:
+                            raise ValueError("Faction member crew has inconsistent allegiance")
             if last.data.get("faction_id", faction_id) != faction_id:
                 raise ValueError("Faction last event does not identify the faction")
             for island_id in faction["territory"]:
@@ -1160,9 +1425,10 @@ class PoliticsSystem:
         for faction_id, faction in self.archived_factions.items():
             if (not isinstance(faction, dict)
                     or set(faction) != {"id", "name", "kind", "leader_id", "council",
-                                       "succession_rule", "doctrine", "territory",
-                                       "founded_event_id", "last_event_id", "monthly_decisions",
-                                       "dissolved_event_id"}
+                                        "succession_rule", "doctrine", "territory",
+                                        "founded_event_id", "last_event_id", "monthly_decisions",
+                                        "member_crew_ids", "founder_id", "anchorage_island_id",
+                                        "purpose", "dissolved_event_id"}
                     or faction.get("id") != faction_id or faction_id in self.factions):
                 raise ValueError("Invalid archived faction record")
             dissolution = world.event_log.get(faction["dissolved_event_id"])
@@ -1245,9 +1511,15 @@ class PoliticsSystem:
                     != "GOVERNMENT_RESPONSE_FUNDED"):
                 raise ValueError("Invalid government response assignment")
         for crew_id, crew in world.crew_ships.crews.items():
-            if (crew.get("faction_id") != crew_id
-                    or crew_id not in (set(self.factions) | set(self.archived_factions))):
-                raise ValueError("Crew is missing its political faction record")
+            faction_id = crew.get("faction_id")
+            if faction_id is None:
+                continue
+            faction = self.factions.get(faction_id)
+            archived = self.archived_factions.get(faction_id)
+            if faction is None and archived is None:
+                raise ValueError("Crew references an unknown political faction")
+            if faction is not None and crew_id not in faction["member_crew_ids"]:
+                raise ValueError("Crew allegiance is absent from faction coalition membership")
         for key, row in self.institutional.items():
             first, second = key.split("|")
             if first == second:

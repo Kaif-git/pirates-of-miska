@@ -8,7 +8,8 @@ from pirates.duel_system.model import (
     ActionKind, ArmorPiece, CombatState, EventType, Equipment, Personality,
     Severity, Weapon, Wound, Zone,
 )
-from pirates.duel_system.wounds import classify_wound
+from pirates.duel_system.stats import effective_stats
+from pirates.duel_system.wounds import classify_wound, impact_stability_request
 from test_duel_system_foundation import bare_fighter
 from test_duel_system_scheduler import arena, advance_to
 
@@ -90,6 +91,89 @@ def test_same_deep_injury_has_same_function_but_composure_changes_reflex(profile
     assert restored.to_data() == state.to_data()
 
 
+def test_resolved_hit_transfers_bounded_anatomical_impact_without_reusing_shock():
+    impacts = {}
+    for zone in (Zone.HEAD, Zone.TORSO, Zone.LEG, Zone.ARM, Zone.HAND):
+        state, _, defender = hit_once(profile="veteran", zone=zone, strength=12)
+        hit = next(event for event in state.event_log if event.type == EventType.HIT)
+        impacts[hit.zone] = hit.deltas["impact_applied"]
+        assert hit.severity == Severity.DEEP
+        assert hit.deltas["shock_response"] == "FLINCH"
+        assert hit.deltas["impact_requested"] > 0
+        assert hit.deltas["impact_applied"] == pytest.approx(
+            100 - defender.stability, abs=1e-6)
+        stability_event = next(event for event in state.event_log
+                               if event.type == EventType.STABILITY
+                               and event.deltas.get("source") == "HIT_IMPACT")
+        assert stability_event.deltas["attacker"] == state.fighters[0].id
+        assert stability_event.deltas["zone"] == hit.zone.value
+    assert impacts[Zone.HEAD] > impacts[Zone.TORSO] > impacts[Zone.ARM]
+    hand_impact = impact_stability_request(state.config, Zone.HAND, Severity.DEEP,
+                                          "CUTTING", 16, "OPEN")
+    assert impacts[Zone.LEG] > hand_impact
+
+
+@pytest.mark.parametrize("damage_type,minimum", [("CUTTING", 0.9), ("PIERCING", 1.0), ("BLUNT", 1.2)])
+def test_contact_material_modulates_post_armor_impact(damage_type, minimum):
+    state, _, _ = hit_once(profile=None, zone=Zone.TORSO, strength=12, damage_type=damage_type)
+    hit = next(event for event in state.event_log if event.type == EventType.HIT)
+    cfg = state.config["injury"]
+    assert hit.deltas["impact_requested"] == pytest.approx(
+        (hit.deltas["net"] - cfg["impact_net_threshold"])
+        * cfg["impact_per_net"]
+        * cfg["impact_severity_mult"][hit.severity.value]
+        * cfg["impact_zone_mult"][Zone.TORSO.value]
+        * minimum
+        * cfg["impact_defense_mult"]["OPEN"])
+
+
+def test_armor_and_posture_reduce_or_gate_hit_impact_after_armor():
+    weak, _, weak_target = hit_once(profile=None, zone=Zone.TORSO, strength=1)
+    weak_hit = next(event for event in weak.event_log if event.type == EventType.HIT)
+    assert weak_hit.severity == Severity.GRAZE
+    assert weak_hit.deltas["impact_requested"] == 0
+    assert weak_target.stability == 100
+
+    armored, _, armored_target = hit_once(profile=None, zone=Zone.TORSO, strength=12, armor=10)
+    armored_hit = next(event for event in armored.event_log if event.type == EventType.HIT)
+    assert armored_hit.deltas["net"] == 6
+    assert armored_hit.deltas["impact_requested"] == 0
+    assert armored_target.stability == 100
+
+    open_state, _, open_target = hit_once(profile=None, zone=Zone.LEG, strength=12)
+    open_hit = next(event for event in open_state.event_log if event.type == EventType.HIT)
+    guarded_state = arena()
+    attacker, target = guarded_state.fighters
+    attacker.strength = 12
+    attacker.equipment.weapon = Weapon(edge=4, weight=0, damage_type="CUTTING")
+    target.pos = (1, 0)
+    target.action = None
+    # A guard is held while the attacker lands on an uncovered leg.
+    commit_action(guarded_state, target.id, Choice(ActionKind.GUARD))
+    commit_action(guarded_state, attacker.id, Choice(ActionKind.LIGHT, Zone.LEG))
+    advance_to(guarded_state, attacker.action.strike_tick)
+    guarded_hit = next(event for event in guarded_state.event_log if event.type == EventType.HIT)
+    assert guarded_hit.deltas["net"] == open_hit.deltas["net"]
+    assert guarded_hit.deltas["impact_requested"] < open_hit.deltas["impact_requested"]
+    assert open_target.stability < 100 and target.stability < 100
+    assert impact_stability_request(open_state.config, Zone.HEAD, Severity.SEVERED,
+                                    "BLUNT", 100, "DEFENSELESS") == 8
+
+
+def test_head_graze_and_deep_impact_have_distinct_stability_and_function_effects():
+    graze_state, _, graze_target = hit_once(profile=None, zone=Zone.HEAD, strength=1)
+    deep_state, _, deep_target = hit_once(profile=None, zone=Zone.HEAD, strength=12)
+    graze = next(event for event in graze_state.event_log if event.type == EventType.HIT)
+    deep = next(event for event in deep_state.event_log if event.type == EventType.HIT)
+    assert graze.severity == Severity.GRAZE
+    assert deep.severity == Severity.DEEP
+    assert graze.deltas["impact_applied"] == 0
+    assert deep.deltas["impact_applied"] > 0
+    assert graze_target.statuses[0].name == "dizzy"
+    assert any(status.name == "concussed" for status in deep_target.statuses)
+    assert deep_target.stability < graze_target.stability
+
+
 def test_after_armor_net_controls_depth_and_injury_description_is_recorded():
     state = arena()
     attacker, defender = state.fighters
@@ -105,9 +189,65 @@ def test_after_armor_net_controls_depth_and_injury_description_is_recorded():
     assert hit.severity == Severity.GRAZE
     assert hit.deltas["depth"] == "SUPERFICIAL"
     assert hit.deltas["structure"] == "SKIN"
-    assert defender.wounds[0].bleed_per_turn == pytest.approx(
-        state.config["wounds"]["ARM"]["GRAZE"]["bleed"] *
-        state.config["injury"]["damage_types"]["PIERCING"]["bleed_mult"])
+    wound = defender.wounds[0]
+    expected_loss = (state.config["blood"]["graze_initial_loss"]
+                     * state.config["injury"]["damage_types"]["PIERCING"]["bleed_mult"])
+    assert wound.bleed_per_turn == 0
+    assert wound.initial_blood_loss == pytest.approx(expected_loss)
+    assert defender.blood == pytest.approx(state.config["blood"]["start"] - expected_loss)
+    for _ in range(state.config["time"]["ticks_per_turn"] * 3):
+        advance_one_tick(state)
+    assert defender.blood == pytest.approx(state.config["blood"]["start"] - expected_loss)
+    restored = CombatState.from_data(state.to_data())
+    restored_defender = next(actor for actor in restored.fighters if actor.id == defender.id)
+    blood_at_save = restored_defender.blood
+    for _ in range(state.config["time"]["ticks_per_turn"]):
+        advance_one_tick(restored)
+    assert restored_defender.blood == pytest.approx(blood_at_save)
+    assert restored_defender.wounds[0].initial_blood_loss == pytest.approx(expected_loss)
+
+
+def test_v17_active_graze_migrates_from_ongoing_bleed_to_nonbleeding_wound():
+    state = arena()
+    defender = state.fighters[1]
+    defender.wounds.append(Wound(Zone.ARM, Severity.GRAZE, 0.5))
+    data = state.to_data()
+    data["schema_version"] = data["config"]["schema_version"] = 17
+    data["config"]["blood"].pop("graze_initial_loss", None)
+    data["config"]["wounds"]["ARM"]["GRAZE"]["bleed"] = 0.5
+    data["fighters"][1]["wounds"][0].pop("initial_blood_loss", None)
+    data["fighters"][1]["wounds"][0]["bleed_per_turn"] = 0.5
+
+    restored = CombatState.from_data(data)
+    migrated = restored.fighters[1].wounds[0]
+    assert restored.config["schema_version"] == 18
+    assert migrated.bleed_per_turn == 0
+    assert migrated.initial_blood_loss == 0
+
+
+def test_cumulative_blood_loss_progressively_reduces_physical_stats_not_accuracy():
+    state = arena()
+    fighter = state.fighters[0]
+    samples = []
+    for blood in (100, 50, 25, 0):
+        fighter.blood = blood
+        live = effective_stats(fighter, state.config, state.tick)
+        samples.append((live.speed, live.strength, live.accuracy))
+    assert [row[0] for row in samples] == sorted((row[0] for row in samples), reverse=True)
+    assert [row[1] for row in samples] == sorted((row[1] for row in samples), reverse=True)
+    assert {row[2] for row in samples} == {fighter.accuracy}
+    assert samples[0][0] == samples[1][0]  # ordinary blood loss does not debuff immediately
+    assert samples[-1][0] < samples[1][0]
+
+    healthy, injured = arena(), arena()
+    for comparison, blood in ((healthy, 100), (injured, 25)):
+        comparison.tick = 3  # both fighters are past the idle-recovery delay
+        for actor in comparison.fighters:
+            actor.idle_since = 0
+            actor.stamina = 50
+            actor.blood = blood
+        advance_one_tick(comparison)
+    assert injured.fighters[0].stamina - 50 < healthy.fighters[0].stamina - 50
 
 
 def test_open_recoil_respects_walls_and_reports_braced_result():
@@ -146,7 +286,7 @@ def test_recoil_cooldown_prevents_repeat_displacement_without_suppressing_wound(
     attacker, defender = state.fighters
     attacker.speed = 20
     attacker.strength = 12
-    attacker.equipment.weapon = Weapon(edge=4, reach=2, weight=0)
+    attacker.equipment.weapon = Weapon(edge=4, reach=1, weight=0)
     values = deepcopy(state.config["ronin"])
     values.update(deepcopy(state.config["ai_profiles"]["recruit"]))
     values["archetype"] = "recruit"
@@ -155,6 +295,7 @@ def test_recoil_cooldown_prevents_repeat_displacement_without_suppressing_wound(
     advance_to(state, attacker.action.end_tick)
     assert defender.pos == (2, 0)
     first_recoil_tick = defender.last_recoil_tick
+    attacker.pos = (1, 0)
     commit_action(state, attacker.id, Choice(ActionKind.LIGHT, Zone.ARM))
     advance_to(state, attacker.action.strike_tick)
     assert len(defender.wounds) == 2
@@ -162,6 +303,47 @@ def test_recoil_cooldown_prevents_repeat_displacement_without_suppressing_wound(
     responses = [event for event in state.event_log if event.type == EventType.INJURY_RESPONSE]
     assert [event.deltas["response"] for event in responses] == ["RECOIL", "REFRACTORY"]
     assert defender.pos == (2, 0)
+
+
+def test_repeated_head_hits_do_not_refresh_stagger_without_bound():
+    state = arena()
+    attacker, defender = state.fighters
+    attacker.strength = 12
+    first = commit_action(state, attacker.id, Choice(ActionKind.LIGHT, Zone.HEAD))
+    advance_to(state, first.end_tick)
+    initial_until = defender.stagger_until
+    assert initial_until > state.tick
+    second = commit_action(state, attacker.id, Choice(ActionKind.LIGHT, Zone.HEAD))
+    advance_to(state, second.strike_tick)
+    stagger_events = [event for event in state.event_log if event.type == EventType.STAGGER]
+    assert len(stagger_events) == 2
+    assert stagger_events[0].deltas["repeated"] is False
+    assert stagger_events[1].deltas["repeated"] is True
+    assert defender.stagger_until == initial_until
+    advance_to(state, initial_until)
+    assert defender.can_act(state.tick)
+
+
+def test_hit_impact_rules_are_role_symmetric_for_player_and_npc():
+    outcomes = []
+    for reverse in (False, True):
+        state = arena()
+        attacker, defender = state.fighters[::-1] if reverse else state.fighters
+        attacker.strength = 12
+        attacker.equipment.weapon = Weapon(edge=4, weight=0, damage_type="CUTTING")
+        commit_action(state, attacker.id, Choice(ActionKind.LIGHT, Zone.ARM))
+        advance_to(state, attacker.action.strike_tick)
+        hit = next(event for event in state.event_log if event.type == EventType.HIT)
+        assert hit.actor == attacker.id and hit.target == defender.id
+        outcomes.append((hit.deltas["impact_requested"], hit.deltas["impact_applied"],
+                         100 - defender.stability))
+    assert outcomes[0] == pytest.approx(outcomes[1])
+
+
+def test_identical_seeded_impact_exchange_replays_identically():
+    first, _, _ = hit_once(profile="veteran", zone=Zone.HEAD, strength=12)
+    second, _, _ = hit_once(profile="veteran", zone=Zone.HEAD, strength=12)
+    assert first.to_data() == second.to_data()
 
 
 def test_same_tick_strikes_resolve_before_either_shock_recoil():
@@ -179,8 +361,33 @@ def test_same_tick_strikes_resolve_before_either_shock_recoil():
     assert {event.actor for event in state.event_log if event.type == EventType.HIT} == {first.id, second.id}
     assert first.pos == (0, 0) and second.pos == (2, 0)
     assert len([event for event in state.event_log if event.type == EventType.INJURY_RESPONSE]) == 2
+    assert first.stability < 100 and second.stability < 100
     assert all(fighter.action is not None for fighter in state.fighters)
     assert not any(event.type == EventType.INTERRUPT for event in state.event_log)
+
+
+def test_same_tick_strike_still_lands_after_hit_impact_fall_without_recoil_moving_grounded_target():
+    state = arena()
+    player, enemy = state.fighters
+    for fighter in state.fighters:
+        fighter.strength = 12
+        fighter.equipment.weapon = Weapon(edge=4, weight=0, damage_type="BLUNT")
+        values = deepcopy(state.config["ronin"])
+        values.update(deepcopy(state.config["ai_profiles"]["recruit"]))
+        values["archetype"] = "recruit"
+        fighter.personality = Personality(**values)
+        commit_action(state, fighter.id, Choice(ActionKind.LIGHT, Zone.ARM))
+    enemy.stability = 0.5
+    origin = enemy.pos
+    advance_to(state, player.action.strike_tick)
+    assert {event.actor for event in state.event_log if event.type == EventType.HIT} == {
+        player.id, enemy.id}
+    assert enemy.grounded and enemy.pos == origin
+    response = next(event for event in state.event_log
+                    if event.type == EventType.INJURY_RESPONSE and event.actor == enemy.id)
+    assert response.deltas["response"] == "NO_REFLEX"
+    assert not any(event.type == EventType.MOVE and event.actor == enemy.id
+                   and event.deltas.get("forced") for event in state.event_log)
 
 
 def test_recoil_during_recovery_does_not_cancel_an_already_landed_commitment():
@@ -196,9 +403,8 @@ def test_recoil_during_recovery_does_not_cancel_an_already_landed_commitment():
     defender.personality = Personality(**values)
     commit_action(state, defender.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     advance_to(state, defender.action.strike_tick)
-    assert defender.action is not None and defender.action.phase_at(state.tick) == "ACTIVE"
-    # The attack struck at t4; the opponent commits at t5 and lands during recovery.
-    state.tick = state.tick + 1
+    assert defender.action is not None and defender.action.phase_at(state.tick) == "RECOVERY"
+    # The attack struck at t3; the faster opponent commits immediately and lands at t5 in recovery.
     attacker.action = None
     commit_action(state, attacker.id, Choice(ActionKind.LIGHT, Zone.ARM))
     advance_to(state, attacker.action.strike_tick)
@@ -222,7 +428,7 @@ def test_recoil_interrupts_unresolved_movement_after_same_tick_strikes_without_r
     advance_to(state, attacker.action.strike_tick)
     assert defender.action is None
     assert defender.pos == (2, 0)
-    assert defender.stamina == pytest.approx(paid_stamina + 0.8)  # the committed cost was not refunded
+    assert paid_stamina < defender.stamina < 100  # passive recovery occurred, but committed movement cost was not refunded
     assert len([event for event in state.event_log if event.type == EventType.ACTION_START]) == 2
     assert any(event.type == EventType.INTERRUPT and event.actor == defender.id for event in state.event_log)
     advance_to(state, 10)
@@ -263,7 +469,7 @@ def test_old_weapon_and_wound_json_migrate_and_mid_action_replays():
             wound.pop("structure", None)
             wound.pop("damage_type", None)
     migrated = CombatState.from_data(data)
-    assert migrated.config["schema_version"] == 7
+    assert migrated.config["schema_version"] == 18
     assert migrated.fighters[0].equipment.weapon.damage_type == "CUTTING"
     assert migrated.fighters[0].wounds[0].structure == "MUSCLE"
     expected = migrated.to_data()
@@ -281,12 +487,141 @@ def test_v2_config_file_migrates_through_the_public_loader(tmp_path):
     old = deepcopy(load_config())
     old["schema_version"] = 2
     old.pop("injury")
+    old["actions"]["THRUST"].pop("damage_type")
+    old["guard"].pop("riposte_disarm_windup_mult")
+    old["tactics"].pop("feint_disrupt_ticks")
     path = tmp_path / "combat-v2.json"
     path.write_text(json.dumps(old), encoding="utf-8")
     migrated = load_config(path)
-    assert migrated["schema_version"] == 7
-    assert migrated["actions"] == old["actions"]
+    assert migrated["schema_version"] == 18
+    assert migrated["actions"]["THRUST"]["damage_type"] == "PIERCING"
+    assert migrated["guard"]["riposte_disarm_windup_mult"] == 0.3
+    assert migrated["tactics"]["feint_disrupt_ticks"] == 6
+    assert {key: value for key, value in migrated["actions"]["THRUST"].items()
+            if key != "damage_type"} == old["actions"]["THRUST"]
     assert migrated["injury"]["recoil_cooldown_ticks"] == 10
+    assert migrated["injury"]["impact_max_stability_loss"] == 8
+
+
+def test_schema15_config_and_wound_save_migrate_anatomical_sites(tmp_path):
+    from copy import deepcopy
+    import json
+    from pirates.duel_system.config import load_config
+    from pirates.duel_system.model import CombatState
+    from test_duel_system_scheduler import arena
+
+    old_config = deepcopy(load_config())
+    old_config["schema_version"] = 15
+    old_config.pop("anatomy_sites")
+    path = tmp_path / "duel-v15.json"
+    path.write_text(json.dumps(old_config), encoding="utf-8")
+    migrated_config = load_config(path)
+    assert migrated_config["schema_version"] == 18
+    assert migrated_config["anatomy_sites"]["HAND"]
+
+    state = arena()
+    state.fighters[1].wounds.append(Wound(Zone.HAND, Severity.CUT, 1.5))
+    data = state.to_data()
+    data["schema_version"] = 15
+    data["config"]["schema_version"] = 15
+    data["fighters"][1]["wounds"][0].pop("site")
+    data["fighters"][1]["wounds"][0].pop("side")
+    restored = CombatState.from_data(data)
+    assert restored.config["schema_version"] == 18
+    assert restored.fighters[1].wounds[0].site == "HAND"
+    assert restored.fighters[1].wounds[0].side is None
+
+
+def test_v8_active_session_migrates_new_impact_tuning_and_preserves_action():
+    from pirates.duel_system.session import DuelSession
+
+    session = DuelSession.new(seed=98, guide_mode="off")
+    session.select(Choice(ActionKind.RUN, direction=(0, 1), tiles=2))
+    assert session.confirm()
+    data = session.to_data()
+    expected_path = deepcopy(session.player.action.path)
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 8
+    data["notebook"]["version"] = 8
+    for key in ("impact_net_threshold", "impact_per_net", "impact_max_stability_loss",
+                "impact_severity_mult", "impact_zone_mult", "impact_contact_mult",
+                "impact_defense_mult"):
+        data["state"]["config"]["injury"].pop(key)
+    restored = DuelSession.from_data(data)
+    assert restored.to_data()["version"] == 18
+    assert restored.player.action.path == expected_path
+    assert restored.state.config["injury"]["impact_net_threshold"] == 8
+
+
+def test_v9_session_migration_adds_bounded_stagger_refresh_rule():
+    from pirates.duel_system.session import DuelSession
+
+    session = DuelSession.new(seed=99, guide_mode="off")
+    data = session.to_data()
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 9
+    data["notebook"]["version"] = 9
+    data["state"]["config"]["injury"].pop("stagger_repeat_duration_mult")
+    restored = DuelSession.from_data(data)
+    assert restored.to_data()["version"] == 18
+    assert restored.state.config["injury"]["stagger_repeat_duration_mult"] == 0
+
+
+def test_v10_session_migration_adds_reduced_motion_preference_and_preserves_state():
+    from pirates.duel_system.session import DuelSession
+
+    session = DuelSession.new(seed=101, guide_mode="off")
+    data = session.to_data()
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 10
+    data["notebook"]["version"] = 10
+    data["state"]["config"]["ui"].pop("reduced_motion")
+    player_blood = session.player.blood
+    restored = DuelSession.from_data(data)
+    assert restored.to_data()["version"] == 18
+    assert restored.state.config["ui"]["reduced_motion"] is False
+    assert restored.player.blood == player_blood
+
+
+def test_v11_session_migration_adds_consequence_ai_tuning_and_preserves_active_state():
+    from pirates.duel_system.session import DuelSession
+
+    session = DuelSession.new(seed=102, guide_mode="off")
+    commit_action(session.state, session.player.id, Choice(ActionKind.WALK, direction=(0, 1)))
+    data = session.to_data()
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 11
+    data["notebook"]["version"] = 11
+    old_config = data["state"]["config"]
+    for key in ("SHOVE_UNSTEADY", "SHOVE_OPEN_SPACE", "BANDAGE_BLEEDING",
+                "BANDAGE_UNSAFE_PENALTY", "WAIT_STABILITY", "BLEED_PATIENCE"):
+        old_config["tactics"]["ai_scores"].pop(key)
+    path_before = deepcopy(data["state"]["fighters"][0]["action"])
+    restored = DuelSession.from_data(data)
+    assert restored.to_data()["version"] == 18
+    assert restored.state.config["tactics"]["ai_scores"]["BANDAGE_BLEEDING"] == 120
+    assert restored.to_data()["state"]["fighters"][0]["action"] == path_before
+
+
+def test_v11_world_journal_migration_replays_active_action_deterministically(tmp_path):
+    from pirates.duel_system.session import DuelSession
+    from pirates.game import World
+
+    session = DuelSession.new(seed=103, guide_mode="off")
+    commit_action(session.state, session.player.id, Choice(ActionKind.WALK, direction=(0, 1)))
+    data = session.to_data()
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 11
+    data["notebook"]["version"] = 11
+    for key in ("SHOVE_UNSTEADY", "SHOVE_OPEN_SPACE", "BANDAGE_BLEEDING",
+                "BANDAGE_UNSAFE_PENALTY", "WAIT_STABILITY", "BLEED_PATIENCE"):
+        data["state"]["config"]["tactics"]["ai_scores"].pop(key, None)
+    expected = DuelSession.from_data(data)
+    world = World()
+    world.duel_journal = deepcopy(data)
+    save_path = tmp_path / "duel-v11-world.json"
+    world.save(save_path)
+    restored_world = World.load(save_path)
+    restored = DuelSession.from_data(restored_world.duel_journal)
+    assert restored_world.duel_journal["version"] == 18
+    expected.run_to_player()
+    restored.run_to_player()
+    assert restored.state.to_data() == expected.state.to_data()
 
 
 def test_v2_session_journal_migrates_config_notebook_and_active_injury_fields():
@@ -309,10 +644,10 @@ def test_v2_session_journal_migrates_config_notebook_and_active_injury_fields():
             wound.pop("structure", None)
             wound.pop("damage_type", None)
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 7
+    assert restored.to_data()["version"] == 18
     assert restored.player.action.path == old_path
     assert restored.player.equipment.weapon.damage_type == "CUTTING"
-    assert restored.notebook.to_data()["version"] == 7
+    assert restored.notebook.to_data()["version"] == 18
 
 
 def test_render_details_and_coach_explain_wound_without_private_shock_values():
@@ -326,10 +661,10 @@ def test_render_details_and_coach_explain_wound_without_private_shock_values():
     state.fighters[0].statuses = deepcopy(defender.statuses)
     session = DuelSession(state, Notebook(state.config), guide_mode="off")
     model = DuelUI(session, rounds=True).model()
-    assert model.enemy_injury_rows[0].startswith("Arm deep tendon: weak grip")
+    assert model.enemy_injury_rows[0].startswith("Arm — left wrist; deep tendon: weak grip")
     advice = coach(model)
     rows = strategy_rows(model, advice)
-    assert any("Your injury: Arm deep tendon" in row for row in advice.cautions)
+    assert any("Your injury: Arm — left wrist; deep tendon" in row for row in advice.cautions)
     assert any("YOUR CURRENT INJURIES" == row for row in rows)
     assert not any("decision_control" in row or "shock_load" in row for row in rows)
     assert not any("decision_control" in row or "shock_load" in row for row in model.full_log)

@@ -365,6 +365,10 @@ class ShipLife:
         """Install a recruit-provided hammock and place one named sailor aboard."""
         from pirates.crew_recruitment import sailor_from_candidate
 
+        recruit_id = f"hire:{candidate['id']}"
+        if (self.sailor(recruit_id) is not None
+                or any(row["id"] == recruit_id for row in self.crew_history)):
+            raise ValueError("That person is already aboard or in the former-crew ledger")
         bunk_index = len(self.bunks)
         ship_floors = [c for c in world.ship_model.components if c.kind == "floor" and c.z == 0]
         used_fixtures = {(f.x, f.y, f.z) for f in world.fixtures.fixtures}
@@ -395,6 +399,14 @@ class ShipLife:
                 other.relationships[sailor.id] = 50
         self.events = (self.events + [f"{sailor.name} joined the crew at {candidate['port']}."])[-30:]
         return sailor
+
+    def rollback_recruit(self, world, layout, crew, events, sailor_id):
+        """Undo a failed hire without leaving a bunk, sailor or relationship behind."""
+        for other in crew:
+            other.relationships.pop(sailor_id, None)
+        self.crew = crew
+        self.events = events
+        world.bind_fixtures(layout)
 
     def release_crew_member(self, world, sailor_id):
         """Record the captain's explicit dismissal as a conserved former-crew state."""
@@ -454,9 +466,21 @@ class ShipLife:
             if concern["crew"] == sailor.id and concern["status"] == "open":
                 concern["status"] = "archived"
                 concern["resolved_second"] = self.seconds
+        economy = getattr(world, "economy", None)
+        if economy is not None:
+            # Settle the completed day while the sailor is still aboard, so an
+            # on-time release at the destination still honours a passage promise.
+            economy.employment.settle_day(world, world.clock.day)
+            economy.employment.settle_undertakings(world)
         self.crew.remove(sailor)
         for other in self.crew:
             other.relationships.pop(sailor.id, None)
+        if economy is not None:
+            closed = economy.employment.close(
+                sailor.id, world.clock.day, cause,
+                "failed" if status == "dead" else "withdrawn")
+            if closed is not None:
+                economy.employment.announce_undertaking(world, sailor.id)
         self.events = (self.events + [f"{sailor.name} left the active crew ({status}): {cause}."])[-30:]
         if getattr(world, "voyages", None):
             for role, assigned in world.voyages.roles.items():
@@ -2147,6 +2171,9 @@ class ShipLife:
         if self.relationship_story_day != world.clock.day:
             self.relationship_story_day = world.clock.day
             self.relationship_story_gains = {}
+        economy = getattr(world, "economy", None)
+        if economy is not None:
+            economy.employment.settle_day(world, world.clock.day)
         self.spoil_fresh_food()
         self.spoil_cooked_food()
         if self.seconds % 60 == 0:

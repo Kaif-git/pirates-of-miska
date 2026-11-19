@@ -35,7 +35,7 @@ def _validate_shape(value, reference, location="config"):
 def validate_config(config, reference=None):
     if reference is None:
         reference = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    if config.get("schema_version") in {1, 2, 3, 4, 5, 6}:
+    if config.get("schema_version") in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
         return upgrade_config(config)
     _validate_shape(config, reference)
     if config["schema_version"] != reference["schema_version"]:
@@ -48,9 +48,35 @@ def validate_config(config, reference=None):
             raise ValueError(f"{group}.{key} must be positive")
     if config["accuracy"]["jitter"] < 0:
         raise ValueError("accuracy.jitter cannot be negative")
+    if (config["blood"]["graze_initial_loss"] < 0
+            or config["blood"]["total_bleed_cap_per_turn"] <= 0
+            or not 0 <= config["blood"]["bandage_reduction"] <= 1):
+        raise ValueError("Invalid bleeding or one-off graze-loss tuning")
+    if any(zone.get("GRAZE", {}).get("bleed", 0) != 0 for zone in config["wounds"].values()):
+        raise ValueError("Grazes cannot have ongoing bleed")
     for kind, action in config["actions"].items():
-        if any(value < 0 for value in action.values()):
-            raise ValueError(f"Negative action value in {kind}")
+        if (any(value < 0 for key, value in action.items() if key != "damage_type")
+                or action.get("damage_type", "CUTTING") not in {"CUTTING", "PIERCING", "BLUNT"}):
+            raise ValueError(f"Invalid action tuning in {kind}")
+    if not 0 < config["guard"]["riposte_disarm_windup_mult"] <= 1:
+        raise ValueError("guard.riposte_disarm_windup_mult must be in (0, 1]")
+    if (config["stats"]["fatigue_accuracy"] != 0
+            or config["stats"]["pain_accuracy"] != 0
+            or config["stats"]["fear_accuracy"] != 0
+            or config["anger"]["acc_penalty"] != 0
+            or config["zones"]["heavy_acc_mod"] != 0
+            or config["weapon_integrity"]["eye_accuracy_penalty_per_eye"] != 0
+            or config["weapon_integrity"]["eye_accuracy_penalty_max"] != 0
+            or any(action.get("acc_mod", 0) != 0 for action in config["actions"].values())
+            or any(status.get("accuracy_mult", 1) != 1
+                   for zone in config["wounds"].values() for status in zone.values())):
+        raise ValueError("Accuracy must be invariant; legacy accuracy modifiers must be neutral")
+    sites = config["anatomy_sites"]
+    if (set(sites) != set(config["zones"]["difficulty"])
+            or any(not values or len(values) != len(set(values))
+                   or any(not isinstance(site, str) or not site for site in values)
+                   for values in sites.values())):
+        raise ValueError("Anatomical site catalogue must cover each zone with unique labels")
     _validate_profiles(config)
     _validate_injury(config)
     _validate_stability(config)
@@ -123,8 +149,20 @@ def _validate_injury(config):
         raise ValueError("injury.shock_zone_mult must define all target zones")
     if (injury["flinch_threshold"] < 0 or injury["recoil_threshold"] <= injury["flinch_threshold"]
             or injury["recoil_distance"] != 1 or injury["recoil_cooldown_ticks"] <= 0
-            or injury["shock_susceptibility"] < 0):
+            or injury["shock_susceptibility"] < 0
+            or not 0 <= injury["stagger_repeat_duration_mult"] <= 1):
         raise ValueError("Invalid bounded injury-response thresholds")
+    if (injury["impact_net_threshold"] < 0 or injury["impact_per_net"] < 0
+            or injury["impact_max_stability_loss"] <= 0
+            or set(injury["impact_severity_mult"]) != set(injury["shock_by_severity"])
+            or set(injury["impact_zone_mult"]) != set(injury["shock_zone_mult"])
+            or set(injury["impact_contact_mult"]) != set(damage_types)
+            or set(injury["impact_defense_mult"]) != {"OPEN", "DEFENSELESS", "GUARD_HOLD"}
+            or injury["impact_severity_mult"]["BRUISE"] != 0
+            or any(value < 0 for key in ("impact_severity_mult", "impact_zone_mult",
+                                         "impact_contact_mult", "impact_defense_mult")
+                   for value in injury[key].values())):
+        raise ValueError("Invalid anatomical impact tuning")
 
 
 def _validate_weapon_integrity(config):
@@ -177,18 +215,31 @@ def _validate_stability(config):
 
 def _validate_tactics(config):
     rule = config["tactics"]
-    if (rule["shove_balance_fraction"] < 0 or rule["shove_guard_brace"] < 0
-            or rule["shove_stability_loss"] <= 0 or rule["feint_guard_drain"] < 0
+    if (rule["shove_balance_fraction"] < 0 or rule["shove_unsteady_bonus"] < 0
+            or rule["shove_guard_brace"] < 0
+            or rule["shove_move_margin"] <= 0
+            or rule["shove_two_step_margin"] <= rule["shove_move_margin"]
+            or rule["shove_min_stability_loss"] <= 0
+            or rule["shove_max_stability_loss"] < rule["shove_min_stability_loss"]
+            or rule["shove_margin_for_max_loss"] <= 0
+            or not 0 <= rule["shove_braced_impact_mult"] <= 1
+            or not 0 <= rule["shove_blocked_impact_mult"] <= 1
+            or rule["feint_guard_drain"] < 0
+            or isinstance(rule["feint_disrupt_ticks"], bool)
+            or not isinstance(rule["feint_disrupt_ticks"], int)
+            or rule["feint_disrupt_ticks"] <= 0
             or rule["disarm_strength_ratio"] <= 0):
         raise ValueError("Invalid tactical-action contest or effect tuning")
-    expected = {"DISENGAGE", "FEINT", "SHOVE", "THRUST", "DISARM", "ADRENALINE"}
-    if not expected <= set(config["actions"]):
+    action_categories = {"DISENGAGE", "FEINT", "SHOVE", "THRUST", "DISARM", "ADRENALINE"}
+    score_keys = action_categories | {"SHOVE_UNSTEADY", "SHOVE_OPEN_SPACE", "BANDAGE_BLEEDING",
+                                     "BANDAGE_UNSAFE_PENALTY", "WAIT_STABILITY", "BLEED_PATIENCE"}
+    if not action_categories <= set(config["actions"]):
         raise ValueError("Missing P5 tactical actions")
-    for action in expected:
+    for action in action_categories:
         if config["actions"][action]["stamina"] < 0:
             raise ValueError(f"Negative tactical-action stamina cost in {action}")
-    if set(rule["ai_scores"]) != expected:
-        raise ValueError("tactics.ai_scores must define every P5 action")
+    if set(rule["ai_scores"]) != score_keys:
+        raise ValueError("tactics.ai_scores must define every P5 action and consequence response")
 
 
 def _validate_adrenaline(config):
@@ -214,13 +265,21 @@ def _fill_missing(target, defaults):
 
 
 def upgrade_config(config):
-    """Migrate persisted v1-v6 combat tuning while preserving authored values."""
+    """Migrate persisted combat tuning while preserving compatible authored values."""
     migrated = deepcopy(config)
     version = migrated.get("schema_version")
-    if version not in {1, 2, 3, 4, 5, 6}:
+    if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
         raise ValueError("Unsupported combat configuration version")
     current = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     migrated["schema_version"] = current["schema_version"]
+    if version <= 16:
+        # Schema 17 adds the wrist as an anatomically eligible severe hand site.
+        migrated["anatomy_sites"] = deepcopy(current["anatomy_sites"])
+    if version < 18:
+        migrated["blood"]["graze_initial_loss"] = current["blood"]["graze_initial_loss"]
+        for zone in migrated["wounds"].values():
+            if "GRAZE" in zone:
+                zone["GRAZE"]["bleed"] = 0
     if version == 1:
         for key in ("ai_profiles", "personality"):
             migrated[key] = deepcopy(current[key])
@@ -232,15 +291,37 @@ def upgrade_config(config):
     for action, values in current["actions"].items():
         migrated["actions"].setdefault(action, deepcopy(values))
     migrated.setdefault("stability", deepcopy(current["stability"]))
+    old_tactics = migrated.get("tactics", {})
     migrated["tactics"] = deepcopy(current["tactics"])
+    for key, value in old_tactics.items():
+        if key == "shove_stability_loss":
+            migrated["tactics"]["shove_max_stability_loss"] = deepcopy(value)
+        elif key in migrated["tactics"]:
+            migrated["tactics"][key] = deepcopy(value)
     migrated["adrenaline"] = deepcopy(current["adrenaline"])
     _fill_missing(migrated, current)
+    # Older authored tuning could reduce the Accuracy stat through condition,
+    # action modifiers, statuses, or eye injuries. Preserve their records but
+    # neutralize those legacy knobs under the permanent-Accuracy contract.
+    for key in ("fatigue_accuracy", "pain_accuracy", "fear_accuracy"):
+        migrated["stats"][key] = 0
+    migrated["anger"]["acc_penalty"] = 0
+    migrated["zones"]["heavy_acc_mod"] = 0
+    migrated["weapon_integrity"]["eye_accuracy_penalty_per_eye"] = 0
+    migrated["weapon_integrity"]["eye_accuracy_penalty_max"] = 0
+    for action in migrated["actions"].values():
+        if "acc_mod" in action:
+            action["acc_mod"] = 0
+    for zone in migrated["wounds"].values():
+        for wound in zone.values():
+            if isinstance(wound, dict) and "accuracy_mult" in wound:
+                wound.pop("accuracy_mult")
     return validate_config(migrated)
 
 
 def load_config(path=None):
     reference = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     config = json.loads(Path(path).read_text(encoding="utf-8")) if path else deepcopy(reference)
-    if config.get("schema_version") in {1, 2, 3, 4, 5, 6}:
+    if config.get("schema_version") in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
         return upgrade_config(config)
     return validate_config(config, reference)

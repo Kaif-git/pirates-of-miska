@@ -200,7 +200,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     old_path = deepcopy(state["fighters"][0]["action"]["path"])
     old_deadline = state["fighters"][0]["action"]["end_tick"]
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 7
+    assert restored.to_data()["version"] == 18
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_deadline
     assert restored.enemy.ai_experience == []
@@ -218,7 +218,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     old_config_path = tmp_path / "duel-config-v1.json"
     old_config_path.write_text(json.dumps(old_config), encoding="utf-8")
     migrated_config = load_config(old_config_path)
-    assert migrated_config["schema_version"] == 7
+    assert migrated_config["schema_version"] == 18
     assert migrated_config["actions"]["DASH"]["per_tile"] == old_config["actions"]["DASH"]["per_tile"]
     assert migrated_config["ronin"]["base"] == old_config["ronin"]["base"]
     assert migrated_config["ronin"]["traits"] == migrated_config["ai_profiles"]["brute"]["traits"]
@@ -230,7 +230,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     world.save(save_path)
     loaded = World.load(save_path)
     resumed = DuelSession.from_data(loaded.duel_journal)
-    assert loaded.duel_journal["version"] == 7
+    assert loaded.duel_journal["version"] == 18
     restored.run_to_player()
     resumed.run_to_player()
     assert resumed.state.to_data() == restored.state.to_data()

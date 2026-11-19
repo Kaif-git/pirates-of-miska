@@ -179,7 +179,7 @@ class Notebook:
     @classmethod
     def from_data(cls, data, config):
         data = deepcopy(data)
-        if data.get("version") in {1, 2, 3, 4, 5, 6}:
+        if data.get("version") in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
             data["version"] = config["schema_version"]
         if data.get("version") != config["schema_version"]:
             raise ValueError("Unsupported notebook snapshot version")

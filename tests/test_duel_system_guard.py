@@ -17,11 +17,11 @@ def guarded(attacker_speed=10, zone=Zone.TORSO, kind=ActionKind.LIGHT):
 def test_inside_parry_window_costs_no_hit_stamina_staggers_and_grants_riposte():
     state = guarded()
     attacker, defender = state.fighters
-    advance_to(state, 4)
+    advance_to(state, 3)
     event = next(e for e in state.event_log if e.type == EventType.PARRY)
     assert event.deltas["stamina_cost"] == 0
     assert not defender.wounds
-    assert attacker.stagger_until == 10
+    assert attacker.stagger_until == 9
     assert attacker.action is None
     assert defender.riposte
     release_guard(state, "ronin")
@@ -32,11 +32,11 @@ def test_inside_parry_window_costs_no_hit_stamina_staggers_and_grants_riposte():
 
 
 def test_one_tick_outside_window_is_block_not_parry():
-    state = guarded(attacker_speed=6)
+    state = guarded(attacker_speed=4)
     defender = state.fighters[1]
     assert defender.action.guard_ready_tick == 3
     assert defender.action.parry_window == 4
-    advance_to(state, 7)
+    advance_to(state, 8)
     assert not any(e.type == EventType.PARRY for e in state.event_log)
     block = next(e for e in state.event_log if e.type == EventType.BLOCK)
     assert block.deltas["stamina_cost"] >= 2
@@ -47,7 +47,7 @@ def test_one_tick_outside_window_is_block_not_parry():
 def test_guard_line_bypass(zone, bypasses):
     state = guarded(zone=zone)
     state.fighters[0].accuracy = 40
-    advance_to(state, 4)
+    advance_to(state, 3)
     assert bool(state.fighters[1].wounds) == bypasses
     if bypasses:
         hit = next(e for e in state.event_log if e.type == EventType.HIT)
@@ -68,18 +68,18 @@ def test_weak_defender_cannot_parry_heavy_and_heavy_breaks_guard():
 
 
 def test_block_cost_shortfall_breaks_guard_but_does_not_cancel_attack_recovery():
-    state = guarded(attacker_speed=5)
+    state = guarded(attacker_speed=4)
     state.fighters[1].stamina = 1
     advance_to(state, 8)
     assert any(e.type == EventType.GUARD_BREAK for e in state.event_log)
     assert state.fighters[0].action is not None
-    assert state.fighters[0].action.phase_at(state.tick) == "ACTIVE"
+    assert state.fighters[0].action.phase_at(state.tick) == "RECOVERY"
 
 
 def test_heavy_gets_extra_parry_window_but_still_needs_strength():
     state = guarded(attacker_speed=15, kind=ActionKind.HEAVY)
-    # Heavy strikes t8, outside base [3,7) but inside extended [3,9).
-    advance_to(state, 8)
+    # Heavy strikes t5, inside the extended parry window.
+    advance_to(state, 5)
     assert any(e.type == EventType.PARRY for e in state.event_log)
 
 

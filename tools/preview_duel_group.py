@@ -94,7 +94,8 @@ def main():
             display.exchange_number = len(session.inputs)+1
             model = ui.model()
             display.message = ui.message
-            display.round_result, display.round_summary = ui.round_result, ui.round_summary
+            display.round_result, display.round_summary, display.round_assessment = (
+                ui.round_result, ui.round_summary, ui.round_assessment)
             display.draw(renderer, model, ui.sidebar_rows(model), present=False)
             Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(args.output / f"walkthrough-{name}.png")
             return model
@@ -115,9 +116,51 @@ def main():
                   for fighter in session.state.fighters}
         assert counts[session.player.id] == 1 and all(count <= 1 for count in counts.values()), counts
         capture("resolved-exchange")
+        from pirates.duel_scene import ExchangePlayback
+        for width, height in SIZES:
+            window.size = (width, height)
+            display.playback = None
+            capture(f"resolved-recap-{width}")
+            display.playback = ExchangePlayback(ui.playback, started=time.monotonic()-.6)
+            capture(f"resolved-playback-{width}")
+        display.playback = None
 
         # Make P5 tactics and unavailable-action explanations visible in the audit.
         from pirates.duel_layout import context_labels
+        dash_session = make_group_session(2, seed=4312, guide_mode="off")
+        dash_player, dash_target = dash_session.state.fighters
+        dash_target.pos = (dash_player.pos[0]+4, dash_player.pos[1])
+        dash_ui = DuelUI(dash_session, rounds=True)
+        dash_display = GameDuelDisplay()
+        dash_display.rounds = True
+        dash_ui.activate("Dash+Light")
+        assert dash_ui.panel == "zones", (dash_ui.panel, dash_ui.message)
+        assert dash_ui.target_id == dash_target.id
+        dash_rows = dash_ui.sidebar_rows(dash_ui.model())
+        assert not any("CHOOSE DIRECTION" in row or "1/2/3 changes" in row for row in dash_rows)
+        dash_display.draw(renderer, dash_ui.model(), dash_rows, present=False)
+        Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(
+            args.output / "group-dash-light-auto-target.png")
+
+        multi_session = make_group_session(5, seed=4313, guide_mode="off")
+        multi_player = multi_session.state.fighter("player")
+        multi_session.state.fighter("raider_1").pos = (multi_player.pos[0]+4, multi_player.pos[1]-1)
+        multi_session.state.fighter("raider_2").pos = (multi_player.pos[0]+4, multi_player.pos[1]+1)
+        multi_session.state.fighter("raider_3").pos = (9, 1)
+        multi_session.state.fighter("raider_4").pos = (9, 5)
+        multi_ui = DuelUI(multi_session, rounds=True)
+        multi_display = GameDuelDisplay()
+        multi_display.rounds = True
+        multi_ui.activate("Dash+Light")
+        assert multi_ui.panel == "targets", (multi_ui.panel, multi_ui.message)
+        assert set(multi_ui._dash_light_choices) == {"raider_1", "raider_2"}
+        multi_rows = multi_ui.sidebar_rows(multi_ui.model())
+        target_controls = context_labels(multi_rows)
+        assert target_controls[:2] == ["Target 1", "Target 2"]
+        multi_display.draw(renderer, multi_ui.model(), multi_rows, present=False)
+        Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(
+            args.output / "group-dash-light-multiple-targets.png")
+
         tactical_session = make_group_session(5, seed=4311, guide_mode="off")
         tactical_ui = DuelUI(tactical_session, rounds=True)
         tactical_display = GameDuelDisplay()
@@ -190,6 +233,18 @@ def main():
             tcod.event.wait, GameDuelDisplay.draw = original_wait, original_draw
         restored = DuelSession.from_data(world.duel_journal)
         assert len(restored.state.fighters) == 5 and len(restored.inputs) == 1
+        latest_ui = DuelUI(restored, rounds=True)
+        latest_display = GameDuelDisplay()
+        latest_display.rounds = True
+        latest_display.round_result = latest_ui.round_result
+        latest_display.round_summary = latest_ui.round_summary
+        latest_display.round_assessment = latest_ui.round_assessment
+        latest_display.exchange_number = len(restored.inputs)
+        assert latest_ui.round_assessment is not None
+        latest_model = latest_ui.model()
+        latest_display.draw(renderer, latest_model, latest_ui.sidebar_rows(latest_model), present=False)
+        Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(
+            args.output / "group-latest-exchange-score.png")
         native_starts = [event for event in restored.state.event_log if event.type == EventType.ACTION_START]
         assert sum(event.actor == restored.player.id for event in native_starts) == 1
         assert world_before == (world.game_map, world.player.x, world.player.y, world.clock.total_ticks)
@@ -204,10 +259,11 @@ def main():
                                               "controls": tactical_labels,
                                               "locked_action": locked_option.label,
                                               "locked_reason_visible": bool(locked_option.details)},
-                        "live_native_pause_resume": {"actors": len(restored.state.fighters),
-                                                     "player_commits": len(restored.inputs),
-                                                     "native_frames": live["frames"],
-                                                     "ship_world_unchanged": True}}, indent=2),
+                         "live_native_pause_resume": {"actors": len(restored.state.fighters),
+                                                      "player_commits": len(restored.inputs),
+                                                      "native_frames": live["frames"],
+                                                      "ship_world_unchanged": True,
+                                                      "damage_trade": latest_ui.round_assessment}}, indent=2),
             encoding="utf-8")
         print(f"Group native audit passed: {len(measurements)} size/count captures plus target-lock walkthrough.")
     finally:

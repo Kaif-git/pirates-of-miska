@@ -58,6 +58,7 @@ class ActionKind(str, Enum):
 class EventType(str, Enum):
     ACTION_START = "ACTION_START"
     ACTION_END = "ACTION_END"
+    ATTACK_LOCK = "ATTACK_LOCK"
     MOVE = "MOVE"
     WHIFF = "WHIFF"
     HIT = "HIT"
@@ -102,14 +103,19 @@ class Wound:
     severity: Severity
     bleed_per_turn: float
     bandaged: bool = False
+    initial_blood_loss: float = 0
     depth: str | None = None
     structure: str | None = None
     damage_type: str = "CUTTING"
+    site: str | None = None
+    side: str | None = None
 
     def __post_init__(self):
         self.zone, self.severity = Zone(self.zone), Severity(self.severity)
         if not math.isfinite(self.bleed_per_turn) or self.bleed_per_turn < 0:
             raise ValueError("Bleeding must be finite and nonnegative")
+        if not math.isfinite(self.initial_blood_loss) or self.initial_blood_loss < 0:
+            raise ValueError("Initial blood loss must be finite and nonnegative")
         self.damage_type = str(self.damage_type).upper()
         if self.damage_type not in {"CUTTING", "PIERCING", "BLUNT"}:
             raise ValueError("Unknown wound damage type")
@@ -123,6 +129,12 @@ class Wound:
             self.structure = wound_structure(self.zone, self.severity, self.damage_type)
         if not isinstance(self.depth, str) or not self.depth or not isinstance(self.structure, str) or not self.structure:
             raise ValueError("Wound depth and structure must be nonempty labels")
+        if self.site is None:
+            self.site = self.zone.value
+        if not isinstance(self.site, str) or not self.site:
+            raise ValueError("Wound site must be a nonempty label")
+        if self.side not in {None, "LEFT", "RIGHT", "CENTER"}:
+            raise ValueError("Wound side must be LEFT, RIGHT, CENTER or unspecified")
 
 
 def wound_structure(zone, severity, damage_type="CUTTING"):
@@ -240,6 +252,7 @@ class Equipment:
 class PermanentInjuries:
     hand_severed: bool = False
     eyes_damaged: int = 0
+    severed_hands: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not isinstance(self.hand_severed, bool):
@@ -247,6 +260,10 @@ class PermanentInjuries:
         if (isinstance(self.eyes_damaged, bool) or not isinstance(self.eyes_damaged, int)
                 or not 0 <= self.eyes_damaged <= 2):
             raise ValueError("Permanent eye injury count must be 0, 1 or 2")
+        if (not isinstance(self.severed_hands, list)
+                or any(side not in {"LEFT", "RIGHT"} for side in self.severed_hands)
+                or len(self.severed_hands) != len(set(self.severed_hands))):
+            raise ValueError("Severed hand sides must be a unique list of LEFT/RIGHT")
 
 
 @dataclass
@@ -330,6 +347,23 @@ class ActiveAction:
     released: bool = False
     item_id: str | None = None
     target_id: str | None = None
+    attack_bearing: tuple[int, int] | None = None
+    bearing_lock_tick: int | None = None
+    contextual_defense: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.contextual_defense, bool):
+            raise ValueError("Contextual defense flag must be boolean")
+        if self.attack_bearing is not None and (
+                tuple(self.attack_bearing) not in {
+                    (0, -1), (1, -1), (1, 0), (1, 1),
+                    (0, 1), (-1, 1), (-1, 0), (-1, -1)}):
+            raise ValueError("Invalid locked attack bearing")
+        if self.bearing_lock_tick is not None and (
+                isinstance(self.bearing_lock_tick, bool)
+                or not isinstance(self.bearing_lock_tick, int)
+                or self.bearing_lock_tick < self.start_tick):
+            raise ValueError("Invalid attack bearing lock tick")
 
     def phase_at(self, tick):
         for phase in self.phases:
@@ -364,6 +398,7 @@ class Fighter:
     statuses: list[Status] = field(default_factory=list)
     equipment: Equipment = field(default_factory=Equipment)
     permanent_injuries: PermanentInjuries = field(default_factory=PermanentInjuries)
+    weapon_hand: str = "RIGHT"
     personality: Personality | None = None
     notebook: dict | None = None
     prefight: PreFightState | None = None
@@ -463,6 +498,10 @@ class Fighter:
             raise ValueError("Position must contain two integers")
         if isinstance(self.permanent_injuries, dict):
             self.permanent_injuries = PermanentInjuries(**self.permanent_injuries)
+        if self.weapon_hand not in {"LEFT", "RIGHT"}:
+            raise ValueError("Weapon hand must be LEFT or RIGHT")
+        if self.weapon_hand in self.permanent_injuries.severed_hands:
+            self.permanent_injuries.hand_severed = True
         if self.equipment.weapon is not None and not self.equipment.weapon.item_id:
             self.equipment.weapon.item_id = f"{self.id}:weapon"
         if self.last_fast_direction is not None:
@@ -592,6 +631,8 @@ def _fighter_from_data(data):
         action["kind"] = ActionKind(action["kind"])
         action["aim"] = Zone(action["aim"]) if action["aim"] else None
         action["direction"] = tuple(action["direction"]) if action["direction"] else None
+        action["attack_bearing"] = (tuple(action["attack_bearing"])
+                                    if action.get("attack_bearing") else None)
         action["phases"] = [Phase(**item) for item in action["phases"]]
         action["locked_stats"] = EffStats(**action["locked_stats"])
         action["path"] = [(tick, tuple(pos)) for tick, pos in action["path"]]
@@ -883,8 +924,16 @@ class CombatState:
     def from_data(cls, data):
         values = deepcopy(data)
         version = values.pop("schema_version")
-        if version in {1, 2, 3, 4, 5, 6}:
+        if version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
             values["config"] = upgrade_config(values["config"])
+            for fighter in values["fighters"]:
+                wound_rows = fighter.get("wounds", [])
+                prefight = fighter.get("prefight") or {}
+                wound_rows += prefight.get("injuries", [])
+                for wound in wound_rows:
+                    if wound.get("severity") == Severity.GRAZE.value:
+                        wound["bleed_per_turn"] = 0
+                        wound.setdefault("initial_blood_loss", 0)
         elif version != load_config()["schema_version"]:
             raise ValueError("Unsupported combat snapshot version")
         elif values["config"].get("schema_version") != version:
@@ -907,4 +956,16 @@ class CombatState:
         if values["walkable"] is not None:
             values["walkable"] = {tuple(pos) for pos in values["walkable"]}
         values["exits"] = {tuple(pos) for pos in values["exits"]}
-        return cls(**values)
+        state = cls(**values)
+        # Older active attacks had only a selected target and could home until
+        # impact. Pin their current observed bearing on restore so resumed saves
+        # remain deterministic under the new geometry contract.
+        from .geometry import bearing_from
+        for fighter in state.fighters:
+            action = fighter.action
+            if action and action.target_id and action.bearing_lock_tick is None:
+                target = state.primary_opponent(fighter.id, action.target_id, active_only=False)
+                if target is not None:
+                    action.attack_bearing = bearing_from(fighter.pos, target.pos)
+                    action.bearing_lock_tick = state.tick
+        return state

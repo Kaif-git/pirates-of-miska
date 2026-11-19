@@ -402,7 +402,8 @@ class DuelSession:
                                   pos=replacement.player.pos, prefight=postfight_state(self.state, previous.id),
                                   equipment=deepcopy(previous.equipment), xp=previous.xp,
                                   bandages=previous.bandages, food=previous.food, water=previous.water,
-                                  team_id=previous.team_id)
+                                   weapon_hand=previous.weapon_hand,
+                                   team_id=previous.team_id)
             new_player.statuses = [deepcopy(status) for status in previous.statuses if status.active(self.state.tick)]
             for status in new_player.statuses:
                 if status.until_tick is not None:
@@ -448,7 +449,7 @@ class DuelSession:
     def from_data(cls, data):
         data = deepcopy(data)
         current_version = load_config()["schema_version"]
-        if data.get("version") in {1, 2, 3, 4, 5, 6}:
+        if data.get("version") in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
             data["version"] = current_version
             data["notebook"]["version"] = current_version
         elif data.get("version") != current_version:

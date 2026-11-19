@@ -12,6 +12,9 @@ from sim.config import load_config, validate_config
 from sim.core.clock import EventScheduler, SimClock
 from sim.core.events import EventLog
 from sim.core.ids import IdAllocator
+from sim.core.ownership import (
+    OWNER_KINDS, assign_ship_title, crew_can_command, ship_is_commandable,
+)
 from sim.core.rng import RandomStreams
 from sim.systems.geography import WorldMap
 from sim.systems.economy import EconomySystem
@@ -29,7 +32,7 @@ from sim.systems.battles import BattleSystem
 from sim.systems.lod import LODSystem
 
 
-SNAPSHOT_SCHEMA_VERSION = 17
+SNAPSHOT_SCHEMA_VERSION = 19
 
 
 class WorldState:
@@ -151,6 +154,7 @@ class WorldState:
         world.environment.seed_world(world)
         world.decisions.set_event_cursor(len(world.event_log))
         world.lod.seed_world(world)
+        world._migrate_ship_authority_fields()
         return world
 
     def schedule_event(self, tick: int, event_type: str, *, priority: int = 0,
@@ -183,6 +187,175 @@ class WorldState:
 
     def create_merchant(self, name: str, island_id: str, **attributes: Any) -> tuple[str, str]:
         return self.economy.create_merchant(self, name, island_id, **attributes)
+
+    def assign_ship_title(self, ship_id: str, *, owner_kind: str, owner_id: str,
+                          controller_crew_id: str | None, event_id: str) -> None:
+        """Set current legal title and command authority after a causal event."""
+        ship = self.entities.get(ship_id)
+        if not ship or ship.get("kind") != "ship":
+            raise ValueError(f"Cannot assign title to an inactive ship: {ship_id}")
+        if owner_kind == "crew" and owner_id not in self.crew_ships.crews:
+            raise ValueError("Ship's legal owner crew is not active")
+        if owner_kind == "merchant" and owner_id not in self.economy.merchants:
+            raise ValueError("Ship's legal owner merchant is not active")
+        if (owner_kind == "merchant"
+                and self.economy.merchants[owner_id].get("ship_id") != ship_id):
+            raise ValueError("Ship's legal owner merchant does not reference this vessel")
+        if owner_kind not in OWNER_KINDS:
+            raise ValueError("Unsupported ship legal owner kind")
+        if controller_crew_id is not None and not crew_can_command(self, controller_crew_id):
+            raise ValueError("Ship controller crew is not active and command-capable")
+        event = self.event_log.get(event_id)
+        if event.type not in {"SHIP_CREATED", "SHIP_ACQUIRED", "SHIP_CAPTURED", "CREW_FOUNDED"}:
+            raise ValueError("Ship title changes require an acquisition, capture or founding event")
+        previous_event_id = ship.get("ownership_event_id")
+        initial_title_assignment = (
+            previous_event_id == event.id and ship.get("legal_owner") is None
+            and ship.get("controller_crew_id") is None and event.type == "SHIP_CREATED")
+        if (previous_event_id is not None and event.id <= previous_event_id
+                and not initial_title_assignment):
+            raise ValueError("Ship title transfer cannot replay or precede its current ownership event")
+        if (event.type == "SHIP_CREATED" and previous_event_id is not None
+                and not initial_title_assignment):
+            raise ValueError("A later ship creation event cannot overwrite existing title")
+        if not any(target.get("entity_id") == ship_id for target in event.targets):
+            raise ValueError("Ship title event does not target this vessel")
+        if event.data.get("method") in {"capture", "recapture"}:
+            if "previous_owner" not in event.data:
+                raise ValueError("Capture title transfer must record its expected previous owner")
+            if event.data.get("previous_owner") != ship.get("legal_owner"):
+                raise ValueError("Capture title transfer is stale against the current legal owner")
+            if (event.data.get("previous_controller_crew_id")
+                    != ship.get("controller_crew_id")):
+                raise ValueError("Capture title transfer is stale against the current controller")
+        if (event.type == "CREW_FOUNDED"
+                and (event.data.get("ship_id") != ship_id
+                     or event.data.get("controller_crew_id") != controller_crew_id)):
+            raise ValueError("Crew founding event does not establish this ship controller")
+        expected_owner_kind = event.data.get("legal_owner_kind")
+        expected_owner_id = event.data.get("legal_owner_id")
+        if (expected_owner_kind is not None
+                and (expected_owner_kind != owner_kind or expected_owner_id != owner_id)):
+            raise ValueError("Ship title does not match its acquisition event")
+        expected_controller = event.data.get("controller_crew_id")
+        if (expected_controller is not None and expected_controller != controller_crew_id):
+            raise ValueError("Ship controller does not match its acquisition event")
+        assign_ship_title(ship, owner_kind=owner_kind, owner_id=owner_id,
+                          controller_crew_id=controller_crew_id, event_id=event_id)
+
+    def ship_is_commandable(self, ship_id: str) -> bool:
+        return ship_is_commandable(self, ship_id)
+
+    def _migrate_ship_authority_fields(self) -> None:
+        """Backfill schema-17 ship owner/controller links from legacy relations/events."""
+        merchant_by_ship = {merchant["ship_id"]: merchant_id
+                            for merchant_id, merchant in self.economy.merchants.items()}
+        event_candidates: dict[str, list[Any]] = {}
+        for event in self.event_log:
+            if event.type not in {"SHIP_CREATED", "CREW_FOUNDED", "SHIP_ACQUIRED", "SHIP_CAPTURED"}:
+                continue
+            for target in event.targets:
+                role = target.get("role")
+                if role in {"created_vessel", "ship", "acquired_ship", "captured_ship"}:
+                    event_candidates.setdefault(target["entity_id"], []).append(event)
+        for ship_id, ship in (*self.entities.items(), *self.archive.items()):
+            if ship.get("kind") != "ship":
+                continue
+            owner_present = "legal_owner" in ship
+            controller_present = "controller_crew_id" in ship
+            ownership_event_present = "ownership_event_id" in ship
+            owner = ship.get("legal_owner")
+            controller = ship.get("controller_crew_id")
+            ownership_event_id = ship.get("ownership_event_id")
+            if not owner_present:
+                candidates = event_candidates.get(ship_id, [])
+                transfer_event = next((row for row in reversed(candidates)
+                                       if row.type in {"SHIP_ACQUIRED", "SHIP_CAPTURED"}), None)
+                transfer_owner = (transfer_event.data.get("new_owner")
+                                  if transfer_event and transfer_event.type == "SHIP_CAPTURED"
+                                  else None)
+                if not isinstance(transfer_owner, dict) and transfer_event:
+                    owner_kind = transfer_event.data.get("legal_owner_kind")
+                    owner_id = transfer_event.data.get("legal_owner_id")
+                    if owner_kind and owner_id:
+                        transfer_owner = {"kind": owner_kind, "id": owner_id}
+                if isinstance(transfer_owner, dict):
+                    owner = transfer_owner
+                else:
+                    captured_by = ship.get("captured_by_crew_id")
+                    crew_id = ship.get("crew_id")
+                    merchant_id = merchant_by_ship.get(ship_id)
+                    if captured_by in self.crew_ships.crews:
+                        owner = {"kind": "crew", "id": captured_by}
+                    elif crew_id in self.crew_ships.crews and not merchant_id:
+                        owner = {"kind": "crew", "id": crew_id}
+                    elif merchant_id:
+                        owner = {"kind": "merchant", "id": merchant_id}
+                    else:
+                        owner = None
+            if not controller_present:
+                candidates = event_candidates.get(ship_id, [])
+                transfer_event = next((row for row in reversed(candidates)
+                                       if row.type in {"SHIP_ACQUIRED", "SHIP_CAPTURED"}), None)
+                event_controller = (transfer_event.data.get("controller_crew_id")
+                                    if transfer_event and transfer_event.type == "SHIP_ACQUIRED"
+                                    else transfer_event.data.get("new_controller_crew_id")
+                                    if transfer_event else None)
+                captured_by = ship.get("captured_by_crew_id")
+                crew_id = ship.get("crew_id")
+                controller = (event_controller if event_controller in self.crew_ships.crews
+                              else captured_by if captured_by in self.crew_ships.crews
+                              else crew_id if crew_id in self.crew_ships.crews else None)
+            if not ownership_event_present:
+                candidates = event_candidates.get(ship_id, [])
+                event = next((row for row in reversed(candidates)
+                              if row.type in {"SHIP_CAPTURED", "SHIP_ACQUIRED"}), None)
+                event = event or next((row for row in reversed(candidates)
+                                       if row.type == "CREW_FOUNDED"), None)
+                event = event or next((row for row in reversed(candidates)
+                                       if row.type == "SHIP_CREATED"), None)
+                ownership_event_id = event.id if event else ship.get("created_event_id")
+            ship["legal_owner"] = owner
+            ship["controller_crew_id"] = controller
+            if ownership_event_id:
+                ship["ownership_event_id"] = ownership_event_id
+            ship["captured_by_crew_id"] = (
+                controller if controller is not None
+                and controller != ship.get("crew_id") else None)
+
+    def validate_ship_authority(self) -> None:
+        for ship_id, ship in self.entities.items():
+            if ship.get("kind") != "ship":
+                continue
+            owner = ship.get("legal_owner")
+            if owner is None:
+                if ship.get("controller_crew_id") is not None:
+                    raise ValueError(f"Unowned ship cannot have an operational controller: {ship_id}")
+            elif (not isinstance(owner, dict) or set(owner) != {"kind", "id"}
+                  or owner.get("kind") not in OWNER_KINDS
+                  or not isinstance(owner.get("id"), str) or not owner["id"]):
+                raise ValueError(f"Active ship has no unique legal owner: {ship_id}")
+            if (owner is not None and
+                    ((owner["kind"] == "crew" and owner["id"] not in self.crew_ships.crews)
+                     or (owner["kind"] == "merchant" and owner["id"] not in self.economy.merchants))):
+                raise ValueError(f"Active ship has an invalid legal owner: {ship_id}")
+            if (owner is not None and owner["kind"] == "merchant"
+                    and self.economy.merchants[owner["id"]].get("ship_id") != ship_id):
+                raise ValueError(f"Merchant title does not reference its unique vessel: {ship_id}")
+            controller = ship.get("controller_crew_id")
+            if controller is not None and controller not in self.crew_ships.crews:
+                raise ValueError(f"Active ship has an invalid controller crew: {ship_id}")
+            if ship.get("captured_by_crew_id") != (
+                    controller if controller is not None and controller != ship.get("crew_id")
+                    else None):
+                raise ValueError(f"Legacy capture marker disagrees with ship controller: {ship_id}")
+            event_id = ship.get("ownership_event_id")
+            try:
+                event = self.event_log.get(event_id)
+            except (KeyError, TypeError) as exc:
+                raise ValueError(f"Active ship has no ownership event: {ship_id}") from exc
+            if event.type not in {"SHIP_CREATED", "SHIP_ACQUIRED", "SHIP_CAPTURED", "CREW_FOUNDED"}:
+                raise ValueError(f"Ship owner references an invalid event: {ship_id}")
 
     def trade(self, merchant_id: str, island_id: str, goods_id: str, side: str,
               quantity_milli: int, *, caused_by: str) -> dict[str, Any]:
@@ -329,6 +502,7 @@ class WorldState:
     def to_snapshot(self) -> dict[str, Any]:
         self.event_log.validate_causality()
         self.validate_locations()
+        self.validate_ship_authority()
         self.economy.validate_world(self)
         self.characters.validate_world(self)
         self.crew_ships.validate_world(self)
@@ -386,34 +560,67 @@ class WorldState:
         if not isinstance(snapshot, dict) or set(snapshot) != required:
             raise ValueError("Invalid world snapshot fields")
         schema_version = snapshot["snapshot_schema_version"]
-        if schema_version not in {SNAPSHOT_SCHEMA_VERSION - 1, SNAPSHOT_SCHEMA_VERSION}:
+        if schema_version not in {16, 17, 18, SNAPSHOT_SCHEMA_VERSION}:
             raise ValueError("Unsupported world snapshot schema version")
-        if schema_version == SNAPSHOT_SCHEMA_VERSION - 1:
-            # Schema 17 adds event.class without changing simulation state.
-            # Upgrade schema-16 event rows in memory so existing saves resume.
+        if schema_version in {16, 17, 18}:
             snapshot = dict(snapshot)
             snapshot["snapshot_schema_version"] = SNAPSHOT_SCHEMA_VERSION
             snapshot["config"] = json.loads(json.dumps(snapshot["config"]))
-            defaults = load_config()["event_rules"].get("class_by_type", {})
-            rules = snapshot["config"].setdefault("event_rules", {})
-            classes = rules.setdefault("class_by_type", defaults)
+            if schema_version == 16:
+                # Schema 17 adds event.class without changing simulation state.
+                defaults = load_config()["event_rules"].get("class_by_type", {})
+                rules = snapshot["config"].setdefault("event_rules", {})
+                classes = rules.setdefault("class_by_type", defaults)
 
-            def migrate_event_record(record):
-                if not isinstance(record, dict) or "class" in record:
-                    return record
-                data = record.get("data")
-                data = data if isinstance(data, dict) else {}
-                event_class = classes.get(record.get("type"), "narrative")
-                if (record.get("type") == "NATURAL_EVENT"
-                        and data.get("kind") == "WEATHER_CHANGED"):
-                    event_class = "routine"
-                elif (record.get("type") == "AGENT_ACTION"
-                      and data.get("action_id") == "hunt_rival"):
-                    event_class = "narrative"
-                return {**record, "class": event_class}
+                def migrate_event_record(record):
+                    if not isinstance(record, dict) or "class" in record:
+                        return record
+                    data = record.get("data")
+                    data = data if isinstance(data, dict) else {}
+                    event_class = classes.get(record.get("type"), "narrative")
+                    if (record.get("type") == "NATURAL_EVENT"
+                            and data.get("kind") == "WEATHER_CHANGED"):
+                        event_class = "routine"
+                    elif (record.get("type") == "AGENT_ACTION"
+                          and data.get("action_id") == "hunt_rival"):
+                        event_class = "narrative"
+                    return {**record, "class": event_class}
 
-            snapshot["events"] = [migrate_event_record(record)
-                                  for record in snapshot["events"]]
+                snapshot["events"] = [migrate_event_record(record)
+                                      for record in snapshot["events"]]
+            # Schema 19 records coalition crew membership independently from the
+            # faction's stable ID. Legacy singleton factions retain their exact
+            # historical founding event and are explicitly recognized by its
+            # lack of coalition metadata during validation.
+            politics = json.loads(json.dumps(snapshot["politics"]))
+            crew_ids = set(snapshot["crew_ships"].get("crews", {}))
+            for registry in ("factions", "archived_factions"):
+                for faction_id, faction in politics.get(registry, {}).items():
+                    founding = next((record for record in snapshot["events"]
+                                     if record.get("id") == faction.get("founded_event_id")), {})
+                    founding_data = founding.get("data", {})
+                    default_members = founding_data.get("member_crew_ids")
+                    if default_members is None:
+                        default_members = ([faction_id] if faction_id in crew_ids
+                                           and faction.get("kind") != "marine" else [])
+                    faction.setdefault("member_crew_ids", list(default_members))
+                    founder_id = founding_data.get("founder_id")
+                    if founder_id is None:
+                        founder_id = next((actor.get("entity_id")
+                                           for actor in founding.get("actors", [])
+                                           if actor.get("role") in {
+                                               "faction_leader", "marine_commander"}),
+                                          faction.get("leader_id"))
+                    faction.setdefault("founder_id", founder_id)
+                    faction.setdefault("anchorage_island_id",
+                                       founding_data.get("anchorage_island_id",
+                                                         founding_data.get("home_island")))
+                    faction.setdefault("purpose", founding_data.get(
+                        "purpose", "legacy_snapshot_faction"))
+            snapshot["politics"] = politics
+            for entity in snapshot["entities"].values():
+                if isinstance(entity, dict) and entity.get("kind") == "ship":
+                    entity.pop("owner_faction", None)
         seed = snapshot["seed"]
         if type(seed) not in (int, str):
             raise ValueError("Invalid world snapshot seed")
@@ -486,6 +693,7 @@ class WorldState:
             battles=battles,
             lod=lod,
         )
+        world._migrate_ship_authority_fields()
         ticks_per_day = config["time"]["hours_per_day"] // config["time"]["hours_per_tick"]
         if world.weather.last_updated_day != world.clock.tick // ticks_per_day:
             raise ValueError("Weather snapshot day does not match world clock")
@@ -511,6 +719,7 @@ class WorldState:
             raise ValueError("Decision/belief snapshot day does not match world clock")
         world.economy.validate_state()
         world.economy.validate_world(world)
+        world.validate_ship_authority()
         world.characters.validate_world(world)
         world.crew_ships.validate_world(world)
         world.decisions.validate_world(world)

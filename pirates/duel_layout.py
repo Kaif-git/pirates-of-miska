@@ -17,7 +17,9 @@ DIM = (160, 151, 143)
 GOLD = (232, 207, 122)
 GREEN = (124, 196, 147)
 RED = (255, 154, 122)
-PRIMARY_LABELS = ["Light", "Heavy", "Guard", "Dash", "Move", "Wait", "Tactics", "More", "Sheet", "Help"]
+PRIMARY_LABELS = ["Light", "Heavy", "Thrust", "Defend", "Dash", "Move", "Run",
+                  "Dash+Light", "Feint", "Shove", "Disarm", "Disengage", "Wait",
+                  "Bandage", "More", "Sheet", "Help"]
 
 
 def upload_layer(display, renderer, image, slot):
@@ -113,7 +115,19 @@ def draw_feedback(display, renderer, model, arena, screens):
             display.popup_started[key] = (now, popup)
     display.popup_started = {key: value for key, value in display.popup_started.items() if now-value[0] < 1.35}
     lanes = {}
-    for started, popup in display.popup_started.values():
+    priority = lambda popup: (100 if popup.text.startswith(("DEATH", "FALLEN", "SEVERED")) else
+                              80 if "DEEP" in popup.text or "impact" in popup.text.lower() else
+                              70 if popup.text in {"Flinched", "Recoil!", "Bleeding wound"} else
+                              50 if popup.text.startswith("Stability") else 10)
+    selected_popups = []
+    per_actor = {}
+    for started, popup in sorted(display.popup_started.values(),
+                                 key=lambda row: (priority(row[1]), row[0]), reverse=True):
+        if per_actor.get(popup.pos, 0) >= 2:
+            continue
+        selected_popups.append((started, popup))
+        per_actor[popup.pos] = per_actor.get(popup.pos, 0)+1
+    for started, popup in selected_popups:
         age = now-started
         mx, my, mtw, mth = display.map_rect
         px, py = mx-ax+popup.pos[0]*mtw, my-ay+popup.pos[1]*mth
@@ -133,7 +147,8 @@ def draw_feedback(display, renderer, model, arena, screens):
         draw.rounded_rectangle((px, py, px+pw, py+(23 if severe else 20)), radius=4,
                                fill=(24, 12, 16, 235), outline=(*color, 255), width=2 if severe else 1)
         paint_text(display, image, (px+6, py+2), popup.text, popup_font, color)
-        if age < .2 and severe:
+        reduced_motion = bool(dict(model.presentation).get("reduced_motion", False))
+        if age < .2 and severe and not reduced_motion:
             draw.rounded_rectangle((1, 1, aw-2, ah-2), radius=8, outline=(*RED, 255), width=2)
     sdl = renderer.context.sdl_renderer
     texture = upload_layer(display, renderer, image, "feedback")
@@ -163,9 +178,9 @@ def context_labels(rows, model=None):
     if any("[Tactics]" in row for row in rows):
         return ["Tactics", "Run", "Dash+Light", "Bandage", "Eat", "Drink",
                 "Pickup", "Notebook", "Log", "Guide", "Strategy", "Timeline", "Back"]
-    if any("[Feint]" in row for row in rows):
+    if any(row.startswith("TACTICAL ACTIONS") for row in rows):
         return ["Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline", "Back"]
-    if any("[Run][Dash+Light]" in row for row in rows):
+    if any(row.strip() == "[Tactics][Run][Dash+Light]" for row in rows):
         return ["Run", "Dash+Light", "Bandage", "Eat", "Drink", "Pickup", "Notebook", "Log", "Guide", "Strategy", "Timeline", "Back"]
     if any("DISENGAGE — CHOOSE DIRECTION" in row for row in rows):
         return ["1 tile", "Back", "NW", "N", "NE", "W", "E", "SW", "S", "SE"]
@@ -225,8 +240,9 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
     display.reading_modal = reading
     display.modal_rect = (24, 76, width-48, layout["controls"][1]-86) if reading else None
     cache_key = (id(model), width, height, rows, display.hover_action, display.scroll,
-                 getattr(display, "message", ""), getattr(display, "round_result", ()),
-                 getattr(display, "round_summary", ()), getattr(display, "stat_enemy", False),
+                  getattr(display, "message", ""), getattr(display, "round_result", ()),
+                  getattr(display, "round_summary", ()),
+                  getattr(display, "stat_enemy", False),
                  getattr(display, "coach_enabled", False),
                  getattr(display, "selected_distance", ""), display.animating,
                  getattr(display, "exchange_number", 1), getattr(display, "rounds", True), id(renderer.context))
@@ -258,14 +274,19 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
     def lines(rect, content, *, scroll=False):
         x, y, w, h = rect
         columns = max(8, int(w/small.getlength("M")))
-        wrapped = [part for row in content for part in textwrap.wrap(str(row), columns) or [""]]
+        wrapped = []
+        for row in content:
+            color = TEXT
+            if isinstance(row, tuple) and len(row) == 2 and isinstance(row[1], tuple):
+                row, color = row
+            wrapped.extend((part, color) for part in textwrap.wrap(str(row), columns) or [""])
         page = max(1, h//17)
         if scroll:
             display.max_scroll = max(0, len(wrapped)-page)
             display.scroll = min(max(0, display.scroll), display.max_scroll)
         start = display.scroll if scroll else 0
-        for index, value in enumerate(wrapped[start:start+page]):
-            text(x, y+index*17, value, face=small)
+        for index, (value, color) in enumerate(wrapped[start:start+page]):
+            text(x, y+index*17, value, color, small)
 
     def meter(x, y, w, label, value, maximum, color):
         fraction = min(1, max(0, value/max(1, maximum)))
@@ -383,18 +404,34 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
                        option_details.get("Rise", "Rise is timed and exposed."),
                        option_details.get("Crawl", "Crawl is slow and keeps you grounded."),
                        *model.log[-3:]]
+        elif labels and labels[0].startswith("Target ") and model.group_combat:
+            chooser_index = next((index for index, row in enumerate(rows)
+                                  if row == "Choose a visible hostile:"), len(rows))
+            choices = [row for row in rows[chooser_index+1:]
+                       if row.startswith(("[Target ", "[Prev Targets]", "[Next Targets]"))]
+            dash_light = any("Dash+Light target area" in row for row in rows)
+            content = (["DASH + LIGHT — CHOOSE TARGET",
+                        "Only hostiles with a clear approach ending in weapon reach are listed.",
+                        "Direction and distance are chosen automatically."] if dash_light else
+                       ["CHOOSE VISIBLE HOSTILE", "Select one target for this action."])
+            content.extend(choices)
         else:
             content = [row for row in rows if not row.startswith("PgUp/PgDn")]
         if labels[0] in {"Head", "Eye"}:
-            content = [rows[0], f"Accuracy varies ±{dict(model.combat_rules).get('jitter', 0):g}; amber targets may drift. Final choice commits." if round_mode else "Choose a target to preview.",
+            content = [rows[0],
+                       *(rows[1:2] if rows[0].startswith("DASH + LIGHT") else []),
+                       f"Accuracy varies ±{dict(model.combat_rules).get('jitter', 0):g}; amber targets may drift. Final choice commits." if round_mode else "Choose a target to preview.",
                        *(f"{z.zone.value.title()}: Accuracy {z.accuracy:.1f} / {z.difficulty:g} needed. "
                          + dict(model.target_effects).get(z.zone.value, '') for z in model.zones),
                        "Hand needs exposure at the strike. Guard can block head/torso/arm; no outcome is guaranteed."]
     else:
         result = getattr(display, "round_summary", ())
         message = getattr(display, "message", "Choose an action below.")
-        content = ["LATEST EXCHANGE", *result] if result else ["READY", message, *(model.log or ("No strikes exchanged yet.",))]
-        if ended:
+        if result:
+            content = ["LATEST EXCHANGE", *result]
+        else:
+            content = ["READY", message, *(model.log or ("No strikes exchanged yet.",))]
+        if ended and not result:
             content = [model.player_state, model.instructions, *(result or model.log)]
         if getattr(display, 'coach_enabled', False) and coach_hint and not result:
             content = ["STRATEGY (conditional)", coach_hint.headline, *coach_hint.advantages[:1], *coach_hint.cautions[:1]]

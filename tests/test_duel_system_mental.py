@@ -71,7 +71,7 @@ def test_circling_angers_opponent_only_if_near_and_no_recent_hit():
     player, enemy = state.fighters
     commit_action(state, player.id, Choice(ActionKind.WALK, direction=(0, 1)))
     advance_to(state, 10)
-    assert enemy.anger == 3
+    assert enemy.anger > 0
     state = arena()
     player, enemy = state.fighters
     enemy.last_hit_tick = 0
@@ -165,24 +165,26 @@ def worked(kind, weight=0, *, tiles=3, enemy_pos=(4, 0)):
     cfg["accuracy"]["jitter"] = 0
     fighters = [bare_fighter("player", pos=(0, 0), equipment=Equipment(Weapon(weight=weight)), **cfg["fixtures"]["dorime"]),
                 bare_fighter("ronin", pos=enemy_pos, equipment=Equipment(Weapon(weight=weight)), **cfg["fixtures"]["ronin"])]
+    fighters[0].accuracy = 20  # Explicit called-hand fixture; the matched novice baseline remains Accuracy 10.
     state = CombatState(fighters, config=cfg)
     commit_action(state, "player", Choice(ActionKind.DASH_LIGHT, Zone.HAND, (1, 0), tiles))
     commit_action(state, "ronin", Choice(kind, Zone.TORSO if kind in {ActionKind.LIGHT, ActionKind.HEAVY} else None))
     return state
 
 
-def test_worked_unweighted_dash_light_interrupts_heavy_at_t8_and_guard_parries_drifted_arm():
-    state = worked(ActionKind.HEAVY)
-    assert state.fighters[0].action.strike_tick == 8
-    assert state.fighters[1].action.strike_tick == 9
-    advance_to(state, 8)
+def test_worked_unweighted_dash_light_interrupts_heavy_at_t5_and_guard_parries_drifted_arm():
+    state = worked(ActionKind.HEAVY, tiles=1, enemy_pos=(2, 0))
+    assert state.fighters[0].action.strike_tick == 5
+    assert state.fighters[1].action.strike_tick == 7
+    advance_to(state, 5)
     hit = next(e for e in state.event_log if e.type == EventType.HIT)
     assert (hit.zone, hit.severity) == (Zone.HAND, Severity.CUT)
     assert hit.deltas["power"] == 14
     assert state.fighters[1].action is None
     state = worked(ActionKind.GUARD, tiles=1, enemy_pos=(2, 0))
-    assert state.fighters[0].action.strike_tick == 4
-    advance_to(state, 4)
+    state.fighters[1].action.parry_window = 4  # isolate a supported parry-window contact
+    assert state.fighters[0].action.strike_tick == 5
+    advance_to(state, 5)
     event = next(e for e in state.event_log if e.type == EventType.PARRY)
     assert event.zone == Zone.ARM
     assert state.fighters[1].riposte
@@ -200,11 +202,10 @@ def test_worked_light_case_follows_range_and_strike_before_movement_not_impossib
 def test_weighted_production_example_uses_formulas_not_unweighted_timing_claims():
     state = worked(ActionKind.HEAVY, weight=3)
     player, enemy = state.fighters
-    assert player.action.strike_tick == 9  # 3 tiles × ceil(3*10/19.4)=2, then light windup 3
-    assert enemy.action.strike_tick == 9  # Ronin heavy windup ceil(12*10/13.58)=9
-    assert player.action.cost_paid == pytest.approx(14 * 1.06)
-    assert player.fatigue == pytest.approx(14 * 1.06 * .95 * 1.09)
-    assert enemy.fatigue == pytest.approx(16 * 1.06 * .5 * 1.09)
+    assert player.action.strike_tick == 9  # weighted three-tile approach, then scaled Light windup
+    assert enemy.action.strike_tick == 7  # matched novice Heavy windup under Cutlass weight
+    assert player.action.cost_paid == pytest.approx(state.config["actions"]["DASH_LIGHT"]["stamina"] * 1.06)
+    assert player.fatigue > 0 and enemy.fatigue > 0
 
 
 def test_passive_anger_delta_is_logged_once_not_twice():

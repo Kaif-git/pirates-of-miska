@@ -13,7 +13,7 @@ def test_port_candidate_roster_is_finite_and_does_not_use_captive_ledger():
     pool = RecruitmentPool()
     verdant = pool.at_port("verdant")
     cinder = pool.at_port("cinder")
-    assert {row["id"] for row in verdant} == {"pippin_ash", "elira_voss"}
+    assert {row["id"] for row in verdant} == {"pippin_ash", "elira_voss", "maelin_orr"}
     assert {row["id"] for row in cinder} == {"brannoc_reed"}
     assert all(row["asking_price"] > 0 for row in verdant + cinder)
     # The recruitment source is its own fixed roster, not the NPC captive market.
@@ -49,7 +49,7 @@ def test_recruitment_pool_save_roundtrip_and_old_snapshot_migration(tmp_path):
     legacy_path.write_text(json.dumps(data), encoding="utf-8")
     migrated = World.load(legacy_path)
     assert {row["id"] for row in migrated.economy.recruitment.at_port("verdant")} == {
-        "pippin_ash", "elira_voss"}
+        "pippin_ash", "elira_voss", "maelin_orr"}
 
 
 def test_hire_transfers_a_named_candidate_to_ship_with_a_persisted_hammock(tmp_path):

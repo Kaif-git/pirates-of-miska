@@ -443,6 +443,49 @@ class CharacterSystem:
             self._replace_major_rookies(world, [event.id])
         return event.id
 
+    def depart_character(self, world, character_id: str, *, destination: str,
+                         caused_by: str, reason: str) -> str:
+        """Record a living, unaffiliated island resident's explicit world departure."""
+        character = self._character(world, character_id)
+        self._validate_cause(world, caused_by)
+        if (not isinstance(destination, str) or not destination.strip()
+                or not isinstance(reason, str) or not reason.strip()):
+            raise ValueError("Departure requires a destination and causal reason")
+        if (character.get("death_tick") is not None
+                or character.get("departure_tick") is not None
+                or character.get("missing_at_sea") is not None
+                or character.get("lod_resident_origin") is True
+                or character.get("tier") == "BACKGROUND"):
+            raise ValueError("Only an active named resident can depart the world")
+        if character.get("crew_id") is not None or character.get("ship_id") is not None:
+            raise ValueError("A crew member must leave their crew before departing the world")
+        if world.location_of(character_id).get("kind") != "island":
+            raise ValueError("World departures require a valid island departure location")
+        if character_id in world.encounters.prisoners and world.encounters.prisoners[
+                character_id].get("status") == "held":
+            raise ValueError("A held prisoner cannot depart the world")
+        if any(character_id in crew["roster"] for crew in world.crew_ships.crews.values()):
+            raise ValueError("A rostered character cannot depart the world")
+
+        location = world.location_of(character_id)
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="CHARACTER_DEPARTED", location=location["id"],
+            actors=[{"role": "emigrant", "entity_id": character_id}],
+            targets=[{"role": "departed", "entity_id": character_id}],
+            data={"character_id": character_id, "location": location,
+                  "destination": destination.strip(), "reason": reason.strip()},
+            caused_by=[caused_by], causes_tags=["population_departure", "emigration", reason],
+            magnitude=0.35)
+        character["departure_tick"] = world.clock.tick
+        character["departure_event_id"] = event.id
+        character["last_event_id"] = event.id
+        world.archive[character_id] = character
+        del world.entities[character_id]
+        decisions = getattr(world, "decisions", None)
+        if decisions is not None:
+            decisions.on_agent_terminal(world, character_id)
+        return event.id
+
     def _replace_major_rookies(self, world, death_events: list[str]) -> None:
         rules = self.data["rules"]
         major_count = sum(
@@ -584,11 +627,24 @@ class CharacterSystem:
             self._validate_character_record(entity_id, character, living=False)
             if character["display_name"] in names:
                 raise ValueError("Living and archived character identities collide")
-            for event_id in (character["last_event_id"], character["cause_of_death_event"]):
+            terminal_events = [character["last_event_id"]]
+            if character.get("death_tick") is not None:
+                terminal_events.append(character["cause_of_death_event"])
+            else:
+                terminal_events.append(character["departure_event_id"])
+            for event_id in terminal_events:
                 try:
                     world.event_log.get(event_id)
                 except KeyError as exc:
                     raise ValueError(f"Archived character has unknown event: {entity_id}") from exc
+            if character.get("death_tick") is None:
+                departure_event = world.event_log.get(character["departure_event_id"])
+                if (departure_event.type != "CHARACTER_DEPARTED"
+                        or departure_event.tick != character["departure_tick"]
+                        or not any(part.get("entity_id") == entity_id
+                                   and part.get("role") == "departed"
+                                   for part in departure_event.targets)):
+                    raise ValueError(f"Archived character has invalid departure event: {entity_id}")
         for merchant in world.economy.merchants.values():
             if merchant["name"] in names:
                 raise ValueError("Living merchant and character names must be unique")
@@ -621,11 +677,22 @@ class CharacterSystem:
                 or not isinstance(health["injuries"], list) or not isinstance(health["chronic"], list)):
             raise ValueError(f"Invalid character health: {entity_id}")
         if living:
-            if character.get("death_tick") is not None or character.get("cause_of_death_event") is not None:
-                raise ValueError(f"Living character has death state: {entity_id}")
-        elif (type(character.get("death_tick")) is not int
-              or not isinstance(character.get("cause_of_death_event"), str)):
-            raise ValueError(f"Archived character lacks death state: {entity_id}")
+            if (character.get("death_tick") is not None
+                    or character.get("cause_of_death_event") is not None
+                    or character.get("departure_tick") is not None
+                    or character.get("departure_event_id") is not None):
+                raise ValueError(f"Living character has terminal state: {entity_id}")
+        else:
+            deceased = (type(character.get("death_tick")) is int
+                        and isinstance(character.get("cause_of_death_event"), str)
+                        and character.get("departure_tick") is None
+                        and character.get("departure_event_id") is None)
+            departed = (character.get("death_tick") is None
+                        and character.get("cause_of_death_event") is None
+                        and type(character.get("departure_tick")) is int
+                        and isinstance(character.get("departure_event_id"), str))
+            if not (deceased ^ departed):
+                raise ValueError(f"Archived character lacks one valid terminal state: {entity_id}")
 
     @property
     def data_island_ids(self) -> set[str]:

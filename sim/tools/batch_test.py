@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from sim.core.world import WorldState
+from sim.core.ownership import ship_is_commandable
 
 
 def _trade_volume_stable(annual_trade: list[dict], *, minimum_ratio_permille: int = 100,
@@ -37,10 +38,22 @@ def _event_log_sha256(event_log) -> str:
 
 
 def _terminal_actor_violations(event_log) -> list[dict[str, Any]]:
-    """Find actor activity appended after a character death or ship sinking."""
+    """Find direct entity and attributable faction commands after terminal state."""
     terminal_positions: dict[str, tuple[int, int]] = {}
+    terminal_org_positions: dict[str, tuple[int, int]] = {}
     violations = []
     terminal_types = {"CHARACTER_DIED", "SHIP_SUNK"}
+    organization_actor_roles = {
+        "faction", "government", "organization", "faction_command",
+        "attacking_faction", "trading_faction", "proposer", "requester",
+        "obligated_faction", "obligated_ally",
+    }
+    faction_command_types = {
+        "FACTION_POWER_VACUUM", "TERRITORY_CLAIMED", "ISLAND_FORTIFIED",
+        "TREATY_BREACHED", "DIPLOMATIC_EXCHANGE", "FACTION_TRADE_RECORDED",
+        "TREATY_TRANSITION", "TREATY_AID_REQUESTED", "TREATY_OBLIGATION_RESOLVED",
+        "WAR_DECLARED",
+    }
     for position, event in enumerate(event_log):
         for participant in event.actors:
             entity_id = participant["entity_id"]
@@ -52,9 +65,44 @@ def _terminal_actor_violations(event_log) -> list[dict[str, Any]]:
                     "entity_id": entity_id, "terminal_tick": terminal_tick,
                     "event_id": event.id, "event_type": event.type, "tick": event.tick,
                 })
+            terminal_org = terminal_org_positions.get(entity_id)
+            if (terminal_org and position > terminal_org[0]
+                    and participant.get("role") in organization_actor_roles):
+                violations.append({
+                    "entity_id": entity_id, "terminal_tick": terminal_org[1],
+                    "event_id": event.id, "event_type": event.type, "tick": event.tick,
+                    "terminal_kind": "organization", "actor_role": participant.get("role"),
+                })
+        if event.type in faction_command_types:
+            command_org_ids = set()
+            explicit_actor_ids = {
+                actor["entity_id"] for actor in event.actors
+                if actor.get("role") in organization_actor_roles}
+            faction_id = event.data.get("faction_id")
+            if isinstance(faction_id, str):
+                command_org_ids.add(faction_id)
+            faction_ids = event.data.get("factions", ())
+            if isinstance(faction_ids, (list, tuple)):
+                command_org_ids.update(item for item in faction_ids if isinstance(item, str))
+            for organization_id in command_org_ids - explicit_actor_ids:
+                terminal_org = terminal_org_positions.get(organization_id)
+                if terminal_org and position > terminal_org[0]:
+                    violations.append({
+                        "entity_id": organization_id, "terminal_tick": terminal_org[1],
+                        "event_id": event.id, "event_type": event.type, "tick": event.tick,
+                        "terminal_kind": "organization", "actor_role": "indirect_command",
+                    })
         if event.type in terminal_types:
             for participant in event.targets:
                 terminal_positions[participant["entity_id"]] = (position, event.tick)
+        if event.type == "FACTION_DISSOLVED":
+            organization_id = event.data.get("faction_id")
+            if not organization_id:
+                organization_id = next((participant["entity_id"]
+                                        for participant in event.targets
+                                        if participant.get("role") == "former_faction"), None)
+            if organization_id:
+                terminal_org_positions[organization_id] = (position, event.tick)
     return violations
 
 
@@ -66,7 +114,7 @@ def _actor_band_counts(world) -> dict[str, int]:
     for ship in world.entities.values():
         if (ship.get("kind") != "ship" or ship.get("sunk")
                 or ship.get("state") == "sunk"
-                or ship.get("captured_by_crew_id") is not None):
+                or not ship_is_commandable(world, ship["id"])):
             continue
         owner_type = ship.get("owner_type")
         crew = world.crew_ships.crews.get(ship.get("crew_id"), {})
@@ -119,7 +167,7 @@ def _actor_band_bounds(world) -> dict[str, dict[str, int]]:
 
 def _ship_actor_band(world, ship_id: str) -> str | None:
     ship = world.entities.get(ship_id) or world.archive.get(ship_id) or {}
-    if ship.get("captured_by_crew_id") is not None:
+    if ship_id in world.entities and not ship_is_commandable(world, ship_id):
         return None
     owner_type = ship.get("owner_type")
     crew = world.crew_ships.crews.get(ship.get("crew_id"), {})

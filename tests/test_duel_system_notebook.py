@@ -131,7 +131,7 @@ def test_v1_notebook_migrates_to_v7_without_losing_observed_counts():
     data = book.to_data()
     data["version"] = 1
     restored = Notebook.from_data(data, load_config())
-    assert restored.to_data()["version"] == 7
+    assert restored.to_data()["version"] == 18
     assert restored.entry("brute", KEY).counts == book.entry("brute", KEY).counts
 
 
