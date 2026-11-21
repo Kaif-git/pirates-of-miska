@@ -10,10 +10,13 @@ from typing import Any
 
 from sim.core.names import living_name_in_use, validate_living_names
 from sim.core.ownership import ship_is_commandable
+from sim.core.actor_bands import classify_ship_actor_band
 
 
 CREWS_SHIPS_PATH = Path(__file__).resolve().parents[1] / "data" / "crews_ships.json"
 _SUPPLY_GOODS = {"grain", "water", "rum", "powder", "timber", "sailcloth"}
+_RAIDER_INTEL_MAX_AGE_DAYS = 60  # allow one missed monthly observation; then expire it
+_RAIDER_PLAN_TERMINAL = {"contact", "intercepted", "aborted", "escaped", "invalidated", "expired"}
 
 
 def load_crews_ships_data(path: str | Path = CREWS_SHIPS_PATH) -> tuple[dict[str, Any], str]:
@@ -104,7 +107,8 @@ class CrewShipSystem:
     """Manages ship component stores and finite crew rosters for the headless world."""
 
     def __init__(self, *, digest: str, crews: dict[str, dict[str, Any]] | None = None,
-                 last_updated_day: int = 0) -> None:
+                 last_updated_day: int = 0,
+                 actor_deadlines: dict[str, int] | None = None) -> None:
         self.data, actual_digest = load_crews_ships_data()
         if digest != actual_digest:
             raise ValueError("Crew/ship catalog changed since snapshot creation")
@@ -114,6 +118,9 @@ class CrewShipSystem:
         self.crews = {key: json.loads(json.dumps(row, sort_keys=True))
                       for key, row in (crews or {}).items()}
         self.last_updated_day = last_updated_day
+        self.actor_deadlines = dict(actor_deadlines or {})
+        # Audit-only counters; excluded from snapshots and never consulted by simulation rules.
+        self.actor_recruitment_diagnostics: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def create(cls) -> "CrewShipSystem":
@@ -123,11 +130,14 @@ class CrewShipSystem:
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> "CrewShipSystem":
         if (not isinstance(snapshot, dict)
-                or set(snapshot) != {"digest", "crews", "last_updated_day"}
+                or set(snapshot) not in (
+                    {"digest", "crews", "last_updated_day"},
+                    {"digest", "crews", "last_updated_day", "actor_deadlines"})
                 or not isinstance(snapshot.get("crews"), dict)):
             raise ValueError("Invalid crew/ship snapshot")
         return cls(digest=snapshot["digest"], crews=snapshot["crews"],
-                   last_updated_day=snapshot["last_updated_day"])
+                   last_updated_day=snapshot["last_updated_day"],
+                   actor_deadlines=snapshot.get("actor_deadlines"))
 
     def seed_world(self, world) -> None:
         if self.crews:
@@ -238,6 +248,34 @@ class CrewShipSystem:
             ship["supplies"] = dict(world.economy.ship_supplies[ship_id])
             ship["history"].append(supply_event)
             crew["last_event_id"] = supply_event
+        self.actor_deadlines = {
+            "merchant": 6, "pirate": 13, "privateer": 20, "marine": 27,
+            "promotion": 9, "legend": 31,
+        }
+        self.validate_world(world)
+
+    def seed_opening_actor_bands(self, world) -> None:
+        """Create a small, explicitly world-generated opening force for early agency."""
+        if any(event.type == "ACTOR_FORCE_SEEDED" for event in world.event_log):
+            raise ValueError("Opening actor force can only be seeded once")
+        cause = world.event_log.by_type("WORLD_GENERATED")[0].id
+        # These are opening actors, not a band quota. Their initial stores are
+        # transferred from the named island's finite stockpile by provisioning.
+        for band, island_id in (("pirate", "isle_002"),
+                                ("privateer", "isle_006"),
+                                ("marine", "isle_012")):
+            name = self._regional_actor_vessel_name(world, island_id, band)
+            ship_id, ship_event_id = world.create_vessel(name, island_id)
+            world.event_log.append(
+                tick=world.clock.tick, event_type="ACTOR_FORCE_SEEDED", location=island_id,
+                targets=[{"role": "seeded_vessel", "entity_id": ship_id}],
+                data={"band": band, "origin": "world_generation", "island_id": island_id},
+                caused_by=[cause, ship_event_id],
+                causes_tags=["world_generation", "opening_actor_force", band], magnitude=0.1)
+            self.provision_recruited_vessel(world, ship_id, band, caused_by=ship_event_id)
+            world.politics.crew_heat.setdefault(
+                self.crews[world.entities[ship_id]["crew_id"]]["id"], 0)
+        world.politics.global_tension = min(10000, sum(world.politics.crew_heat.values()))
         self.validate_world(world)
 
     def provision_recruited_merchant(self, world, merchant_id: str, *,
@@ -557,6 +595,11 @@ class CrewShipSystem:
         prisoner["captor_ship_id"] = captor_ship_id
         prisoner["capture_event_id"] = capture.id
         prisoner["former_crew_id"] = former_crew_id
+        prisoner["last_custody_event_id"] = capture.id
+        prisoner["capture_day"] = world.clock.tick // (
+            world.config["time"]["hours_per_day"]
+            // world.config["time"]["hours_per_tick"])
+        prisoner["next_review_day"] = prisoner["capture_day"] + 7
         return capture.id
 
     def employ_stranded_crew(self, world, stranded_crew_id: str, employer_crew_id: str, *,
@@ -669,13 +712,25 @@ class CrewShipSystem:
         employer["last_event_id"] = assets.id
 
         # A crew can hold legal title to captured hulls it does not list as its
-        # onboard vessel. Dissolving that crew must not leave owner/controller
-        # references pointing at a terminal organization. Transfer title with
-        # an auditable event, but clear operational control until a crew is
-        # explicitly assigned aboard the hull.
+        # onboard vessel. Dissolving that owner must not leave references to a
+        # terminal organization. Preserve control only when the hull already
+        # has a valid, living onboard crew/captain; otherwise clear it.
         for asset_ship_id in source_owned_ship_ids:
             asset_ship = world.entities[asset_ship_id]
             former_controller = asset_ship.get("controller_crew_id")
+            onboard_crew_id = asset_ship.get("crew_id")
+            onboard_crew = self.crews.get(onboard_crew_id)
+            onboard_captain_id = onboard_crew.get("captain_id") if onboard_crew else None
+            onboard_captain = world.entities.get(onboard_captain_id, {})
+            onboard_control_valid = (
+                onboard_crew is not None
+                and asset_ship_id in onboard_crew.get("ship_ids", ())
+                and onboard_captain_id in onboard_crew.get("roster", ())
+                and onboard_captain.get("kind") == "character"
+                and onboard_captain.get("death_tick") is None
+                and onboard_captain.get("crew_id") == onboard_crew_id
+                and onboard_captain.get("ship_id") == asset_ship_id)
+            new_controller = onboard_crew_id if onboard_control_valid else None
             title_transfer = world.event_log.append(
                 tick=world.clock.tick, event_type="SHIP_ACQUIRED",
                 location=world.location_of(asset_ship_id)["id"],
@@ -686,13 +741,16 @@ class CrewShipSystem:
                       "previous_controller_crew_id": former_controller,
                       "new_crew_id": employer_crew_id,
                       "legal_owner_kind": "crew", "legal_owner_id": employer_crew_id,
-                      "controller_crew_id": None},
+                      "controller_crew_id": new_controller,
+                      "controller_assignment": ("existing_onboard_crew"
+                                                if onboard_control_valid
+                                                else "unassigned_no_valid_onboard_crew")},
                 caused_by=[accepted.id, assets.id],
                 causes_tags=["ship_acquisition", "crew_dissolution", "employment"],
                 magnitude=0.35)
             world.assign_ship_title(
                 asset_ship_id, owner_kind="crew", owner_id=employer_crew_id,
-                controller_crew_id=None, event_id=title_transfer.id)
+                controller_crew_id=new_controller, event_id=title_transfer.id)
             asset_ship["last_event_id"] = title_transfer.id
             asset_ship.setdefault("history", []).append(title_transfer.id)
 
@@ -1073,7 +1131,8 @@ class CrewShipSystem:
         if location.get("kind") != "island":
             return []
         arriving_crew_id = world.entities[ship_id]["controller_crew_id"]
-        resolved = []
+        resolved = world.encounters.install_pending_prize_crews(
+            world, ship_id, arrival_event_id)
         for stranded_crew_id in sorted(self.crews):
             stranded = self.crews[stranded_crew_id]
             if (stranded_crew_id == arriving_crew_id or stranded["ship_ids"]
@@ -1102,14 +1161,15 @@ class CrewShipSystem:
         return resolved
 
     def update_actor_budgets(self, day: int, world) -> None:
-        """Recruit after settlement monthly and before annual budget samples."""
-        days_per_year = world.config["time"]["days_per_year"]
-        if day % 30 == 0 or day % days_per_year == 0:
-            self._recruit_actor_bands(world, day)
+        """Process independently staggered opportunities and retain regular intel review."""
+        self._ensure_actor_deadlines(day)
+        self._recruit_actor_bands(world, day)
+        if day % 30 == 0:
             self._dispatch_raiders(world, day)
 
     def _recruit_actor_bands(self, world, day: int) -> None:
-        """Monthly deterministic top-up through vessel, character, and crew systems."""
+        """Recruit one actor only at its persisted deadline and when local resources permit."""
+        self._ensure_actor_deadlines(day)
         actors = world.config.get("world", {}).get("actors", {})
         ship_rules = actors.get("ship_bands", {})
         if not ship_rules:
@@ -1119,53 +1179,84 @@ class CrewShipSystem:
             band: (rules["minimum_per_island_milli"] * island_count + 999) // 1000
             for band, rules in ship_rules.items()
         }
-        max_monthly_recruits = (
-            10 if day % world.config["time"]["days_per_year"] == 0 else 5)
-        recruited = 0
+        # Merchant minimum is 32 hulls for the 40-island map; the prior 23-day
+        # interval could add at most ~16 ships/year from a three-ship opening,
+        # below the measured floor even with no losses. Keep each recruitment
+        # resource/deadline-gated, but allow enough independent opportunities.
+        intervals = {"merchant": 12, "pirate": 29, "privateer": 37, "marine": 31}
         for band in ("merchant", "pirate", "privateer", "marine"):
+            if day < self.actor_deadlines[band]:
+                continue
             count = self._active_actor_ship_count(world, band)
-            while count < minimums[band] and recruited < max_monthly_recruits:
-                island_id = self._least_populated_ship_island(world, band)
-                cause = world.event_log.by_type("WORLD_GENERATED")[0].id
-                if band == "merchant":
-                    island_name = world.geography.islands[island_id].name
-                    regional_count = sum(
-                        merchant.get("home_island") == island_id
-                        for merchant in world.economy.merchants.values())
-                    merchant_name = f"{island_name} Trading Company {regional_count + 1}"
-                    merchant_id, merchant_event_id = world.economy.create_merchant(
-                        world, merchant_name, island_id, silver=0, capacity_milli=100_000)
-                    crew_id = self.provision_recruited_merchant(
-                        world, merchant_id, caused_by=merchant_event_id)
-                    ship_id = world.economy.merchants[merchant_id]["ship_id"]
-                    captain_id = self.crews[crew_id]["captain_id"]
-                    acquired = world.event_log.append(
-                        tick=world.clock.tick, event_type="SHIP_ACQUIRED", location=island_id,
-                        actors=[{"role": "captain", "entity_id": captain_id}],
-                        targets=[{"role": "acquired_ship", "entity_id": ship_id}],
-                        data={"method": "build", "owner_type": band,
-                              "merchant_id": merchant_id, "crew_id": crew_id,
-                              "legal_owner_kind": "merchant", "legal_owner_id": merchant_id,
-                              "controller_crew_id": crew_id},
-                        caused_by=[merchant_event_id, self.crews[crew_id]["last_event_id"]],
-                        causes_tags=["ship_acquisition", "actor_budget_recruitment", band],
-                        magnitude=0.3)
-                    self.crews[crew_id]["last_event_id"] = acquired.id
-                    world.assign_ship_title(
-                        ship_id, owner_kind="merchant", owner_id=merchant_id,
-                        controller_crew_id=crew_id, event_id=acquired.id)
-                else:
-                    name = self._regional_actor_vessel_name(world, island_id, band)
-                    ship_id, ship_event_id = world.create_vessel(name, island_id)
-                    crew_id = self.provision_recruited_vessel(
-                        world, ship_id, band, caused_by=ship_event_id)
-                count += 1
-                recruited += 1
-                if recruited >= max_monthly_recruits:
-                    break
-        for _ in range(2):
+            if count < minimums[band]:
+                recruitment_diag = self.actor_recruitment_diagnostics.setdefault(
+                    band, {"opportunities": 0, "recruited": 0, "blocked": {}})
+                recruitment_diag["opportunities"] += 1
+                profile_supplies = self.data["classes"]["merchant_sloop"]["starting_supplies"]
+                required = {good: profile_supplies[good]
+                            for good in ("grain", "water", "rum")}
+                island_id = self._least_populated_ship_island(
+                    world, band, required_supplies=required)
+                if island_id is not None:
+                    cause = world.event_log.by_type("WORLD_GENERATED")[0].id
+                    if band == "merchant":
+                        island_name = world.geography.islands[island_id].name
+                        regional_count = sum(
+                            merchant.get("home_island") == island_id
+                            for merchant in world.economy.merchants.values())
+                        merchant_name = f"{island_name} Trading Company {regional_count + 1}"
+                        merchant_id, merchant_event_id = world.economy.create_merchant(
+                            world, merchant_name, island_id,
+                            silver=self.data["rules"]["starting_silver"],
+                            capacity_milli=100_000)
+                        crew_id = self.provision_recruited_merchant(
+                            world, merchant_id, caused_by=merchant_event_id)
+                        ship_id = world.economy.merchants[merchant_id]["ship_id"]
+                        captain_id = self.crews[crew_id]["captain_id"]
+                        acquired = world.event_log.append(
+                            tick=world.clock.tick, event_type="SHIP_ACQUIRED", location=island_id,
+                            actors=[{"role": "captain", "entity_id": captain_id}],
+                            targets=[{"role": "acquired_ship", "entity_id": ship_id}],
+                            data={"method": "build", "owner_type": band,
+                                  "merchant_id": merchant_id, "crew_id": crew_id,
+                                  "legal_owner_kind": "merchant", "legal_owner_id": merchant_id,
+                                  "controller_crew_id": crew_id},
+                            caused_by=[merchant_event_id, self.crews[crew_id]["last_event_id"]],
+                            causes_tags=["ship_acquisition", "actor_budget_recruitment", band],
+                            magnitude=0.3)
+                        self.crews[crew_id]["last_event_id"] = acquired.id
+                        world.assign_ship_title(
+                            ship_id, owner_kind="merchant", owner_id=merchant_id,
+                            controller_crew_id=crew_id, event_id=acquired.id)
+                    else:
+                        name = self._regional_actor_vessel_name(world, island_id, band)
+                        ship_id, ship_event_id = world.create_vessel(name, island_id)
+                        self.provision_recruited_vessel(
+                            world, ship_id, band, caused_by=ship_event_id)
+                    recruitment_diag["recruited"] += 1
+                    self.actor_deadlines[band] = day + intervals[band]
+                    continue
+                reason = ("no_viable_island" if not world.geography.islands
+                          else "insufficient_local_provisioning_stock")
+                blocked = recruitment_diag["blocked"]
+                blocked[reason] = blocked.get(reason, 0) + 1
+            else:
+                self.actor_deadlines[band] = day + intervals[band]
+            # Failed capability/resource checks are retried on a shorter,
+            # separately staggered opportunity window, never in a shared quota batch.
+            self.actor_deadlines[band] = day + 7 + (sum(map(ord, band)) % 5)
+        if day >= self.actor_deadlines["promotion"]:
             self._promote_captain_rookie(world, day)
-        self._promote_major_legend(world, day)
+            self.actor_deadlines["promotion"] = day + 13
+        if day >= self.actor_deadlines["legend"]:
+            self._promote_major_legend(world, day)
+            self.actor_deadlines["legend"] = day + 31
+
+    def _ensure_actor_deadlines(self, day: int) -> None:
+        offsets = {"merchant": 6, "pirate": 13, "privateer": 20,
+                   "marine": 27, "promotion": 9, "legend": 31}
+        for key, offset in offsets.items():
+            self.actor_deadlines.setdefault(key, day + offset)
 
     @staticmethod
     def _regional_actor_vessel_name(world, island_id: str, band: str) -> str:
@@ -1189,27 +1280,19 @@ class CrewShipSystem:
                     or ship.get("state") == "sunk"
                     or not ship_is_commandable(world, ship["id"])):
                 continue
-            owner_type = ship.get("owner_type")
-            if band == "merchant" and any(
-                    merchant.get("ship_id") == ship.get("id")
-                    for merchant in world.economy.merchants.values()):
-                owner_type = "merchant"
             crew = world.crew_ships.crews.get(ship.get("crew_id"), {})
-            faction = world.politics.factions.get(crew.get("faction_id"), {})
-            faction_kind = str(faction.get("kind", "")).lower()
-            if faction_kind in {"merchant", "merchant_league"}:
-                owner_type = "merchant"
-            elif faction_kind in {"pirate", "raider"}:
-                owner_type = "pirate"
-            elif faction_kind == "marine":
-                owner_type = "marine"
-            elif faction_kind == "privateer":
-                owner_type = "privateer"
-            total += owner_type == band
+            faction_id = crew.get("faction_id")
+            faction = world.politics.factions.get(faction_id, {}) if faction_id else {}
+            actor_band = classify_ship_actor_band(
+                ship, faction_id=faction_id, faction_kind=faction.get("kind", ""),
+                merchant_registered=any(merchant.get("ship_id") == ship.get("id")
+                                        for merchant in world.economy.merchants.values()))
+            total += actor_band == band
         return total
 
     @staticmethod
-    def _least_populated_ship_island(world, band: str) -> str:
+    def _least_populated_ship_island(world, band: str,
+                                     required_supplies: dict[str, int] | None = None) -> str | None:
         counts = {island_id: 0 for island_id in world.geography.islands}
         for ship_id, ship in world.entities.items():
             if ship.get("kind") != "ship":
@@ -1223,6 +1306,12 @@ class CrewShipSystem:
                         / max(1, len(world.geography.adjacency[island_id])))
             for island_id in world.geography.islands
         }
+        if required_supplies is not None:
+            counts = {island_id: count for island_id, count in counts.items()
+                      if all(world.economy.islands[island_id]["stockpile_milli"].get(good, 0)
+                             >= quantity for good, quantity in required_supplies.items())}
+            if not counts:
+                return None
         if band == "pirate":
             return min(counts, key=lambda island_id: (patrol[island_id], counts[island_id], island_id))
         if band == "marine":
@@ -1244,37 +1333,74 @@ class CrewShipSystem:
                      and character.get("death_tick") is None)
         if majors >= major_target or majors >= major_maximum:
             return
-        appointed = {
-            event.actors[0]["entity_id"]: event.id
-            for event in world.event_log.by_type("CAPTAIN_APPOINTED")
-            if event.actors and event.actors[0].get("role") == "captain"
-        }
         candidate = next((character for character in sorted(
             world.entities.values(), key=lambda row: row["id"])
             if character.get("kind") == "character" and character.get("tier") == "MINOR"
             and character.get("role") == "captain" and character.get("death_tick") is None
-            and character["id"] in appointed
             and character.get("crew_id") in self.crews
-            and self.crews[character["crew_id"]]["captain_id"] == character["id"]), None)
+            and self.crews[character["crew_id"]]["captain_id"] == character["id"]
+            and len(self._captain_qualifying_deeds(world, character["id"])) >= 2), None)
         if candidate is None:
             return
-        deed_event_id = appointed[candidate["id"]]
-        acquired_event = next((event.id for event in reversed(list(world.event_log))
-                               if event.type == "SHIP_ACQUIRED"
-                               and event.actors and event.actors[0]["entity_id"] == candidate["id"]),
-                              deed_event_id)
+        deed_event_ids = self._captain_qualifying_deeds(world, candidate["id"])[-2:]
         promotion = world.event_log.append(
             tick=world.clock.tick, event_type="ROOKIE_PROMOTED",
             location=world.location_of(candidate["id"])["id"],
             actors=[{"role": "rising_captain", "entity_id": candidate["id"]}],
             targets=[{"role": "crew", "entity_id": candidate["crew_id"]}],
             data={"from_tier": "MINOR", "to_tier": "MAJOR",
-                  "deed_event_ids": [deed_event_id, acquired_event], "day": day},
-            caused_by=[deed_event_id, acquired_event],
+                  "deed_event_ids": deed_event_ids, "day": day},
+            caused_by=deed_event_ids,
             causes_tags=["captain_rising", "logged_deeds", "actor_budget"], magnitude=0.5)
         candidate["tier"] = "MAJOR"
         candidate["last_event_id"] = promotion.id
         self.crews[candidate["crew_id"]]["last_event_id"] = promotion.id
+
+    def _captain_qualifying_deeds(self, world, captain_id: str) -> list[str]:
+        captain = world.entities.get(captain_id, {})
+        crew = self.crews.get(captain.get("crew_id"), {})
+        ship_ids = set(crew.get("ship_ids", ()))
+        merchant_ids = {merchant_id for merchant_id, merchant
+                        in world.economy.merchants.items()
+                        if merchant.get("ship_id") in ship_ids}
+        deeds = []
+        for event in world.event_log:
+            if event.tick > world.clock.tick:
+                continue
+            if event.type == "MARKET_TRADE":
+                if (event.data.get("merchant_id") in merchant_ids
+                        and event.data.get("side") == "sell"
+                        and type(event.data.get("profit_silver")) is int
+                        and event.data["profit_silver"] > 0):
+                    deeds.append(event.id)
+            elif event.type == "ENCOUNTER_RESOLVED":
+                details = event.data.get("outcome_details", {})
+                winner_ship = details.get("winner_ship_id")
+                ships = event.data.get("ships", ())
+                captains = event.data.get("captain_ids_before", ())
+                winner_index = next((index for index, ship_id in enumerate(ships)
+                                     if ship_id == winner_ship), None)
+                if (winner_index is not None and winner_index < len(captains)
+                        and captains[winner_index] == captain_id
+                        and event.data.get("outcome") not in {
+                            "mutual_withdrawal", "parley_ended_fight", "one_side_flees"}):
+                    deeds.append(event.id)
+            elif event.type == "VOYAGE_ARRIVED":
+                ship_id = next((actor.get("entity_id") for actor in event.actors
+                                if actor.get("entity_id") in ship_ids), None)
+                if ship_id is not None:
+                    deeds.append(event.id)
+            elif event.type == "BATTLE_CONCLUDED":
+                commanders = event.data.get("commanders", ())
+                winner_side = event.data.get("winner_side")
+                if (type(winner_side) is int and 0 <= winner_side < len(commanders)
+                        and commanders[winner_side] == captain_id):
+                    deeds.append(event.id)
+            elif event.type == "SHIP_CAPTURED":
+                if (event.data.get("captor_captain_id") == captain_id
+                        or any(actor.get("entity_id") == captain_id for actor in event.actors)):
+                    deeds.append(event.id)
+        return list(dict.fromkeys(deeds))
 
     def _promote_major_legend(self, world, day: int) -> None:
         bands = world.config.get("world", {}).get("actors", {}).get("captain_bands", {})
@@ -1286,60 +1412,45 @@ class CrewShipSystem:
                       for character in world.entities.values())
         if legends >= target:
             return
-        acquired_by_captain = {
-            event.actors[0]["entity_id"]: event.id
-            for event in world.event_log.by_type("SHIP_ACQUIRED")
-            if event.actors and event.actors[0].get("role") == "captain"
-        }
+        used_traits = {trait_id for character in (*world.entities.values(), *world.archive.values())
+                       if character.get("kind") == "character"
+                       for trait_id in character.get("legend_traits", ())}
+        available_traits = sorted(
+            trait["id"] for trait in world.battles.data["legend_traits"]
+            if trait["id"] not in used_traits)
+        if not available_traits:
+            return
         candidate = next((character for character in sorted(
             world.entities.values(), key=lambda row: row["id"])
             if character.get("kind") == "character" and character.get("tier") == "MAJOR"
             and character.get("role") == "captain" and character.get("death_tick") is None
             and character.get("crew_id") in self.crews
             and self.crews[character["crew_id"]]["captain_id"] == character["id"]
-            and character["id"] in acquired_by_captain), None)
+            and len(self._captain_qualifying_deeds(world, character["id"])) >= 5), None)
         if candidate is None:
             return
-        deed = acquired_by_captain[candidate["id"]]
+        deeds = self._captain_qualifying_deeds(world, candidate["id"])[-3:]
         event = world.event_log.append(
             tick=world.clock.tick, event_type="LEGEND_PROMOTED",
             location=world.location_of(candidate["id"])["id"],
             actors=[{"role": "legendary_captain", "entity_id": candidate["id"]}],
             targets=[{"role": "crew", "entity_id": candidate["crew_id"]}],
             data={"from_tier": "MAJOR", "to_tier": "LEGEND",
-                  "deed_event_ids": [deed], "day": day},
-            caused_by=[deed], causes_tags=["captain_rising", "logged_deed", "legend_band"],
+                  "deed_event_ids": deeds, "legend_trait_id": available_traits[0],
+                  "day": day},
+            caused_by=deeds, causes_tags=["captain_rising", "logged_deeds", "legend_band"],
             magnitude=0.6)
         candidate["tier"] = "LEGEND"
+        candidate["legend_traits"] = [available_traits[0]]
+        candidate["legend_since_event_id"] = None
         candidate["last_event_id"] = event.id
         self.crews[candidate["crew_id"]]["last_event_id"] = event.id
 
     def _dispatch_raiders(self, world, day: int) -> None:
-        """Send idle raiders toward observed high-value, weakly patrolled traffic."""
-        candidates = []
-        for merchant_id, merchant in sorted(world.economy.merchants.items()):
-            ship_id = merchant["ship_id"]
-            ship = world.entities.get(ship_id)
-            if not ship:
-                continue
-            location = world.location_of(ship_id)
-            cargo_value = sum(
-                quantity * world.economy.goods[goods_id]["base_price_silver"]
-                for goods_id, quantity in merchant["cargo_milli"].items())
-            route_options = []
-            if location["kind"] == "route":
-                route = world.geography.routes[location["id"]]
-                route_options.append((route, location["to"]))
-            elif location["kind"] == "island":
-                route_options.extend((route, location["id"])
-                                     for route in world.geography.adjacency[location["id"]])
-            for route, destination in route_options:
-                score = cargo_value * 1000 // (1000 + int(route.patrol_density * 1000))
-                candidates.append((score, route.patrol_density, merchant_id, ship_id,
-                                   route, destination))
-        if not candidates:
-            return
-        targets = sorted(candidates, key=lambda row: (-row[0], row[1], row[2], row[4].id))[:12]
+        """Observe local merchant traffic, then act only on fresh attributed beliefs."""
+        ticks_per_day = (world.config["time"]["hours_per_day"]
+                         // world.config["time"]["hours_per_tick"])
+        max_age = _RAIDER_INTEL_MAX_AGE_DAYS * ticks_per_day
         pirates = sorted(
             ship_id for ship_id, ship in world.entities.items()
             if ship.get("kind") == "ship" and ship.get("owner_type") == "pirate"
@@ -1351,67 +1462,481 @@ class CrewShipSystem:
             if location["kind"] != "island":
                 continue
             crew = self.crews[pirate["crew_id"]]
+            crew.setdefault("raider_plan", None)
+            if crew["raider_plan"] and crew["raider_plan"]["status"] == "underway":
+                continue
             captain_id = crew["captain_id"]
+            adjacent_routes = world.geography.adjacency[location["id"]]
+            for route in adjacent_routes:
+                self._record_raider_chart_intel(world, captain_id, location["id"], route)
+            for merchant_id, merchant in sorted(world.economy.merchants.items()):
+                merchant_ship_id = merchant["ship_id"]
+                ship = world.entities.get(merchant_ship_id)
+                if (not ship or not world.ship_is_commandable(merchant_ship_id)
+                        or ship.get("legal_owner") != {"kind": "merchant", "id": merchant_id}):
+                    continue
+                if world.location_of(merchant_ship_id) == location:
+                    self._record_raider_vessel_intel(
+                        world, captain_id, merchant_id, merchant_ship_id, merchant)
+
             believed_targets = []
-            for _, _, merchant_id, merchant_ship_id, route, destination in targets:
-                merchant = world.economy.merchants[merchant_id]
-                cause_id = merchant["last_event_id"]
-                cargo_value = sum(
-                    quantity * world.economy.goods[goods_id]["base_price_silver"]
-                    for goods_id, quantity in merchant["cargo_milli"].items())
-                patrol_value = int(route.patrol_density * 1000)
-                if world.decisions.belief(
-                        captain_id, route.id, "estimated_patrol_density_milli") is None:
-                    world.decisions.set_belief(
-                        world, captain_id, route.id, "estimated_patrol_density_milli",
-                        patrol_value, source_event_id=cause_id, confidence_permille=850,
-                        source_kind="rumor")
-                if world.decisions.belief(
-                        captain_id, merchant_ship_id, "estimated_cargo_value_milli") is None:
-                    world.decisions.set_belief(
-                        world, captain_id, merchant_ship_id, "estimated_cargo_value_milli",
-                        cargo_value, source_event_id=cause_id, confidence_permille=700,
-                        source_kind="rumor")
-                patrol_belief = world.decisions.belief(
-                    captain_id, route.id, "estimated_patrol_density_milli")
+            for merchant_id, merchant in sorted(world.economy.merchants.items()):
+                merchant_ship_id = merchant["ship_id"]
+                ship = world.entities.get(merchant_ship_id)
+                if (not ship or not world.ship_is_commandable(merchant_ship_id)
+                        or ship.get("legal_owner") != {"kind": "merchant", "id": merchant_id}):
+                    continue
                 cargo_belief = world.decisions.belief(
                     captain_id, merchant_ship_id, "estimated_cargo_value_milli")
-                believed_score = max(0, cargo_belief["value"]) * 1000 // (
-                    1000 + max(0, patrol_belief["value"]))
-                believed_targets.append((believed_score, patrol_value, merchant_id,
-                                         route.id, merchant_ship_id, destination, route,
-                                         patrol_belief["value"], cargo_belief["value"]))
-            (belief_score, _, merchant_id, _, merchant_ship_id, destination, route,
-             estimated_patrol, estimated_cargo) = sorted(
-                believed_targets, key=lambda row: (-row[0], row[1], row[2], row[3]))[0]
+                defense_belief = world.decisions.belief(
+                    captain_id, merchant_ship_id, "estimated_vessel_strength")
+                location_belief = world.decisions.belief(
+                    captain_id, merchant_ship_id, "last_known_location")
+                if (not self._fresh_raider_belief(cargo_belief, world.clock.tick, max_age)
+                        or not self._fresh_raider_belief(
+                            defense_belief, world.clock.tick, max_age)
+                        or not self._fresh_raider_belief(
+                            location_belief, world.clock.tick, max_age)):
+                    continue
+                previous_plan = crew.get("raider_plan")
+                if (isinstance(previous_plan, dict)
+                        and previous_plan.get("target_ship_id") == merchant_ship_id
+                        and previous_plan.get("status") in {"escaped", "expired", "invalidated"}):
+                    previous_result = world.event_log.get(
+                        previous_plan["resolution_event_id"])
+                    if max(cargo_belief["observed_tick"],
+                           defense_belief["observed_tick"],
+                           location_belief["observed_tick"]) <= previous_result.tick:
+                        continue
+                last_location = location_belief["value"]
+                if not isinstance(last_location, dict):
+                    continue
+                kind = last_location.get("kind")
+                if kind == "island" and last_location.get("id") in world.geography.islands:
+                    route_options = [(route, last_location["id"])
+                                     for route in world.geography.adjacency[last_location["id"]]]
+                elif kind == "route" and last_location.get("id") in world.geography.routes:
+                    route = world.geography.routes[last_location["id"]]
+                    destination = last_location.get("to")
+                    route_options = ([(route, destination)]
+                                     if destination in world.geography.islands else [])
+                else:
+                    route_options = []
+                intel_age = max(0, world.clock.tick - cargo_belief["observed_tick"])
+                for route, destination in route_options:
+                    patrol_belief = world.decisions.belief(
+                        captain_id, route.id, "estimated_patrol_density_milli")
+                    if not self._fresh_raider_belief(patrol_belief, world.clock.tick, max_age):
+                        continue
+                    estimated_cargo = max(0, cargo_belief["value"])
+                    estimated_patrol = max(0, patrol_belief["value"])
+                    confidence = min(cargo_belief["confidence_permille"],
+                                     patrol_belief["confidence_permille"])
+                    try:
+                        path = world.geography.shortest_path(
+                            location["id"], destination,
+                            edge_cost=lambda edge: world.travel._leg_hours(
+                                edge, pirate, pirate["condition"]),
+                            blocked_routes=world.travel.closed_routes)
+                    except ValueError as exc:
+                        if "No route" not in str(exc) and "blocked" not in str(exc).lower():
+                            raise
+                        continue
+                    expected_hours = sum(world.travel._leg_hours(
+                        edge, pirate, pirate["condition"]) for edge in path)
+                    expected_days = (expected_hours + world.config["time"]["hours_per_day"] - 1) \
+                        // world.config["time"]["hours_per_day"]
+                    roster_size = len(crew["roster"])
+                    rules = self.data["rules"]
+                    expected_supplies = {
+                        "grain": expected_days * rules["daily_food_milli_per_member"] * roster_size,
+                        "water": expected_days * rules["daily_water_milli_per_member"] * roster_size,
+                        "rum": expected_days * rules["daily_rum_milli_per_member"] * roster_size,
+                    }
+                    supply_budget = world.economy.ship_supplies[pirate_id]
+                    provision_cost = sum(
+                        amount * world.economy.goods[good]["base_price_silver"]
+                        for good, amount in expected_supplies.items())
+                    provision_factor = min((1000 if amount == 0 else
+                                             supply_budget.get(good, 0) * 1000 // amount)
+                                            for good, amount in expected_supplies.items())
+                    raider_power = max(1, world.crew_ships.combat_power(
+                        world, pirate_id)["total"])
+                    estimated_defense = max(1, defense_belief["value"])
+                    capability_factor = max(500, min(
+                        1500, raider_power * 1000 // estimated_defense))
+                    competition = sum(
+                        1 for other_crew in self.crews.values()
+                        if isinstance(other_crew.get("raider_plan"), dict)
+                        and other_crew["raider_plan"].get("status") == "underway"
+                        and other_crew["raider_plan"].get("target_ship_id") == merchant_ship_id)
+                    distance_factor = 72000 // (72 + expected_hours)
+                    belief_score = (estimated_cargo * confidence // 1000
+                                    * 1000 // (1000 + estimated_patrol)
+                                    * capability_factor // 1000
+                                    * distance_factor // 1000
+                                    * provision_factor // 1000
+                                    * 1000 // (1000 + competition * 500))
+                    if belief_score <= 0:
+                        continue
+                    believed_targets.append((belief_score, -confidence, intel_age,
+                                             merchant_id, route.id, merchant_ship_id,
+                                             destination, route, estimated_patrol,
+                                             estimated_cargo, last_location,
+                                             cargo_belief, location_belief,
+                                             patrol_belief, expected_hours,
+                                             expected_supplies, provision_cost,
+                                             provision_factor, competition,
+                                             defense_belief, capability_factor))
+            if not believed_targets:
+                continue
+            (belief_score, negative_confidence, intel_age, merchant_id, route_id,
+             merchant_ship_id, destination, route, estimated_patrol, estimated_cargo,
+             last_location, cargo_belief, location_belief, patrol_belief,
+             expected_hours, expected_supplies, provision_cost, provision_factor,
+             competition, defense_belief, capability_factor) = min(
+                 believed_targets, key=lambda row: (-row[0], row[1], row[2], row[3], row[4]))
             observed = world.event_log.get(pirate.get("created_event_id")
-                                           or pirate.get("last_event_id"))
+                                            or pirate.get("last_event_id"))
             merchant = world.economy.merchants[merchant_id]
+            causes = list(dict.fromkeys((
+                observed.id, cargo_belief["source"]["event_id"],
+                location_belief["source"]["event_id"],
+                patrol_belief["source"]["event_id"])))
             target_event = world.event_log.append(
                 tick=world.clock.tick, event_type="RAIDER_TARGET_SELECTED",
                 location=route.id,
                 actors=[{"role": "raider_captain", "entity_id": captain_id}],
                 targets=[{"role": "merchant_vessel", "entity_id": merchant_ship_id}],
-                data={"merchant_id": merchant_id, "route_id": route.id,
-                      "patrol_density_milli": int(route.patrol_density * 1000),
+                data={"merchant_id": merchant_id, "route_id": route_id,
+                      "last_known_location": last_location,
+                      "intel_age_ticks": intel_age,
+                      "cargo_confidence_permille": cargo_belief["confidence_permille"],
+                      "patrol_confidence_permille": patrol_belief["confidence_permille"],
+                      "defense_confidence_permille": defense_belief["confidence_permille"],
                       "estimated_patrol_density_milli": estimated_patrol,
                       "estimated_cargo_value_milli": estimated_cargo,
+                      "estimated_vessel_strength": defense_belief["value"],
                       "belief_score": belief_score,
-                      "observed_cargo_value_milli": sum(
-                          quantity * world.economy.goods[goods_id]["base_price_silver"]
-                          for goods_id, quantity in merchant["cargo_milli"].items()),
+                      "capability_factor_permille": capability_factor,
+                      "expected_travel_hours": expected_hours,
+                      "expected_supplies_milli": expected_supplies,
+                      "estimated_provision_cost_milli": provision_cost,
+                      "provision_availability_permille": provision_factor,
+                      "active_competing_commitments": competition,
                       "decision_day": day},
-                caused_by=[observed.id, merchant["last_event_id"]],
+                caused_by=causes,
                 causes_tags=["piracy_targeting", "belief_driven", "low_patrol_high_cargo"],
                 magnitude=0.3)
-            if location["id"] == destination:
-                continue
+            self._commit_raider_pursuit(
+                world, crew, pirate_id, merchant_id, merchant_ship_id,
+                route_id, destination, last_location, target_event.id)
+
+    def _commit_raider_pursuit(self, world, crew: dict[str, Any], raider_ship_id: str,
+                               merchant_id: str, target_ship_id: str, route_id: str,
+                               destination: str, last_location: dict[str, Any],
+                               selected_event_id: str) -> None:
+        """Persist a bounded pursuit before sailing or attempting same-port contact."""
+        ship = world.entities[raider_ship_id]
+        location = world.location_of(raider_ship_id)
+        origin = location.get("id") if location.get("kind") == "island" else None
+        expected_routes = []
+        expected_hours = 0
+        failure_reason = None
+        if origin is None:
+            failure_reason = "raider_not_at_island"
+        elif origin != destination:
             try:
-                world.travel.start_voyage(
-                    world, pirate_id, destination, caused_by=target_event.id)
+                path = world.geography.shortest_path(
+                    origin, destination,
+                    edge_cost=lambda route: world.travel._leg_hours(
+                        route, ship, ship["condition"]),
+                    blocked_routes=world.travel.closed_routes,
+                )
+                expected_routes = [route.id for route in path]
+                expected_hours = sum(world.travel._leg_hours(
+                    route, ship, ship["condition"]) for route in path)
             except ValueError as exc:
                 if "No path" not in str(exc) and "blocked" not in str(exc).lower():
                     raise
+                failure_reason = "route_unavailable"
+        hours_per_day = world.config["time"]["hours_per_day"]
+        hours_per_tick = world.config["time"]["hours_per_tick"]
+        expected_days = ((expected_hours + hours_per_day - 1) // hours_per_day)
+        roster_size = len(crew["roster"])
+        rules = self.data["rules"]
+        expected_supplies = {
+            "grain": expected_days * rules["daily_food_milli_per_member"] * roster_size,
+            "water": expected_days * rules["daily_water_milli_per_member"] * roster_size,
+            "rum": expected_days * rules["daily_rum_milli_per_member"] * roster_size,
+        }
+        budget = {good: world.economy.ship_supplies[raider_ship_id].get(good, 0)
+                  for good in expected_supplies}
+        if (failure_reason is None
+                and any(budget[good] < quantity
+                        for good, quantity in expected_supplies.items())):
+            failure_reason = "insufficient_pursuit_provisions"
+        deadline_tick = (world.clock.tick
+                         + (expected_hours + 30 * hours_per_day) // hours_per_tick)
+        commitment = world.event_log.append(
+            tick=world.clock.tick, event_type="RAIDER_PURSUIT_COMMITTED",
+            location=location["id"],
+            actors=[{"role": "raider_vessel", "entity_id": raider_ship_id}],
+            targets=[{"role": "merchant_vessel", "entity_id": target_ship_id}],
+            data={"merchant_id": merchant_id, "route_id": route_id,
+                  "destination": destination, "last_known_location": last_location,
+                  "expected_route_ids": expected_routes,
+                  "expected_duration_hours": expected_hours,
+                  "expected_supplies_milli": expected_supplies,
+                  "pursuit_budget_milli": budget, "deadline_tick": deadline_tick},
+            caused_by=[selected_event_id],
+            causes_tags=["raider_pursuit", "bounded_commitment"], magnitude=0.2)
+        plan = {
+            "merchant_id": merchant_id, "target_ship_id": target_ship_id,
+            "raider_ship_id": raider_ship_id, "route_id": route_id,
+            "destination": destination, "last_known_location": last_location,
+            "selected_event_id": selected_event_id,
+            "commitment_event_id": commitment.id, "voyage_event_id": None,
+            "expected_duration_hours": expected_hours,
+            "expected_supplies_milli": expected_supplies,
+            "pursuit_budget_milli": budget, "deadline_tick": deadline_tick,
+            "status": "underway", "resolution_event_id": None,
+        }
+        crew["raider_plan"] = plan
+        crew["last_event_id"] = commitment.id
+        if failure_reason:
+            self._resolve_raider_plan(
+                world, crew, "aborted", caused_by=[commitment.id], reason=failure_reason)
+            return
+        if origin == destination:
+            # Do not force combat from a strategic selection. The ordinary
+            # encounter detector decides whether co-located ships make contact.
+            return
+        try:
+            voyage_id = world.travel.start_voyage(
+                world, raider_ship_id, destination, caused_by=commitment.id)
+        except ValueError as exc:
+            if "No path" not in str(exc) and "blocked" not in str(exc).lower():
+                raise
+            self._resolve_raider_plan(
+                world, crew, "aborted", caused_by=[commitment.id],
+                reason="route_became_unavailable")
+            return
+        plan["voyage_event_id"] = voyage_id
+        transit = world.travel.transits[raider_ship_id]
+        plan["deadline_tick"] = (transit["arrival_tick"]
+                                 + 30 * hours_per_day // hours_per_tick)
+        world.entities[raider_ship_id]["last_event_id"] = voyage_id
+
+    def _resolve_raider_contact(self, world, crew: dict[str, Any], *,
+                                caused_by: list[str]) -> None:
+        plan = crew.get("raider_plan")
+        if not plan or plan.get("status") != "underway":
+            return
+        raider_ship_id = plan["raider_ship_id"]
+        target_ship_id = plan["target_ship_id"]
+        if (raider_ship_id not in world.entities
+                or not world.ship_is_commandable(raider_ship_id)
+                or target_ship_id not in world.entities
+                or not world.ship_is_commandable(target_ship_id)):
+            self._resolve_raider_plan(
+                world, crew, "invalidated", caused_by=caused_by,
+                reason="participant_no_longer_commandable")
+            return
+        raider_location = world.location_of(raider_ship_id)
+        target_location = world.location_of(target_ship_id)
+        overlap = world.encounters._overlap(raider_location, target_location)
+        if overlap is None:
+            self._resolve_raider_plan(
+                world, crew, "escaped", caused_by=caused_by,
+                reason="target_not_at_last_known_location")
+            return
+        encounter_id = world.encounters.resolve(
+            world, raider_ship_id, target_ship_id,
+            caused_by=list(dict.fromkeys(caused_by)), location=overlap["location"])
+        encounter = world.event_log.get(encounter_id)
+        self._resolve_raider_plan(
+            world, crew, self._raider_encounter_outcome(
+                world, raider_ship_id, target_ship_id, encounter),
+            caused_by=[encounter_id], reason="encounter_resolved")
+        pair = world.encounters._pair_key(raider_ship_id, target_ship_id)
+        day = world.clock.tick // (world.config["time"]["hours_per_day"]
+                                  // world.config["time"]["hours_per_tick"])
+        world.encounters.pair_last_encounter_day[pair] = day
+
+    def resolve_raider_plans(self, world, day: int,
+                             encounter_event_ids: list[str] | tuple[str, ...] = ()) -> None:
+        """Resolve committed plans only from actual contact, invalidation or timeout."""
+        events = [world.event_log.get(event_id) for event_id in encounter_event_ids]
+        for crew_id in sorted(self.crews):
+            crew = self.crews[crew_id]
+            plan = crew.get("raider_plan")
+            if not isinstance(plan, dict) or plan.get("status") != "underway":
+                continue
+            raider_id = plan["raider_ship_id"]
+            target_id = plan["target_ship_id"]
+            if (raider_id not in world.entities
+                    or not world.ship_is_commandable(raider_id)
+                    or target_id not in world.entities
+                    or not world.ship_is_commandable(target_id)):
+                self._resolve_raider_plan(
+                    world, crew, "invalidated", caused_by=[],
+                    reason="pursuit_participant_lost_command")
+                continue
+            encounter = next((event for event in events
+                              if event.type == "ENCOUNTER_RESOLVED"
+                              and {actor.get("entity_id") for actor in event.actors
+                                   if actor.get("role") == "combatant"}
+                              == {raider_id, target_id}
+                              and event.tick >= world.event_log.get(
+                                  plan["commitment_event_id"]).tick), None)
+            if encounter is not None:
+                outcome = self._raider_encounter_outcome(
+                    world, raider_id, target_id, encounter)
+                self._resolve_raider_plan(
+                    world, crew, outcome, caused_by=[encounter.id],
+                    reason="causally_linked_encounter")
+                continue
+            if world.clock.tick >= plan["deadline_tick"]:
+                self._resolve_raider_plan(
+                    world, crew, "expired", caused_by=[],
+                    reason="pursuit_deadline_reached")
+                continue
+            if raider_id in world.travel.transits:
+                continue
+            if not plan.get("voyage_event_id"):
+                # A same-island commitment waits for the normal encounter system.
+                continue
+            raider_location = world.location_of(raider_id)
+            target_location = world.location_of(target_id)
+            if world.encounters._overlap(raider_location, target_location) is None:
+                self._resolve_raider_plan(
+                    world, crew, "escaped", caused_by=[plan["voyage_event_id"]],
+                    reason="target_left_last_known_destination")
+
+    @staticmethod
+    def _raider_encounter_outcome(world, raider_ship_id: str, target_ship_id: str,
+                                  encounter) -> str:
+        if (target_ship_id not in world.entities
+                or world.entities[target_ship_id].get("sunk_tick") is not None
+                or not world.ship_is_commandable(target_ship_id)):
+            return "intercepted"
+        if encounter.data.get("outcome") in {"ship_captured", "ship_sunk", "surrender"}:
+            return "intercepted"
+        if encounter.data.get("outcome") == "one_side_flees":
+            return ("escaped" if encounter.data.get("stances", {}).get(
+                target_ship_id) == "flee" else "aborted")
+        return "contact"
+
+    def _resolve_raider_plan(self, world, crew: dict[str, Any], outcome: str, *,
+                             caused_by: list[str], reason: str) -> str | None:
+        plan = crew.get("raider_plan")
+        if (not isinstance(plan, dict) or plan.get("status") != "underway"
+                or outcome not in _RAIDER_PLAN_TERMINAL):
+            return None
+        cause_ids = list(dict.fromkeys((plan["selected_event_id"],
+                                        plan["commitment_event_id"], *caused_by)))
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="RAIDER_PURSUIT_RESOLVED",
+            location=world.location_of(plan["raider_ship_id"])["id"]
+            if plan["raider_ship_id"] in world.entities else None,
+            actors=[{"role": "raider_vessel", "entity_id": plan["raider_ship_id"]}],
+            targets=[{"role": "merchant_vessel", "entity_id": plan["target_ship_id"]}],
+            data={"outcome": outcome, "reason": reason,
+                  "merchant_id": plan["merchant_id"],
+                  "selected_event_id": plan["selected_event_id"],
+                  "commitment_event_id": plan["commitment_event_id"],
+                  "voyage_event_id": plan["voyage_event_id"]},
+            caused_by=cause_ids, causes_tags=["raider_pursuit", outcome], magnitude=0.2)
+        plan["status"] = outcome
+        plan["resolution_event_id"] = event.id
+        crew["last_event_id"] = event.id
+        if plan["raider_ship_id"] in world.entities:
+            world.entities[plan["raider_ship_id"]]["last_event_id"] = event.id
+        return event.id
+
+    @staticmethod
+    def _fresh_raider_belief(record: dict[str, Any] | None, tick: int,
+                             max_age_ticks: int) -> bool:
+        return bool(record and type(record.get("observed_tick")) is int
+                    and 0 <= tick - record["observed_tick"] <= max_age_ticks
+                    and type(record.get("confidence_permille")) is int
+                    and record["confidence_permille"] > 0)
+
+    @staticmethod
+    def _raider_estimate(world, observer_id: str, subject_id: str, attribute: str,
+                         actual: int) -> tuple[int, int]:
+        """Use bounded seeded estimation, with a stream unique to observer and subject."""
+        maximum = world.decisions.ai_data["belief_rules"]["max_distortion_permille"]
+        rng = world.rng.stream(
+            f"raider-estimate:{observer_id}:{subject_id}:{attribute}:{world.clock.tick}")
+        error = rng.randint(-maximum, maximum) if maximum else 0
+        return max(0, actual * (1000 + error) // 1000), error
+
+    def _record_raider_chart_intel(self, world, captain_id: str, island_id: str,
+                                   route) -> None:
+        current = world.decisions.belief(
+            captain_id, route.id, "estimated_patrol_density_milli")
+        max_age = _RAIDER_INTEL_MAX_AGE_DAYS * (
+            world.config["time"]["hours_per_day"]
+            // world.config["time"]["hours_per_tick"])
+        if self._fresh_raider_belief(current, world.clock.tick, max_age):
+            return
+        estimated, error = self._raider_estimate(
+            world, captain_id, route.id, "patrol_density_milli",
+            int(route.patrol_density * 1000))
+        cause = world.event_log.by_type("WORLD_GENERATED")[0]
+        chart = world.event_log.append(
+            tick=world.clock.tick, event_type="RAIDER_CHART_REVIEWED", location=island_id,
+            actors=[{"role": "chart_reader", "entity_id": captain_id}],
+            data={"route_id": route.id, "estimated_patrol_density_milli": estimated,
+                  "estimation_error_permille": error,
+                  "confidence_permille": 1000, "observation_tick": world.clock.tick},
+            caused_by=[cause.id], causes_tags=["raider_intelligence", "charted_route"],
+            magnitude=0.05)
+        world.decisions.set_belief(
+            world, captain_id, route.id, "estimated_patrol_density_milli", estimated,
+            source_event_id=chart.id, confidence_permille=1000, source_kind="direct")
+
+    def _record_raider_vessel_intel(self, world, captain_id: str, merchant_id: str,
+                                    merchant_ship_id: str,
+                                    merchant: dict[str, Any]) -> None:
+        observed_location = world.location_of(merchant_ship_id)
+        cargo_value = sum(
+            quantity * world.economy.goods[goods_id]["base_price_silver"]
+            for goods_id, quantity in merchant["cargo_milli"].items())
+        estimated, error = self._raider_estimate(
+            world, captain_id, merchant_ship_id, "cargo_value_milli", cargo_value)
+        defense_power = world.crew_ships.combat_power(world, merchant_ship_id)["total"]
+        estimated_defense, defense_error = self._raider_estimate(
+            world, captain_id, merchant_ship_id, "vessel_strength", defense_power)
+        cause_ids = [merchant.get("last_event_id"),
+                     world.entities[merchant_ship_id].get("last_event_id")]
+        causes = list(dict.fromkeys(event_id for event_id in cause_ids if event_id))
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="RAIDER_INTEL_OBSERVED",
+            location=observed_location["id"],
+            actors=[{"role": "observer", "entity_id": captain_id}],
+            targets=[{"role": "observed_merchant_vessel", "entity_id": merchant_ship_id}],
+            data={"merchant_id": merchant_id, "estimated_cargo_value_milli": estimated,
+                  "estimation_error_permille": error,
+                  "estimated_vessel_strength": estimated_defense,
+                  "defense_estimation_error_permille": defense_error,
+                  "last_known_location": observed_location,
+                  "confidence_permille": 1000, "observation_tick": world.clock.tick},
+            caused_by=causes, causes_tags=["raider_intelligence", "direct_observation"],
+            magnitude=0.08)
+        world.decisions.set_belief(
+            world, captain_id, merchant_ship_id, "estimated_cargo_value_milli", estimated,
+            source_event_id=event.id, confidence_permille=1000, source_kind="direct")
+        world.decisions.set_belief(
+            world, captain_id, merchant_ship_id, "estimated_vessel_strength",
+            estimated_defense, source_event_id=event.id,
+            confidence_permille=900, source_kind="direct")
+        world.decisions.set_belief(
+            world, captain_id, merchant_ship_id, "last_known_location", observed_location,
+            source_event_id=event.id, confidence_permille=1000, source_kind="direct")
+        world.entities[captain_id]["last_event_id"] = event.id
 
     def _pay_daily_wages(self, world, crew_id: str, day: int) -> None:
         crew = self.crews[crew_id]
@@ -1506,6 +2031,49 @@ class CrewShipSystem:
         for crew_id, crew in self.crews.items():
             if crew["id"] != crew_id:
                 raise ValueError(f"Invalid crew identity: {crew_id}")
+            plan = crew.get("raider_plan")
+            if plan is not None:
+                plan_keys = {
+                    "merchant_id", "target_ship_id", "raider_ship_id", "route_id",
+                    "destination", "last_known_location", "selected_event_id",
+                    "commitment_event_id", "voyage_event_id",
+                    "expected_duration_hours", "expected_supplies_milli",
+                    "pursuit_budget_milli", "deadline_tick", "status",
+                    "resolution_event_id",
+                }
+                invalid_plan = (
+                    not isinstance(plan, dict) or set(plan) != plan_keys
+                    or plan.get("status") not in _RAIDER_PLAN_TERMINAL | {"underway"}
+                )
+                if not invalid_plan:
+                    invalid_plan = (
+                        any(not isinstance(plan.get(key), str) or not plan[key]
+                            for key in ("merchant_id", "target_ship_id", "raider_ship_id",
+                                        "route_id", "destination", "selected_event_id",
+                                        "commitment_event_id"))
+                        or (plan["voyage_event_id"] is not None
+                            and (not isinstance(plan["voyage_event_id"], str)
+                                 or not plan["voyage_event_id"]))
+                        or type(plan["expected_duration_hours"]) is not int
+                        or plan["expected_duration_hours"] < 0
+                        or type(plan["deadline_tick"]) is not int or plan["deadline_tick"] < 0
+                        or not isinstance(plan["last_known_location"], dict)
+                        or not isinstance(plan["expected_supplies_milli"], dict)
+                        or not isinstance(plan["pursuit_budget_milli"], dict)
+                        or set(plan["expected_supplies_milli"]) != {"grain", "water", "rum"}
+                        or set(plan["pursuit_budget_milli"]) != {"grain", "water", "rum"}
+                        or any(type(value) is not int or value < 0
+                               for budget in (plan["expected_supplies_milli"],
+                                              plan["pursuit_budget_milli"])
+                               for value in budget.values())
+                        or (plan["status"] == "underway"
+                            and plan["resolution_event_id"] is not None)
+                        or (plan["status"] != "underway"
+                            and (not isinstance(plan["resolution_event_id"], str)
+                                 or not plan["resolution_event_id"]))
+                    )
+                if invalid_plan:
+                    raise ValueError(f"Invalid persisted raider pursuit plan: {crew_id}")
             if crew["ship_ids"]:
                 ship_id = crew["ship_ids"][0]
                 if ship_id not in world.entities:
@@ -1540,6 +2108,17 @@ class CrewShipSystem:
                     raise ValueError(f"Crew roster member has inconsistent links: {character_id}")
             if crew["captain_id"] not in crew["roster"] or crew["roles"].get("captain") != crew["captain_id"]:
                 raise ValueError(f"Crew captain is not an active roster member: {crew_id}")
+            plan = crew.get("raider_plan")
+            if plan is not None:
+                for event_key in ("selected_event_id", "commitment_event_id",
+                                  "voyage_event_id", "resolution_event_id"):
+                    event_id = plan.get(event_key)
+                    if event_id is not None:
+                        world.event_log.get(event_id)
+                if (plan["status"] == "underway"
+                        and (plan["raider_ship_id"] not in world.entities
+                             or plan["raider_ship_id"] not in crew["ship_ids"])):
+                    raise ValueError(f"Active raider plan is detached from its vessel: {crew_id}")
             if any(character_id not in crew["roster"] for character_id in crew["roles"].values()):
                 raise ValueError(f"Crew role is assigned outside its roster: {crew_id}")
             account = world.economy.crew_accounts.get(crew_id)
@@ -1577,6 +2156,12 @@ class CrewShipSystem:
                         treasury_adjustment -= event.data.get("silver", 0)
                     if any(target.get("entity_id") == crew_id for target in event.targets):
                         treasury_adjustment += event.data.get("silver", 0)
+                elif (event.type == "CONTRABAND_SEIZED"
+                      and event.data.get("crew_id") == crew_id):
+                    fine = event.data.get("fine_silver", -1)
+                    if type(fine) is not int or fine < 0:
+                        raise ValueError(f"Invalid contraband enforcement fine: {event.id}")
+                    treasury_adjustment -= fine
                 elif (event.type == "AGENT_ACTION"
                       and event.data.get("action_id") == "hunt_rival"
                       and event.data.get("crew_id") == crew_id):
@@ -1639,6 +2224,11 @@ class CrewShipSystem:
     def validate_state(self) -> None:
         if type(self.last_updated_day) is not int or self.last_updated_day < 0:
             raise ValueError("Invalid crew/ship lifecycle day")
+        deadline_keys = {"merchant", "pirate", "privateer", "marine", "promotion", "legend"}
+        if (set(self.actor_deadlines) - deadline_keys
+                or any(type(day) is not int or day < 0
+                       for day in self.actor_deadlines.values())):
+            raise ValueError("Invalid persisted actor opportunity deadlines")
         for crew_id, crew in self.crews.items():
             if (not isinstance(crew, dict) or crew.get("id") != crew_id
                     or not isinstance(crew.get("name"), str) or not crew["name"]
@@ -1659,7 +2249,8 @@ class CrewShipSystem:
     def snapshot(self) -> dict[str, Any]:
         return {"digest": self.digest,
                 "crews": {key: self.crews[key] for key in sorted(self.crews)},
-                "last_updated_day": self.last_updated_day}
+                "last_updated_day": self.last_updated_day,
+                "actor_deadlines": dict(sorted(self.actor_deadlines.items()))}
 
     def _crew(self, crew_id: str) -> dict[str, Any]:
         try:

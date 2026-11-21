@@ -107,7 +107,7 @@ def coach(model, summary=()):
     arm = next((zone for zone in model.zones if zone.zone.value == 'ARM'), None)
     arm_cut = own['light_power']-dict(model.enemy_armor).get('ARM', 0) >= rules['cut']
     if own.get('riposte'):
-        target = 'Arm' if arm and arm_cut and own['Accuracy']-rules['jitter'] >= arm.difficulty else 'Torso'
+        target = 'Arm' if arm and arm_cut else 'Torso'
         return Coaching('Light', f"Use your riposte: Light → {target} has a shortened {own['light_ticks']:g}-tick windup.",
                         tuple(advantages), tuple(cautions+['A riposte is not a free hit. The enemy can guard or reposition; check reach.']), source, confidence)
     if observed.get('plain_light') and 'Strength' in enemy:
@@ -122,12 +122,12 @@ def coach(model, summary=()):
         action = 'Dash' if pools.get('STA', 0) >= own['dash_cost'] and not own.get('no_dash') else 'Move'
         return Coaching(action, 'Your speed edge is fading: try to disengage before resting or using supplies.',
                         tuple(advantages), tuple(cautions+['Retreat can be hit; walking is especially slow. A wounded leg may prevent dashing.']), source, confidence)
-    if arm and arm_cut and own['Accuracy']-rules['jitter'] >= arm.difficulty:
-        return Coaching("Light", "Try Light → Arm: use your accuracy to weaken striking force, not trade torso blows.",
-                        tuple(advantages+[dict(model.target_effects).get('ARM', '')]),
-                        tuple(cautions+["Arm is covered by guard. It only weakens on a sufficient wound; the enemy may still strike back."]), source, confidence)
+    if arm and arm_cut:
+        return Coaching("Light", "Try Light → Arm: a sufficient wound can weaken striking force; Accuracy shapes clean-contact odds, not legal targeting.",
+                         tuple(advantages+[dict(model.target_effects).get('ARM', '')]),
+                         tuple(cautions+["Arm is in the guard line, but attacks can bypass or break guard. It only weakens on a sufficient wound; the enemy may still strike back."]), source, confidence)
     headline = ("Your light cannot cause a disabling arm cut through this armor; seek an opening or disengage."
-                if not arm_cut else "Precision is unreliable: use safer torso aim or a conditional guard, not desperate hand shots.")
+                if not arm_cut else "Aim variation can drift or miss; choose a useful exposed site and keep a safe response ready.")
     return Coaching("Move" if own.get('disarmed') else "Guard", headline,
                     tuple(advantages), tuple(cautions+["Guard can be bypassed or broken. Look for a safer exchange or retreat; no winning route is guaranteed."]), source, confidence)
 
@@ -150,7 +150,7 @@ def strategy_rows(model, advice):
             (f"2. After-armor impact ≥ {rules['deep']:g} is deep. Aim controls WHERE; Strength/action/weapon/armor control severity."
              if 'deep' in rules else "2. Compare after-armor impact against the wound thresholds in Details."),
             "Impact is not instant blood damage: wounds create bleeding, pain and zone-specific penalties. A deep torso wound also drains stamina immediately.",
-            "3. Arm cuts reduce force; leg cuts slow future movement/windups; head wounds hurt accuracy. Changes do not reschedule an already committed action.",
+            "3. Arm cuts reduce force; leg cuts slow future movement/windups; severe head contact can cause concussion or unconsciousness. Accuracy stays unchanged; changes do not reschedule an already committed action.",
             "4. Speed is rounded into phase ticks: a speed advantage can still tie. Same-tick strikes can trade; faster never means extra attacks.",
             "5. Precision uses a requirement plus small seeded variation. Covered hands can force drift; torso is the fallback, not a general dodge roll.",
             "6. Stamina funds actions. Fatigue, pain, blood loss and injuries weaken effective stats. Watch actual windup/aim warnings, not bars alone.",

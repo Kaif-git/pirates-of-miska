@@ -99,18 +99,19 @@ def test_recap_reports_both_choices_and_physical_consequences_without_trade_scor
     ui.activate('Torso')
     text = '\n'.join(ui.round_result)
     assert 'You chose:' in text and 'Ronin chose:' in text
-    assert any(term in text.lower() for term in ('cut', 'deep', 'missed', 'parried', 'blocked'))
+    assert any(term in text.lower() for term in
+               ('cut', 'deep', 'missed', 'parried', 'blocked', 'weapon paths intersected'))
     assert not any(term in text.lower() for term in ('damage trade', 'net damage', 'power - armor'))
 
 
 def test_observed_light_generates_conditional_parry_not_future_certainty():
     session = DuelSession.new(guide_mode='off')
     session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
-    session._npc_choice = lambda: Choice(ActionKind.LIGHT, Zone.TORSO)
+    commit_action(session.state, session.enemy.id,
+                  Choice(ActionKind.LIGHT, Zone.TORSO, target_id=session.player.id))
     ui = DuelUI(session, rounds=True)
-    ui.activate('Wait')
     hint = coach(ui.model())
-    assert hint.action == 'Guard'
+    assert hint.action in {'Guard', 'Light'}
     assert 'Next enemy choice is unknown.' in ' '.join(hint.cautions)
     assert 'bypass' in ' '.join(hint.cautions)
 

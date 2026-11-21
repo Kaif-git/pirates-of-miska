@@ -11,15 +11,21 @@ import heapq
 import math
 
 from pirates import sea_encounter
+from pirates.sea_traffic import (CONTACT_LOSS_DELAY_TICKS, CONTACT_LOSS_RADIUS,
+                                 LOOKOUT_RADIUS, NPC_LANE_HOP_TICKS,
+                                 relative_observation)
+from pirates.sea_conduct import SeaConductLedger
+from pirates import sea_transfer
+from pirates import sea_trade
 from pirates.economy import PORTS, MERCHANTS, CATALOG, build_port
-from tales_sim.clock import TICKS_PER_DAY
+from tales_sim.clock import TICKS_PER_DAY, TICKS_PER_SECOND
 
 SEA_NODES = {
     "verdant": {"name": "Verdant Cay", "xy": (1, 3), "port": "verdant"},
     "shoals": {"name": "The Glass Shoals", "xy": (3, 2)},
     "cinder": {"name": "Cinder Quay", "xy": (6, 4), "port": "cinder"},
     "navy_lane": {"name": "Government Patrol Lane", "xy": (4, 5)},
-    "freeport": {"name": "Free Syndicate Anchorage", "xy": (8, 2)},
+    "freeport": {"name": "Freeport Exchange", "xy": (8, 2), "port": "freeport"},
     "deepwater": {"name": "The Blue Reach", "xy": (4, 0)},
 }
 LANES = (("verdant", "shoals"), ("shoals", "cinder"), ("cinder", "navy_lane"),
@@ -53,6 +59,7 @@ class VoyageSystem:
         self.arrival_interrupt = False
         self._action_advance_depth = 0
         self.captain_fatigue = 20.0
+        self.conduct_ledger = SeaConductLedger()
 
     def _crew(self, world, sid):
         sailor = world.ship.sailor(sid)
@@ -91,13 +98,14 @@ class VoyageSystem:
             else:
                 warnings.append(f"{qname}: food stores cover about {ready_food_days:.1f} days at "
                                 f"{FOOD_KG_PER_CREW_DAY:.2f} kg/crew/day.")
-        warnings.extend(f"{qname}: {blocker}" for blocker in forecast["blockers"])
         from pirates.provisioning import readiness_rows
+        preparation = readiness_rows(world, target_days=duration_hours / 24, forecast=forecast)
+        preparation_start = preparation.index("SHIP AND CREW PREPARATION (advisories; not departure gates)")
+        supply_readiness = preparation[:preparation_start]
+        preparation = preparation[preparation_start:]
+        warnings.extend(f"{qname}: {blocker}" for blocker in forecast["blockers"])
         warnings.extend(f"{qname}: {row[len('Next: '):]}"
-                        for row in readiness_rows(world, target_days=duration_hours / 24, forecast=forecast)
-                        if row.startswith("Next: "))
-        if world.ship.hull < 50:
-            warnings.append(f"{qname}: hull condition is low; consider a safer route.")
+                        for row in supply_readiness if row.startswith("Next: "))
         if min(water_days, food_days) < 1:
             suggestion = "Verdant Cay" if self.position != "verdant" else "the nearest provision stop"
             warnings.append(f"{qname} suggests a provisioning voyage to {suggestion} before a long run.")
@@ -124,10 +132,11 @@ class VoyageSystem:
                 (f"Numbers-skilled purser: {purser.name} | stores-ledger aptitude {purser.personality['diligence']:.0f}/100; repair skill {purser.skills['repair']:.1f}"
                  if purser else "Purser: unassigned | no specialist stores-ledger review"),
                 f"Navigator's wind reading: {wind['name']} ({wind['dx']:+d},{wind['dy']:+d}); route estimate {duration_hours:.1f} hours.",
-                f"Provisional sailing estimate: {sailing['sail_force_n']:.0f} N drive, {sailing['target_speed_knots']:.1f} kn target; "
-                f"rigging {sailing['sail_condition']:.0%}, rudder authority {sailing['rudder_authority']:.2f}.",
-                *(warnings or [f"Quartermaster {quartermaster.name}: stores look adequate for the estimate."]),
-                f"Ration estimate: {CLEAN_WATER_L_PER_CREW_DAY:.1f} L clean water + "
+                 f"Provisional sailing estimate: {sailing['sail_force_n']:.0f} N drive, {sailing['target_speed_knots']:.1f} kn target; "
+                 f"rigging {sailing['sail_condition']:.0%}, rudder authority {sailing['rudder_authority']:.2f}.",
+                 *(warnings or [f"Quartermaster {quartermaster.name}: stores look adequate for the estimate."]),
+                 "", *preparation,
+                 f"Ration estimate: {CLEAN_WATER_L_PER_CREW_DAY:.1f} L clean water + "
                 f"{FOOD_KG_PER_CREW_DAY:.2f} kg food per crew member/day; "
                 "cookable estimates protect a one-day drinking reserve; individual needs still simulate."]
 
@@ -214,6 +223,9 @@ class VoyageSystem:
             raise ValueError("A voyage is already underway")
         if destination not in SEA_NODES or destination == self.position:
             raise ValueError("Choose a different chart location")
+        if (getattr(world, "scenario_id", None) == "lawful-trader-mvp"
+                and SEA_NODES[destination].get("port") not in PORTS):
+            raise ValueError("Choose one of the three trading ports as your destination")
         route, distance = self.shortest_route(self.position, destination)
         if preferred_waypoint and preferred_waypoint not in route:
             # Allow a deliberate detour only when both legs are charted.
@@ -275,6 +287,7 @@ class VoyageSystem:
         storm_event = self._make_storm_event(world, plan)
         self.voyage = {**plan, "status": "underway", "leg": 0, "leg_progress": 0.0,
                        "elapsed_seconds": 0, "destination": destination, "encounter": None,
+                       "deck_visit": None,
                        "initial_estimate_seconds": plan["duration_seconds"],
                        "storm_event": storm_event,
                        "departure_snapshot": self._ledger_checkpoint(world),
@@ -355,7 +368,10 @@ class VoyageSystem:
                         result = state["status"] if state else "no longer in arrival ledger"
                     rows.append(f"  {objective['offer_id']}: {result}")
             else:
-                rows.append("Delivery objective: none recorded for this destination.")
+                if world.scenario_id == "lawful-trader-mvp":
+                    rows.append("No delivery objective is required for this passage.")
+                else:
+                    rows.append("Delivery objective: none recorded for this destination.")
         else:
             rows.append("Legacy save: departure/arrival ledger checkpoints are unavailable.")
         undertakings = sorted(
@@ -390,7 +406,9 @@ class VoyageSystem:
         if not outcomes:
             rows.append("  No recorded contact, squall, or other voyage outcome.")
         active = [row for row in world.economy.contracts if row["status"] == "active"]
-        if active:
+        if world.scenario_id == "lawful-trader-mvp":
+            rows.append("No arrival settlement is required; trade, repair, recruit or sail again when you choose.")
+        elif active:
             rows.append("Follow-up: review the active delivery ledger at a harbor office before accepting another route.")
         else:
             rows.append("Follow-up: inspect the local harbor office for a new finite delivery opportunity.")
@@ -457,6 +475,9 @@ class VoyageSystem:
         if v["leg_progress"] >= 1:
             v["leg"] += 1
             if v["leg"] >= len(v["route"]) - 1:
+                # Arrival is terminal for this route; clamp the final partial
+                # leg even when a coarse/accelerated step overshoots it.
+                v["leg_progress"] = 1.0
                 self.position = v["destination"]
                 v["status"] = "arrived"
                 self.arrival_interrupt = True
@@ -640,6 +661,11 @@ class VoyageSystem:
             raise ValueError("There is no active ship sighting")
         if sea_encounter.request_pending(self.voyage):
             raise ValueError("Resolve the pending encounter request before resuming the voyage")
+        if ((self.voyage["encounter"].get("contact") or {}).get("trade_pending")
+                is not None):
+            raise ValueError("Commit or cancel the pending sea-trade quote before resuming")
+        if self.voyage.get("deck_visit") is not None:
+            raise ValueError("Return everyone from the other vessel before resuming the voyage")
         self._record(f"Captain holds course after sighting {self.voyage['encounter']['name']}.")
         self.voyage["encounter"] = None
         self.voyage["status"] = "underway"
@@ -649,6 +675,11 @@ class VoyageSystem:
             raise ValueError("Turn back is available only during a sighting")
         if sea_encounter.request_pending(self.voyage):
             raise ValueError("Resolve the pending encounter request before turning back")
+        if ((self.voyage["encounter"].get("contact") or {}).get("trade_pending")
+                is not None):
+            raise ValueError("Commit or cancel the pending sea-trade quote before turning back")
+        if self.voyage.get("deck_visit") is not None:
+            raise ValueError("Return everyone from the other vessel before turning back")
         current = self.position
         ports = [node for node, row in SEA_NODES.items() if row.get("port")]
         target = min(ports, key=lambda p: self.route_distance(current, p))
@@ -678,6 +709,7 @@ class VoyageSystem:
         prior = self.voyage
         self.voyage = {**plan, "status": "underway", "leg": 0, "leg_progress": 0.0,
                        "elapsed_seconds": 0, "destination": target, "encounter": None,
+                       "deck_visit": None,
                        "initial_estimate_seconds": prior.get("initial_estimate_seconds", prior["duration_seconds"]),
                        "storm_event": storm_event,
                        "departure_snapshot": prior.get("departure_snapshot") or self._ledger_checkpoint(world),
@@ -696,15 +728,218 @@ class VoyageSystem:
         if not self.voyage or self.voyage.get("status") != "encounter":
             raise ValueError("There is no active ship sighting")
         encounter = self.voyage.get("encounter")
-        contact = sea_encounter.contact_of(encounter)
+        contact = sea_encounter.contact_of(encounter, create=False)
+        if contact is None:
+            contact = sea_encounter.new_contact()
+        if self.voyage.get("deck_visit") is not None:
+            raise ValueError("Return the visiting party to the Wayward before another encounter action")
         if isinstance(encounter.get("id"), str):
             world.npcs._encountered_ship(world, encounter["id"])
         if encounter.get("combat", {}).get("status") == "active":
             raise ValueError("A saved legacy artillery exchange is active; use its combat menu")
         if not allow_pending and (contact.get("crossing") is not None
-                                  or contact.get("combat_pending") is not None):
+                                  or contact.get("combat_pending") is not None
+                                  or contact.get("trade_pending") is not None):
             raise ValueError("A pending encounter request blocks further encounter actions")
         return encounter, contact
+
+    def request_sea_trade_offer(self, world):
+        """Ask a close merchant to disclose a bounded, explicit commodity offer."""
+        encounter, contact = self._encounter_state(world)
+        contact = sea_encounter.contact_of(encounter)
+        instance_id = encounter.get("contact_instance_id", encounter["id"])
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=instance_id,
+            current_tick=world.clock.total_ticks)
+        if contact["range"] != "close":
+            raise ValueError("At-sea trade requires a close-range vessel")
+        if sea_encounter.threat_of(encounter) != "merchant":
+            raise ValueError("Only a publicly assessed merchant contact may offer peaceful trade")
+        if contact["crossing_completed"]:
+            raise ValueError("Return from the other vessel before requesting trade")
+        if contact["trade_offer"] is not None:
+            return deepcopy(contact["trade_offer"])
+        target = world.npcs._encountered_ship(world, encounter["id"])
+        offer = sea_trade.create_offer(instance_id, target, world.clock.total_ticks)
+        contact["trade_offer"] = offer
+        encounter["contact"] = contact
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=world.clock.total_ticks)
+        self.advance_encounter_action_time(world, 6000)
+        return deepcopy(offer)
+
+    def quote_sea_trade(self, world, item_id, quantity, buying):
+        """Freeze a fixed-price preview; balances, cargo and time stay untouched."""
+        encounter, contact = self._encounter_state(world)
+        contact = sea_encounter.contact_of(encounter)
+        instance_id = encounter.get("contact_instance_id", encounter["id"])
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=instance_id,
+            current_tick=world.clock.total_ticks)
+        if contact["range"] != "close" or sea_encounter.threat_of(encounter) != "merchant":
+            raise ValueError("At-sea trade requires a close-range merchant")
+        offer = contact.get("trade_offer")
+        if offer is None:
+            raise ValueError("Request the merchant's explicit finite offer first")
+        target = world.npcs._encountered_ship(world, encounter["id"])
+        next_quote = sea_trade.quote(
+            instance_id, offer,
+            contact["trade_pending"], contact["trade_receipts"],
+            contact["trade_sequence"], item_id, quantity, buying)
+        from pirates.economy import CATALOG, TRADE_BULK_ML, TRADE_MASS_G
+        item = CATALOG[item_id]
+        economy = world.economy
+        if buying:
+            if target["cargo"].get(item_id, 0) < quantity:
+                raise ValueError("The merchant's offered stock is no longer available")
+            if economy.money < next_quote["total"]:
+                raise ValueError("Not enough Marks for this fixed-price purchase")
+            mass, bulk = economy.load()
+            if (mass + item["weight_g"] * quantity > TRADE_MASS_G
+                    or bulk + item["bulk_ml"] * quantity > TRADE_BULK_ML):
+                raise ValueError("At-sea purchase exceeds available cargo capacity")
+        else:
+            if economy.available_cargo(item_id) < quantity:
+                raise ValueError("Not enough unreserved cargo to sell")
+            if target["silver"] < next_quote["total"]:
+                raise ValueError("The merchant no longer has enough silver for this sale")
+        next_quote["quoted_tick"] = world.clock.total_ticks
+        contact["trade_sequence"] = next_quote["sequence"]
+        contact["trade_pending"] = next_quote
+        encounter["contact"] = contact
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=world.clock.total_ticks)
+        return deepcopy(next_quote)
+
+    def cancel_sea_trade(self, world, transaction_id=None):
+        encounter, contact = self._encounter_state(world, allow_pending=True)
+        contact = sea_encounter.contact_of(encounter)
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=world.clock.total_ticks)
+        if contact.get("crossing") is not None or contact.get("combat_pending") is not None:
+            raise ValueError("A different pending encounter request blocks trade cancellation")
+        pending = contact.get("trade_pending")
+        if pending is None:
+            raise ValueError("There is no sea-trade quote to cancel")
+        if transaction_id is not None and pending["transaction_id"] != transaction_id:
+            raise ValueError("That transaction is not the pending sea-trade quote")
+        contact["trade_pending"] = None
+        encounter["contact"] = contact
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=world.clock.total_ticks)
+        world.message("Sea-trade quote cancelled; no Marks, cargo or time changed.")
+        return True
+
+    def commit_sea_trade(self, world, transaction_id):
+        """Revalidate and atomically commit a quote once; receipts make retries idempotent."""
+        encounter, contact = self._encounter_state(world, allow_pending=True)
+        contact = sea_encounter.contact_of(encounter)
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=world.clock.total_ticks)
+        if contact.get("crossing") is not None or contact.get("combat_pending") is not None:
+            raise ValueError("A different pending encounter request blocks sea trade")
+        if not isinstance(transaction_id, str):
+            raise ValueError("Choose a valid sea-trade transaction")
+        receipt = next((row for row in contact["trade_receipts"]
+                        if row["transaction_id"] == transaction_id), None)
+        if receipt is not None:
+            return sea_trade.copy_receipt(receipt)
+        pending = contact.get("trade_pending")
+        if pending is None or pending["transaction_id"] != transaction_id:
+            raise ValueError("That transaction is not the pending sea-trade quote")
+        if (contact["range"] != "close" or contact["crossing_completed"]
+                or sea_encounter.threat_of(encounter) != "merchant"):
+            raise ValueError("Trade consent or close-range eligibility no longer holds")
+        target = world.npcs._encountered_ship(world, encounter["id"])
+        economy = world.economy
+        item_id, quantity, total = pending["item_id"], pending["quantity"], pending["total"]
+        if pending["buying"]:
+            if target["cargo"].get(item_id, 0) < quantity:
+                raise ValueError("Merchant stock changed; cancel and request a fresh quote")
+            if economy.money < total:
+                raise ValueError("Player purse changed; cancel and request a fresh quote")
+            mass, bulk = economy.load()
+            from pirates.economy import CATALOG, TRADE_BULK_ML, TRADE_MASS_G
+            item = CATALOG[item_id]
+            if (mass + item["weight_g"] * quantity > TRADE_MASS_G
+                    or bulk + item["bulk_ml"] * quantity > TRADE_BULK_ML):
+                raise ValueError("Cargo capacity changed; cancel and request a fresh quote")
+            offer_row = next(row for row in contact["trade_offer"]["items"]
+                             if row["item_id"] == item_id)
+            if offer_row["sell_quantity"] < quantity:
+                raise ValueError("The explicit offer no longer covers this quantity")
+            # No fallible checks follow the first assignment: both ledgers move
+            # together under the single-threaded world command boundary.
+            economy.money -= total
+            economy.cargo[item_id] = economy.cargo.get(item_id, 0) + quantity
+            target["cargo"][item_id] -= quantity
+            target["silver"] += total
+            offer_row["sell_quantity"] -= quantity
+        else:
+            if economy.available_cargo(item_id) < quantity:
+                raise ValueError("Cargo changed or is reserved; cancel and request a fresh quote")
+            if target["silver"] < total:
+                raise ValueError("Merchant purse changed; cancel and request a fresh quote")
+            offer_row = next(row for row in contact["trade_offer"]["items"]
+                             if row["item_id"] == item_id)
+            if offer_row["buy_quantity"] < quantity:
+                raise ValueError("The explicit offer no longer covers this quantity")
+            economy.remove(item_id, quantity)
+            economy.money += total
+            target["cargo"][item_id] = target["cargo"].get(item_id, 0) + quantity
+            target["silver"] -= total
+            offer_row["buy_quantity"] -= quantity
+
+        committed_tick = world.clock.total_ticks
+        receipt = {key: deepcopy(pending[key]) for key in (
+            "transaction_id", "sequence", "offer_id", "item_id", "quantity",
+            "buying", "unit_price", "total", "quoted_tick")}
+        receipt["committed_tick"] = committed_tick
+        contact["trade_receipts"].append(receipt)
+        contact["trade_pending"] = None
+        encounter["contact"] = contact
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=committed_tick)
+        direction = "Bought" if pending["buying"] else "Sold"
+        text = (f"{direction} {quantity} {item_id} from {encounter['name']} for "
+                f"{total} Marks; vessel stock and purse updated.")
+        economy.record(text)
+        world.message(text + " One minute of ship time passed.")
+        self.advance_encounter_action_time(world, 6000)
+        return sea_trade.copy_receipt(receipt)
+
+    def _record_witnessed_hostile_fire(self, world):
+        """Record the legacy artillery's actual NPC return shot, if witnessed."""
+        if not self.voyage or self.voyage.get("status") != "encounter":
+            raise ValueError("A witnessed hostile shot requires the active encounter")
+        encounter = self.voyage.get("encounter")
+        if not isinstance(encounter, dict) or not encounter.get("id"):
+            raise ValueError("A witnessed hostile shot requires an identified vessel")
+        instance_id = encounter.get("contact_instance_id", encounter["id"])
+        return self.conduct_ledger.record(
+            tick=world.clock.total_ticks, cause="committed_fire",
+            aggressor_id=encounter["id"], target_id=world.player.id,
+            encounter_id=instance_id, witnesses=[world.player.id])
+
+    def hostile_commitment_basis(self, world, encounter):
+        if not isinstance(encounter, dict):
+            return None
+        instance_id = encounter.get("contact_instance_id", encounter.get("id"))
+        return self.conduct_ledger.authorization(
+            target_id=encounter.get("id"), actor_id=world.player.id,
+            encounter_id=instance_id, current_tick=world.clock.total_ticks)
 
     def signal_sighting(self, world, intent):
         """Exchange one bounded signal subject at a real one-minute cost."""
@@ -748,7 +983,7 @@ class VoyageSystem:
         encounter, _contact = self._encounter_state(world)
         if world.combat.active:
             raise ValueError("Parley is unavailable during active combat")
-        result = sea_encounter.parley(encounter, topic)
+        result = sea_encounter.parley(encounter, topic, world=world)
         self.advance_encounter_action_time(world, 6000)
         self._record(result["text"])
         world.message(result["text"])
@@ -785,6 +1020,165 @@ class VoyageSystem:
         self._record("Captain withdrew the pending peaceful crossing request.")
         world.message("The peaceful crossing request is withdrawn. No person moved.")
         return request
+
+    def complete_peaceful_crossing(self, world):
+        """Commit one consented visit over a verified walkable gangplank path."""
+        encounter, contact = self._encounter_state(world, allow_pending=True)
+        known_people = {sailor.id for sailor in world.ship.crew}
+        living_people = [sailor.id for sailor in world.ship.crew if sailor.health > 0]
+        sea_encounter.validate_sighting(
+            encounter, valid_nodes=SEA_NODES,
+            valid_people=known_people | {world.player.id},
+            living_people=living_people, captain_id=world.player.id,
+            current_tick=world.clock.total_ticks)
+        request = contact.get("crossing")
+        if not request:
+            raise ValueError("There is no welcomed crossing request to complete")
+        if (not self.voyage or self.voyage.get("status") != "encounter"
+                or not world.at_sea or world.combat.active):
+            raise ValueError("A peaceful crossing requires an active sea encounter")
+        if contact["range"] != "close":
+            raise ValueError("A peaceful crossing requires close range")
+        parley = contact.get("parley") or {}
+        if not parley.get("transfer_permission") or parley.get("warned_off"):
+            raise ValueError("The other captain has not granted this contact's crossing permission")
+        if contact.get("crossing_completed") or self.voyage.get("deck_visit") is not None:
+            raise ValueError("This contact already has a completed or active crossing")
+        if request["participants"][0] != world.player.id:
+            raise ValueError("The crossing manifest must begin with the captain")
+        if len(request["participants"]) > sea_transfer.DECK_CAPACITY:
+            raise ValueError("The other vessel's visit deck has insufficient capacity")
+        target = next((ship for ship in world.npcs.ships
+                       if ship["id"] == encounter["id"]), None)
+        if target is None or target.get("condition", 0) <= 0:
+            raise ValueError("The welcomed vessel is no longer available for a crossing")
+
+        actors = sea_transfer.actor_map(world)
+        participants = request["participants"]
+        if any(sid not in actors or sid != world.player.id
+               and actors[sid].health <= 0 for sid in participants):
+            raise ValueError("Every crossing participant must be present and living")
+        moving_ids = set(participants)
+        if any(not sea_transfer.in_home_ship(
+                actors[sid].x, actors[sid].y, getattr(actors[sid], "z", 0))
+               for sid in participants):
+            raise ValueError("Every participant must start aboard the Wayward's main deck")
+
+        sea_transfer.apply_deck(world)
+        try:
+            for sid, destination in zip(participants, sea_transfer.LANDING_CELLS):
+                if not sea_transfer.reachable(world, actors[sid], destination, moving_ids):
+                    raise ValueError("No clear reachable path from the Wayward to the other vessel's deck")
+        except Exception:
+            sea_transfer.clear_deck(world)
+            raise
+
+        deck_visit = {
+            "version": 1, "target_id": encounter["id"],
+            "contact_instance_id": encounter.get("contact_instance_id", encounter["id"]),
+            "participants": list(participants), "started_tick": world.clock.total_ticks,
+        }
+        for sid, destination in zip(participants, sea_transfer.LANDING_CELLS):
+            actors[sid].x, actors[sid].y, actors[sid].z = destination[0], destination[1], 0
+        contact["crossing"] = None
+        contact["crossing_completed"] = True
+        self.voyage["deck_visit"] = deck_visit
+        sea_encounter.validate_contact(
+            contact, encounter["id"], contact_instance_id=(
+                encounter.get("contact_instance_id", encounter["id"])),
+            current_tick=world.clock.total_ticks)
+        world.refresh()
+        self._record(f"The welcomed party crossed to {encounter['name']}'s deck by gangplank.")
+        world.message(
+            f"Crossing completed: {len(participants)} named person(s) are on {encounter['name']}'s deck. "
+            "Walk back across the gangplank or order the party home; 1 minute passes.")
+        self.advance_encounter_action_time(world, 6000)
+        return deepcopy(deck_visit)
+
+    def return_crossing_party(self, world):
+        """Return the recorded visitors along a clear path to the Wayward."""
+        visit = self.voyage.get("deck_visit") if self.voyage else None
+        if not isinstance(visit, dict):
+            raise ValueError("No peaceful crossing party is away from the Wayward")
+        if (set(visit) != {"version", "target_id", "contact_instance_id",
+                          "participants", "started_tick"}
+                or type(visit.get("version")) is not int or visit["version"] != 1
+                or not isinstance(visit.get("target_id"), str)
+                or not isinstance(visit.get("contact_instance_id"), str)
+                or not isinstance(visit.get("participants"), list)
+                or not visit["participants"]
+                or len(visit["participants"]) > sea_transfer.DECK_CAPACITY
+                or any(not isinstance(sid, str) or not sid for sid in visit["participants"])
+                or len(set(visit["participants"])) != len(visit["participants"])
+                or visit["participants"][0] != world.player.id
+                or type(visit.get("started_tick")) is not int
+                or not 0 <= visit["started_tick"] <= world.clock.total_ticks):
+            raise ValueError("Invalid saved peaceful deck visit")
+        encounter = self.voyage.get("encounter")
+        instance_id = (encounter.get("contact_instance_id", encounter.get("id"))
+                       if isinstance(encounter, dict) else None)
+        if (not encounter or encounter.get("id") != visit["target_id"]
+                or instance_id != visit["contact_instance_id"]):
+            raise ValueError("The saved crossing belongs to another contact instance")
+        if not world.at_sea or world.combat.active:
+            raise ValueError("The crossing party can return only during the active sea encounter")
+        actors = sea_transfer.actor_map(world)
+        participants = visit["participants"]
+        if any(sid not in actors for sid in participants):
+            raise ValueError("A crossing participant is no longer available to return")
+        moving_ids = set(participants)
+        destinations = {}
+        reserved = set()
+        for sid in participants:
+            actor = actors[sid]
+            current = (actor.x, actor.y, getattr(actor, "z", 0))
+            if sea_transfer.in_home_ship(*current):
+                if current[:2] in reserved:
+                    raise ValueError("Crossing participants overlap on the Wayward")
+                destinations[sid] = current[:2]
+                reserved.add(current[:2])
+        for sid in participants:
+            if sid in destinations:
+                continue
+            actor = actors[sid]
+            destination = next((cell for cell in sea_transfer.RETURN_CELLS
+                                if cell not in reserved
+                                and sea_transfer.reachable(world, actor, cell, moving_ids)), None)
+            if destination is None:
+                raise ValueError("No clear reachable path back across the gangplank")
+            destinations[sid] = destination
+            reserved.add(destination)
+
+        for sid, (x, y) in destinations.items():
+            actors[sid].x, actors[sid].y, actors[sid].z = x, y, 0
+        self.voyage["deck_visit"] = None
+        sea_transfer.clear_deck(world)
+        self._record(f"The peaceful crossing party returned from {encounter['name']}.")
+        world.message("The crossing party is back aboard the Wayward; 1 minute passes.")
+        self.advance_encounter_action_time(world, 6000)
+        return list(participants)
+
+    def rebuild_transfer_deck(self, world):
+        """Recreate the ephemeral NPC deck after the saved sea map is restored."""
+        if self.voyage and self.voyage.get("deck_visit") is not None:
+            sea_transfer.apply_deck(world)
+            self.refresh_transfer_state(world)
+
+    def refresh_transfer_state(self, world):
+        """Drop the temporary deck only after every visitor has returned home."""
+        visit = self.voyage.get("deck_visit") if self.voyage else None
+        if not isinstance(visit, dict):
+            return False
+        actors = sea_transfer.actor_map(world)
+        if any(sid not in actors for sid in visit["participants"]):
+            return False
+        if all(sea_transfer.in_home_ship(
+                actors[sid].x, actors[sid].y, getattr(actors[sid], "z", 0))
+               for sid in visit["participants"]):
+            self.voyage["deck_visit"] = None
+            sea_transfer.clear_deck(world)
+            return True
+        return False
 
     def request_naval_combat(self, world, cannon):
         """Create the cannon-fire handoff; never fire or consume ammunition here."""
@@ -845,6 +1239,10 @@ class VoyageSystem:
             messages.append(f"The shot misses {target['name']}.")
 
         if target["condition"] > 20 and target.get("cargo", {}).get("shot", 0) > 0:
+            # The NPC has committed a witnessed return shot. Record scoped
+            # evidence before mutating its finite shot stock; this remains
+            # legacy combat behavior.
+            self._record_witnessed_hostile_fire(world)
             target["cargo"]["shot"] -= 1
             society = getattr(world, "society", None)
             score = (society._strength_for_ship(target)["score"]
@@ -886,7 +1284,8 @@ class VoyageSystem:
         return {"position": self.position, "roles": dict(self.roles), "voyage": deepcopy(self.voyage),
                 "captain_action": self.captain_action, "crew_order": deepcopy(self.crew_order),
                 "last_sim_hour": self.last_sim_hour, "events": list(self.events),
-                "captain_fatigue": self.captain_fatigue}
+                "captain_fatigue": self.captain_fatigue,
+                "conduct_ledger": self.conduct_ledger.snapshot()}
 
     @classmethod
     def restore(cls, data, world):
@@ -930,6 +1329,7 @@ class VoyageSystem:
         voyage = deepcopy(data["voyage"])
         if voyage is not None:
             voyage.setdefault("storm_event", None)
+            voyage.setdefault("deck_visit", None)
             voyage.setdefault("initial_estimate_seconds", voyage.get("duration_seconds", 0))
             voyage.setdefault("departure_snapshot", None)
             voyage.setdefault("arrival_snapshot", None)
@@ -964,7 +1364,44 @@ class VoyageSystem:
                 sea_encounter.validate_sighting(
                     voyage["encounter"], valid_nodes=SEA_NODES,
                     valid_people=set(living_ids) | {world.player.id},
-                    living_people=living_ids, captain_id=world.player.id)
+                    living_people=living_ids, captain_id=world.player.id,
+                    current_tick=world.clock.total_ticks)
+            visit = voyage.get("deck_visit")
+            if visit is not None:
+                required_visit = {"version", "target_id", "contact_instance_id",
+                                  "participants", "started_tick"}
+                encounter = voyage.get("encounter")
+                contact = encounter.get("contact", {}) if isinstance(encounter, dict) else {}
+                instance_id = (encounter.get("contact_instance_id", encounter.get("id"))
+                               if isinstance(encounter, dict) else None)
+                valid_people = {crew.id for crew in world.ship.crew}
+                valid_people.add(world.player.id)
+                if (voyage["status"] != "encounter"
+                        or not isinstance(visit, dict) or set(visit) != required_visit
+                        or type(visit["version"]) is not int or visit["version"] != 1
+                        or not isinstance(visit["target_id"], str)
+                        or visit["target_id"] != encounter.get("id")
+                        or not isinstance(visit["contact_instance_id"], str)
+                        or visit["contact_instance_id"] != instance_id
+                        or not isinstance(visit["participants"], list)
+                        or not visit["participants"]
+                        or len(visit["participants"]) > sea_transfer.DECK_CAPACITY
+                        or len(set(visit["participants"])) != len(visit["participants"])
+                        or visit["participants"][0] != world.player.id
+                        or any(sid not in valid_people for sid in visit["participants"])
+                        or type(visit["started_tick"]) is not int
+                        or not 0 <= visit["started_tick"] <= world.clock.total_ticks
+                        or not contact.get("crossing_completed")
+                        or contact.get("crossing") is not None):
+                    raise ValueError("Invalid saved peaceful deck visit")
+                actors = sea_transfer.actor_map(world)
+                if any(not (sea_transfer.in_deck(actors[sid].x, actors[sid].y)
+                            or sea_transfer.in_home_ship(
+                                actors[sid].x, actors[sid].y,
+                                getattr(actors[sid], "z", 0)))
+                       or getattr(actors[sid], "z", 0) != 0
+                       for sid in visit["participants"]):
+                    raise ValueError("Saved crossing participant is outside the two reachable decks")
             storm = voyage.get("storm_event")
             if storm is not None:
                 if (not isinstance(storm, dict)
@@ -1064,6 +1501,28 @@ class VoyageSystem:
             raise ValueError("Invalid captain fatigue")
         if type(system.last_sim_hour) is not int or system.last_sim_hour < 0 or not isinstance(system.events, list) or len(system.events) > 60 or any(not isinstance(e, str) for e in system.events):
             raise ValueError("Invalid voyage history")
+        system.conduct_ledger = SeaConductLedger.restore(
+            data.get("conduct_ledger"), current_tick=world.clock.total_ticks)
+        if system.voyage and system.voyage.get("encounter"):
+            encounter = system.voyage["encounter"]
+            contact = encounter.get("contact", {})
+            handoff = contact.get("combat_pending") if isinstance(contact, dict) else None
+            basis_id = handoff.get("lawful_basis_id") if isinstance(handoff, dict) else None
+            if handoff is not None:
+                if basis_id is None:
+                    # Pre-policy saves could contain hostile requests created
+                    # from proximity/refusal alone. They are uncommitted, so
+                    # cancel them rather than upgrading unsupported conduct.
+                    contact["combat_pending"] = None
+                    system.events = (system.events + [
+                        "Cancelled an unsupported legacy hostile handoff; no witnessed attack or verified warrant was saved."])[-60:]
+                else:
+                    basis = system.conduct_ledger.authorization(
+                        target_id=encounter.get("id"), actor_id=world.player.id,
+                        encounter_id=encounter.get("contact_instance_id", encounter.get("id")),
+                        current_tick=world.clock.total_ticks)
+                    if basis is None or basis["event_id"] != basis_id:
+                        raise ValueError("Combat handoff lacks matching saved lawful evidence")
         return system
 
 
@@ -1074,6 +1533,7 @@ class NpcFleetSystem:
         self.sighted = set()
         self.sighting_reports = {}
         self.player_contacts = {}
+        self.contact_tracks = {}
         self.roster_mode = "authored"
         self.population_total = 40
         self.generation_manifest = None
@@ -1084,6 +1544,8 @@ class NpcFleetSystem:
             {"id": "blackwake_escort", "name": "Blackwake's Ashen Gull", "faction": "Free Syndicate", "node": "shoals", "destination": "navy_lane", "mission": "hunt", "cargo": {"shot": 3}, "silver": 130, "crew": 6, "captives": 0, "threat": "pirates", "condition": 90},
             {"id": "jackal_sloop", "name": "Salt Jackals' Swift", "faction": "Free Syndicate", "node": "deepwater", "destination": "freeport", "mission": "trade", "cargo": {"beans": 4}, "silver": 110, "crew": 5, "captives": 0, "threat": "merchant", "condition": 84},
         ]
+        self._seed_motion(0)
+        self._last_player_sample = None
         self.market = {"enslaved_people": 5, "silver": 500}
         self.events = []
 
@@ -1099,6 +1561,7 @@ class NpcFleetSystem:
         system.roster_mode = "generated"
         system.generation_manifest = deepcopy(generated["manifest"])
         system.ships = deepcopy(list(ships.values()))
+        system._seed_motion(0)
         system.market = {"enslaved_people": int(ledger.get("unassigned", 0)), "silver": 500}
         system.population_total = int(ledger.get("total", -1))
         headcount = system.market["enslaved_people"] + sum(
@@ -1107,8 +1570,111 @@ class NpcFleetSystem:
             raise ValueError("Generated NPC opening population is not conserved")
         return system
 
+    def _seed_motion(self, start_tick):
+        """Start authored/generated opening traffic on its first legal route edge."""
+        for ship in self.ships:
+            ship["motion"] = None
+            if ship["node"] == ship["destination"]:
+                continue
+            route, _ = VoyageSystem.shortest_route(self, ship["node"], ship["destination"])
+            if len(route) > 1:
+                ship["motion"] = {"from": route[0], "to": route[1],
+                                  "start_tick": start_tick, "paused_at_tick": None}
+
+    @staticmethod
+    def _chart_position(ship, total_ticks):
+        motion = ship.get("motion")
+        if motion is None:
+            return SEA_NODES[ship["node"]]["xy"]
+        effective_tick = (min(total_ticks, motion["paused_at_tick"])
+                          if motion["paused_at_tick"] is not None else total_ticks)
+        fraction = max(0.0, min(1.0, (effective_tick - motion["start_tick"])
+                                / NPC_LANE_HOP_TICKS))
+        start = SEA_NODES[motion["from"]]["xy"]
+        end = SEA_NODES[motion["to"]]["xy"]
+        return (start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction)
+
+    @staticmethod
+    def _set_motion_paused(ship, paused, total_ticks):
+        motion = ship.get("motion")
+        if motion is None:
+            return
+        if paused:
+            if motion["paused_at_tick"] is None:
+                motion["paused_at_tick"] = total_ticks
+        elif motion["paused_at_tick"] is not None:
+            motion["start_tick"] += max(0, total_ticks - motion["paused_at_tick"])
+            motion["paused_at_tick"] = None
+
+    def _start_next_motion(self, ship, start_tick):
+        if ship.get("motion") is not None or ship["node"] == ship["destination"]:
+            return
+        route, _ = VoyageSystem.shortest_route(self, ship["node"], ship["destination"])
+        if len(route) > 1:
+            ship["motion"] = {"from": route[0], "to": route[1],
+                              "start_tick": start_tick, "paused_at_tick": None}
+
     def _event(self, text):
         self.events = (self.events + [text])[-80:]
+
+    def clear_active_contacts(self, total_ticks):
+        """End lookout continuity when the player is no longer at sea."""
+        for track in self.contact_tracks.values():
+            if track["active"]:
+                track.update({"active": False, "separation_since_tick": None,
+                              "lost_tick": total_ticks})
+
+    def contact_record_for_encounter(self, ship_id, encounter):
+        record = self.player_contacts.get(ship_id)
+        if record is None:
+            return None
+        instance_id = encounter.get("contact_instance_id", ship_id)
+        if record.get("contact_instance_id", ship_id) != instance_id:
+            return None
+        return record
+
+    def _update_sighting_report(self, world, ship, current_hour):
+        society = getattr(world, "society", None)
+        estimated_strength = (society._strength_for_ship(ship)["score"]
+                              if society and society.mode == "generated" else None)
+        self.sighting_reports[ship["id"]] = {
+            "node": ship["node"], "observed_hour": current_hour,
+            "crew": ship["crew"], "condition": ship["condition"],
+            **({"estimated_strength": estimated_strength}
+               if estimated_strength is not None else {}),
+        }
+
+    def _observe_contact(self, world, ship, distance, total_ticks, current_hour, *, enabled):
+        """Track visibility hysteretically and return only a new instance."""
+        if not enabled:
+            return None
+        ship_id = ship["id"]
+        track = self.contact_tracks.get(ship_id)
+        if track and track["active"]:
+            if distance <= CONTACT_LOSS_RADIUS:
+                track["last_seen_tick"] = total_ticks
+                track["separation_since_tick"] = None
+                self._update_sighting_report(world, ship, current_hour)
+            else:
+                if track["separation_since_tick"] is None:
+                    track["separation_since_tick"] = total_ticks
+                elif total_ticks - track["separation_since_tick"] >= CONTACT_LOSS_DELAY_TICKS:
+                    track.update({"active": False, "separation_since_tick": None,
+                                  "lost_tick": total_ticks})
+            return None
+        if distance > LOOKOUT_RADIUS:
+            return None
+        sequence = (track["sequence"] if track else 0) + 1
+        instance_id = f"{ship_id}:{sequence}"
+        self.contact_tracks[ship_id] = {
+            "sequence": sequence, "instance_id": instance_id, "active": True,
+            "first_seen_tick": total_ticks, "last_seen_tick": total_ticks,
+            "separation_since_tick": None, "lost_tick": None,
+        }
+        self.sighted.add(ship_id)
+        self._update_sighting_report(world, ship, current_hour)
+        return instance_id
 
     def _encountered_ship(self, world, ship_id):
         voyage = world.voyages.voyage
@@ -1119,6 +1685,11 @@ class NpcFleetSystem:
         ship = next((row for row in self.ships if row["id"] == ship_id), None)
         if ship is None:
             raise ValueError("The sighted vessel is no longer in the fleet")
+        instance_id = encounter.get("contact_instance_id")
+        if instance_id is not None:
+            track = self.contact_tracks.get(ship_id)
+            if not track or not track["active"] or track["instance_id"] != instance_id:
+                raise ValueError("That lookout contact instance has ended")
         if encounter.get("node") != ship.get("node"):
             raise ValueError("The vessel has moved on from its reported encounter position")
         return ship
@@ -1131,12 +1702,15 @@ class NpcFleetSystem:
             raise ValueError("Cannot exchange signals during active combat")
         if ship["threat"] == "pirates":
             raise ValueError("The hostile pirate vessel will not answer a peaceful hail")
-        record = self.player_contacts.get(ship_id)
+        encounter = world.voyages.voyage["encounter"]
+        record = self.contact_record_for_encounter(ship_id, encounter)
         if record and record["hailed"]:
             raise ValueError("A signal exchange with this vessel is already recorded")
         hour = world.clock.total_ticks // 360000
         if record is None:
             record = {"first_hour": hour, "last_hour": hour, "hailed": True, "aid_count": 0}
+            if "contact_instance_id" in encounter:
+                record["contact_instance_id"] = encounter["contact_instance_id"]
             self.player_contacts[ship_id] = record
         else:
             record.update({"last_hour": hour, "hailed": True})
@@ -1152,10 +1726,10 @@ class NpcFleetSystem:
             raise ValueError("A pending encounter request blocks repair aid")
         if world.combat.active:
             raise ValueError("Cannot offer repair aid during active combat")
-        record = self.player_contacts.get(ship_id)
+        encounter = world.voyages.voyage.get("encounter")
+        record = self.contact_record_for_encounter(ship_id, encounter)
         if ship["threat"] == "pirates":
             raise ValueError("Do not transfer repair stores to a hostile pirate vessel")
-        encounter = world.voyages.voyage.get("encounter")
         contact = sea_encounter.contact_of(encounter, create=False)
         signaled = any(row["outcome"] == "answered" for row in contact["signals"])
         if not signaled and (not record or not record["hailed"]):
@@ -1175,6 +1749,8 @@ class NpcFleetSystem:
         hour = world.clock.total_ticks // 360000
         if record is None:
             record = {"first_hour": hour, "last_hour": hour, "hailed": False, "aid_count": 0}
+            if "contact_instance_id" in encounter:
+                record["contact_instance_id"] = encounter["contact_instance_id"]
             self.player_contacts[ship_id] = record
         record["last_hour"] = hour
         record["aid_count"] = 1
@@ -1185,47 +1761,102 @@ class NpcFleetSystem:
         return repair
 
     def advance_second(self, world, player_node, sighting_enabled=False, reserved_ship_ids=()):
-        # One fleet activity pulse per simulated hour. Ships move only on charted
-        # lanes; their cargo, purses and captive headcounts remain conserved.
-        if world.clock.total_ticks // 360000 <= self.hour:
-            return None
-        self.hour = world.clock.total_ticks // 360000
+        # Strategy/activity remains hourly, but each legal lane hop is observed
+        # continuously across that hour on the shared chart coordinate system.
+        total_ticks = world.clock.total_ticks
+        current_hour = total_ticks // NPC_LANE_HOP_TICKS
         reserved = set(reserved_ship_ids)
         for ship in self.ships:
-            if ship["id"] not in reserved:
+            self._set_motion_paused(ship, ship["id"] in reserved, total_ticks)
+
+        # A paused edge may finish between global hour boundaries after its
+        # clock is shifted on release. Complete it on its actual chart-time end.
+        for ship in self.ships:
+            motion = ship.get("motion")
+            if (ship["id"] not in reserved and motion is not None
+                    and motion["paused_at_tick"] is None
+                    and total_ticks >= motion["start_tick"] + NPC_LANE_HOP_TICKS):
+                ship["node"] = motion["to"]
+                ship["motion"] = None
+
+        # Catch up one boundary at a time. Normal play reaches each boundary
+        # through ShipLife's per-second hook; generated prehistory may call this
+        # once per hour. Both paths must end at the same strategic state.
+        while self.hour < current_hour:
+            step_hour = self.hour + 1
+            boundary_tick = step_hour * NPC_LANE_HOP_TICKS
+            for ship in self.ships:
+                if ship["id"] in reserved:
+                    continue
+                motion = ship.get("motion")
+                if (motion is not None and motion["paused_at_tick"] is None
+                        and boundary_tick >= motion["start_tick"] + NPC_LANE_HOP_TICKS):
+                    ship["node"] = motion["to"]
+                    ship["motion"] = None
+            for ship in self.ships:
+                if ship["id"] in reserved or ship.get("motion") is not None:
+                    continue
                 if ship["node"] == ship["destination"]:
-                    self._activity(world, ship)
-                    choices = [b if a == ship["node"] else a for a, b in LANES if a == ship["node"] or b == ship["node"]]
+                    if getattr(world, "scenario_id", None) != "lawful-trader-mvp":
+                        self._activity(world, ship)
+                    choices = [b if a == ship["node"] else a
+                               for a, b in LANES if a == ship["node"] or b == ship["node"]]
                     if choices:
                         # Deterministic faction-specific route preference.
-                        ship["destination"] = sorted(choices)[(self.hour + len(ship["id"])) % len(choices)]
+                        ship["destination"] = sorted(choices)[(step_hour + len(ship["id"])) % len(choices)]
                 else:
-                    route, _ = VoyageSystem.shortest_route(self, ship["node"], ship["destination"])
-                    if len(route) > 1:
-                        ship["node"] = route[1]
-            player_xy = SEA_NODES[player_node]["xy"] if isinstance(player_node, str) else player_node
-            ship_xy = SEA_NODES[ship["node"]]["xy"]
-            nearby = math.hypot(ship_xy[0] - player_xy[0], ship_xy[1] - player_xy[1]) <= 1.25
-            if sighting_enabled and nearby:
-                first_sighting = ship["id"] not in self.sighted
-                self.sighted.add(ship["id"])
-                society = getattr(world, "society", None)
-                estimated_strength = (society._strength_for_ship(ship)["score"]
-                                      if society and society.mode == "generated" else None)
-                self.sighting_reports[ship["id"]] = {
-                    "node": ship["node"], "observed_hour": self.hour,
-                    "crew": ship["crew"], "condition": ship["condition"],
-                    **({"estimated_strength": estimated_strength}
-                       if estimated_strength is not None else {}),
+                    self._start_next_motion(ship, boundary_tick)
+            self.hour = step_hour
+
+        player_xy = (SEA_NODES[player_node]["xy"] if isinstance(player_node, str)
+                     else (float(player_node[0]), float(player_node[1])))
+        prior_sample = self._last_player_sample
+        sighting = None
+        for ship in self.ships:
+            ship_xy = self._chart_position(ship, total_ticks)
+            distance = math.hypot(ship_xy[0] - player_xy[0], ship_xy[1] - player_xy[1])
+            instance_id = self._observe_contact(
+                world, ship, distance, total_ticks, current_hour,
+                enabled=sighting_enabled)
+            if instance_id is not None:
+                vessel_before = (self._chart_position(ship, prior_sample["tick"])
+                                 if prior_sample else None)
+                prior_player = prior_sample["xy"] if prior_sample else None
+                elapsed = ((total_ticks - prior_sample["tick"]) / TICKS_PER_SECOND
+                           if prior_sample else 0)
+                prior_nearby = (vessel_before is not None and prior_player is not None
+                                and math.hypot(vessel_before[0] - prior_player[0],
+                                               vessel_before[1] - prior_player[1]) <= LOOKOUT_RADIUS)
+                observation = relative_observation(
+                    player_xy, ship_xy,
+                    player_before=prior_player if prior_nearby else None,
+                    vessel_before=vessel_before if prior_nearby else None,
+                    elapsed_seconds=elapsed if prior_nearby else 0)
+                sighting = {
+                    key: deepcopy(ship[key])
+                    for key in ("id", "name", "faction", "node", "crew",
+                                "condition", "threat")
                 }
-                if first_sighting:
-                    return deepcopy(ship)
+                if isinstance(ship.get("organization_id"), str):
+                    sighting["organization_id"] = ship["organization_id"]
+                sighting["contact_instance_id"] = instance_id
+                sighting["chart_position"] = [round(ship_xy[0], 5), round(ship_xy[1], 5)]
+                sighting["relative_observation"] = observation
+                break
+        self._last_player_sample = {"tick": total_ticks, "xy": player_xy}
+        if sighting is not None:
+            return sighting
         return None
 
     def _activity(self, world, ship):
         self._repair_generated_vessel(world, ship)
         if ship["mission"] == "trade":
             port = SEA_NODES[ship["node"]].get("port")
+            # Freeport's new player-facing merchant is part of the authored
+            # lawful MVP. Preserve the pre-existing legacy NPC anchorage loop:
+            # its cargo/captive ledger must not become a different market model.
+            if port == "freeport" and getattr(world, "scenario_id", None) != "lawful-trader-mvp":
+                port = None
             if port:
                 local_merchants = [mid for mid, merchant in MERCHANTS.items() if merchant["port"] == port]
                 for item_id, carried in list(ship["cargo"].items()):
@@ -1327,13 +1958,16 @@ class NpcFleetSystem:
                 "events": list(self.events), "sighted": sorted(self.sighted),
                 "sighting_reports": deepcopy(self.sighting_reports),
                 "player_contacts": deepcopy(self.player_contacts),
+                "contact_tracks": deepcopy(self.contact_tracks),
                 "roster_mode": self.roster_mode, "population_total": self.population_total,
                 "generation_manifest": deepcopy(self.generation_manifest)}
 
     @classmethod
-    def restore(cls, data, generation_manifest=None):
+    def restore(cls, data, generation_manifest=None, *, scenario_id=None, current_tick=None):
         system = cls()
         if data is None:
+            if scenario_id is not None:
+                raise ValueError("Authored scenario save is missing its NPC fleet")
             if generation_manifest is not None:
                 from pirates.npc_generation import generate_society, validate_manifest
                 system = cls.from_generated(generate_society(validate_manifest(generation_manifest)))
@@ -1352,13 +1986,19 @@ class NpcFleetSystem:
             raise ValueError("Generated NPC roster requires a generation manifest")
         canonical = {s["id"]: s for s in system.ships}
         rows = deepcopy(data["ships"])
+        for row in rows:
+            row.setdefault("motion", None)
         legacy_ids = {"syndicate_1", "government_1", "raider_1"}
         if mode == "authored" and len(rows) == 3 and {row.get("id") for row in rows} == legacy_ids:
             # Older v3 saves had three NPC ships and no condition field. Preserve
             # their ledgers, then seed the new named society vessels once.
             for row in rows:
                 row.setdefault("condition", canonical[row["id"]]["condition"])
-            rows.extend(deepcopy(canonical[sid]) for sid in ("blackwake_escort", "jackal_sloop"))
+            added = [deepcopy(canonical[sid])
+                     for sid in ("blackwake_escort", "jackal_sloop")]
+            for row in added:
+                row["motion"] = None  # New compatibility hulls have no travel history.
+            rows.extend(added)
         if mode == "authored" and len(rows) != len(system.ships):
             raise ValueError("Invalid NPC fleet count")
         seen = set()
@@ -1378,6 +2018,21 @@ class NpcFleetSystem:
                 raise ValueError("Invalid generated NPC ship activity")
             if row.get("node") not in SEA_NODES or row.get("destination") not in SEA_NODES:
                 raise ValueError("Invalid NPC ship route")
+            motion = row.get("motion")
+            if motion is not None:
+                limit_tick = (current_tick if type(current_tick) is int
+                              else (data["hour"] + 1) * NPC_LANE_HOP_TICKS)
+                if (not isinstance(motion, dict)
+                        or set(motion) != {"from", "to", "start_tick", "paused_at_tick"}
+                        or motion["from"] != row["node"]
+                        or motion["from"] not in SEA_NODES or motion["to"] not in SEA_NODES
+                        or not any({motion["from"], motion["to"]} == set(lane) for lane in LANES)
+                        or type(motion["start_tick"]) is not int
+                        or not 0 <= motion["start_tick"] <= limit_tick
+                        or motion["paused_at_tick"] is not None
+                        and (type(motion["paused_at_tick"]) is not int
+                             or not motion["start_tick"] <= motion["paused_at_tick"] <= limit_tick)):
+                    raise ValueError("Invalid NPC lane motion state")
             for key in ("silver", "crew", "captives"):
                 if type(row.get(key)) is not int or row[key] < 0:
                     raise ValueError("Invalid NPC cargo ledger")
@@ -1399,15 +2054,51 @@ class NpcFleetSystem:
         population_total = data.get("population_total", 40)
         if type(population_total) is not int or population_total < 0 or headcount != population_total:
             raise ValueError("NPC captive/crew headcount was created or lost")
-        if mode == "authored" and population_total != 40:
+        if scenario_id == "lawful-trader-mvp":
+            if (mode != "authored" or population_total != 34
+                    or market["enslaved_people"] != 0
+                    or any(row["captives"] for row in rows)):
+                raise ValueError("Invalid lawful-trader sample population baseline")
+        elif scenario_id is not None:
+            raise ValueError("Unsupported scenario NPC roster")
+        elif mode == "authored" and population_total != 40:
             raise ValueError("Invalid authored NPC headcount baseline")
         events = data["events"]
         if not isinstance(events, list) or len(events) > 80 or any(not isinstance(x, str) for x in events):
             raise ValueError("Invalid NPC event history")
         system.hour, system.ships, system.market, system.events = data["hour"], rows, dict(market), list(events)
+        system._last_player_sample = None
         system.sighted = set(data.get("sighted", []))
         if any(sid not in seen for sid in system.sighted):
             raise ValueError("Invalid NPC sighting ledger")
+        tracks = deepcopy(data.get("contact_tracks", {}))
+        limit_tick = (current_tick if type(current_tick) is int
+                      else (system.hour + 1) * NPC_LANE_HOP_TICKS)
+        if not isinstance(tracks, dict) or not set(tracks).issubset(system.sighted):
+            raise ValueError("Invalid NPC lookout contact tracks")
+        for ship_id, track in tracks.items():
+            fields = {"sequence", "instance_id", "active", "first_seen_tick",
+                      "last_seen_tick", "separation_since_tick", "lost_tick"}
+            if (not isinstance(track, dict) or set(track) != fields
+                    or type(track["sequence"]) is not int
+                    or not 1 <= track["sequence"] <= 1_000_000
+                    or track["instance_id"] != f"{ship_id}:{track['sequence']}"
+                    or type(track["active"]) is not bool
+                    or type(track["first_seen_tick"]) is not int
+                    or type(track["last_seen_tick"]) is not int
+                    or not 0 <= track["first_seen_tick"] <= track["last_seen_tick"] <= limit_tick):
+                raise ValueError("Invalid NPC lookout contact track")
+            separated = track["separation_since_tick"]
+            lost = track["lost_tick"]
+            if track["active"]:
+                if (lost is not None or separated is not None and
+                        (type(separated) is not int
+                         or not track["last_seen_tick"] <= separated <= limit_tick)):
+                    raise ValueError("Invalid active NPC lookout contact track")
+            elif (separated is not None or type(lost) is not int
+                  or not track["last_seen_tick"] <= lost <= limit_tick):
+                raise ValueError("Invalid lost NPC lookout contact track")
+        system.contact_tracks = tracks
         reports = deepcopy(data.get("sighting_reports", {}))
         if (not isinstance(reports, dict) or not set(reports).issubset(system.sighted)
                 or any(not isinstance(report, dict) or report.get("node") not in SEA_NODES
@@ -1423,16 +2114,27 @@ class NpcFleetSystem:
             raise ValueError("Invalid NPC player sighting reports")
         system.sighting_reports = reports
         contacts = deepcopy(data.get("player_contacts", {}))
-        if (not isinstance(contacts, dict) or not set(contacts).issubset(system.sighted)
-                or any(not isinstance(row, dict) or set(row) != {
-                    "first_hour", "last_hour", "hailed", "aid_count"}
+        if not isinstance(contacts, dict) or not set(contacts).issubset(system.sighted):
+            raise ValueError("Invalid persisted player ship contacts")
+        for ship_id, row in contacts.items():
+            required = {"first_hour", "last_hour", "hailed", "aid_count"}
+            if (not isinstance(row, dict) or set(row) not in
+                    (required, required | {"contact_instance_id"})
                     or type(row["first_hour"]) is not int
                     or type(row["last_hour"]) is not int
                     or not 0 <= row["first_hour"] <= row["last_hour"] <= system.hour
-                    or row["hailed"] is not True
-                    or type(row["aid_count"]) is not int or row["aid_count"] not in (0, 1)
-                    for row in contacts.values())):
-            raise ValueError("Invalid persisted player ship contacts")
+                    or type(row["hailed"]) is not bool
+                    or type(row["aid_count"]) is not int or row["aid_count"] not in (0, 1)):
+                raise ValueError("Invalid persisted player ship contact")
+            instance_id = row.get("contact_instance_id")
+            if instance_id is not None:
+                prefix = f"{ship_id}:"
+                suffix = (instance_id[len(prefix):] if isinstance(instance_id, str)
+                          and instance_id.startswith(prefix) else "")
+                if (not suffix.isdigit() or str(int(suffix)) != suffix
+                        or not 1 <= int(suffix) <= 1_000_000
+                        or ship_id in tracks and int(suffix) > tracks[ship_id]["sequence"]):
+                    raise ValueError("Invalid persisted player contact instance")
         system.player_contacts = contacts
         system.roster_mode = mode
         system.population_total = population_total

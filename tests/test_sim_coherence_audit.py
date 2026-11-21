@@ -1,13 +1,16 @@
 import copy
+from types import SimpleNamespace
 
 from sim.tools.coherence_audit import audit_event_records, audit_faction_membership_transitions
 from sim.core.world import WorldState
-from sim.tools.coherence_run import _census
+from sim.tools.coherence_run import (
+    _census, _merchant_activity_for_window, _sampled_merchant_utilization,
+)
 
 
 def _event(event_id, tick, event_type, *, data=None, actors=(), targets=(), caused_by=(),
-           event_class="narrative"):
-    return {
+           event_class="narrative", location=None):
+    record = {
         "id": event_id,
         "tick": tick,
         "type": event_type,
@@ -17,10 +20,70 @@ def _event(event_id, tick, event_type, *, data=None, actors=(), targets=(), caus
         "targets": list(targets),
         "caused_by": list(caused_by),
     }
+    if location is not None:
+        record["location"] = location
+    return record
 
 
 def _part(entity_id, role):
     return {"entity_id": entity_id, "role": role}
+
+
+def test_sampled_merchant_utilization_separates_underway_blocked_and_idle_days():
+    samples = [
+        {"sample_day": 0, "merchants": {"ship_links": [
+            {"in_transit": True, "blocker_reason": None, "location_kind": None},
+            {"in_transit": False, "blocker_reason": "no_profit", "location_kind": "island"},
+            {"in_transit": False, "blocker_reason": None, "location_kind": "island"},
+            {"status": "closed", "in_transit": False,
+             "blocker_reason": None, "location_kind": "island"},
+        ]}, "merchant_activity_events_since_previous_sample": {}},
+        {"sample_day": 10, "merchants": {"ship_links": []},
+         "merchant_activity_events_since_previous_sample": {
+             "trade": 2, "travel": 4, "repair": 0},
+         "merchant_activity_days_since_previous_sample": {
+             "trade": 2, "travel": 3, "provisioning": 7}},
+    ]
+
+    report = _sampled_merchant_utilization(samples)
+
+    assert report["merchant_days_by_state"] == {
+        "underway": 10, "blocked": 10, "at_island_unblocked": 10,
+        "closed": 10, "other_or_unknown": 0,
+    }
+    assert report["merchant_days_by_blocker_reason"] == {"no_profit": 10}
+    assert report["merchant_activity_event_counts"]["trade"] == 2
+    assert report["merchant_activity_event_counts"]["travel"] == 4
+    assert report["merchant_activity_days"]["trade"] == 2
+    assert report["merchant_activity_days"]["travel"] == 3
+    assert report["merchant_activity_days"]["provisioning"] == 7
+    assert "not event-exact" in report["method"]
+
+
+def test_merchant_activity_counts_preclosure_work_but_not_postclosure_hull_use():
+    merchants = {
+        "merchant_a": {"id": "merchant_a", "ship_id": "ship_a",
+                       "status": "closed", "closed_event_id": "event_000004"},
+    }
+    events = [
+        SimpleNamespace(id="event_000001", tick=8, type="MARKET_TRADE",
+                        actors=[_part("merchant_a", "merchant")], targets=[]),
+        SimpleNamespace(id="event_000002", tick=9, type="MARKET_TRADE",
+                        actors=[], targets=[_part("ship_a", "merchant_vessel")]),
+        SimpleNamespace(id="event_000003", tick=9, type="VOYAGE_STARTED",
+                        actors=[], targets=[_part("ship_a", "merchant_vessel")]),
+        SimpleNamespace(id="event_000005", tick=17, type="SHIP_SUPPLIES_CONSUMED",
+                        actors=[], targets=[_part("ship_a", "ship")]),
+    ]
+
+    event_counts, activity_days = _merchant_activity_for_window(
+        events, merchants, ticks_per_day=8)
+
+    assert event_counts["trade"] == 2
+    assert event_counts["travel"] == 1
+    assert event_counts["provisioning"] == 0
+    assert activity_days["trade"] == 1
+    assert activity_days["travel"] == 1
 
 
 def test_faction_membership_audit_replays_found_join_departure_and_dissolution_intervals():
@@ -174,6 +237,14 @@ def test_census_distinguishes_uncrewed_hulls_from_dangling_crew_links():
     assert census["ships"]["ships_without_valid_crew"] == [dangling_ship_id]
     assert uncrewed_ship_id in census["ships"]["explicitly_uncrewed_hulls"]
     assert uncrewed_ship_id not in census["ships"]["ships_without_valid_crew"]
+
+
+def test_census_classifies_initial_merchant_hulls_from_merchant_registry():
+    world = WorldState.create("merchant-owner-census")
+
+    census = _census(world, 0)
+
+    assert census["ships"]["by_owner_type"]["merchant"] == 3
 
 
 def test_census_flags_dissolved_crew_ship_title_controller_and_ownership_event():
@@ -482,7 +553,10 @@ def test_membership_transition_replay_tracks_transfer_desertion_death_and_sink_r
             "crew_id": "crew_b", "roster": ["p3"]}),
         _event("transfer", 24, "CREW_MEMBER_TRANSFERRED", data={
             "character_id": "p2", "from_crew_id": "crew_a", "to_crew_id": "crew_b"}),
-        _event("desert", 48, "DESERTION", data={"crew_id": "crew_b"},
+        _event("defect", 36, "CREW_MEMBER_DEFECTED", data={
+            "from_crew_id": "crew_b", "to_crew_id": "crew_a"},
+               actors=[_part("p2", "defector")]),
+        _event("desert", 48, "DESERTION", data={"crew_id": "crew_a"},
                actors=[_part("p2", "deserter")]),
         _event("death", 72, "CHARACTER_DIED", targets=[_part("p3", "deceased")]),
         _event("capture", 84, "PRISONER_CAPTURED", data={
@@ -500,6 +574,7 @@ def test_membership_transition_replay_tracks_transfer_desertion_death_and_sink_r
     transfers = {row["event_id"]: row for row in ledger["membership_flow"]}
     assert transfers["transfer"]["memberships_transferred"] == 1
     assert transfers["transfer"]["active_membership_delta"] == 0
+    assert transfers["defect"]["memberships_transferred"] == 1
     assert transfers["desert"]["memberships_left"] == 1
     assert transfers["death"]["active_memberships_after"] == 2
     assert transfers["capture"]["active_memberships_after"] == 1
@@ -641,6 +716,43 @@ def test_audit_finds_same_tick_target_concentration_and_unresolved_target_proxy(
         "captains": ["cap_1", "cap_2"], "distinct_estimates": 1,
     }]
     assert report["target_dispositions_proxy"][0]["any_later_encounter_involving_target"] is False
+    assert report["raider_pursuit"]["selections"] == 2
+    assert report["raider_pursuit"]["commitments"] == 0
+    assert report["raider_pursuit"]["uncommitted_selection_event_ids"] == ["t1", "t2"]
+    assert report["raider_pursuit"]["maximum_target_share_permille"] == 1000
+
+
+def test_audit_links_selection_commitment_and_interception_outcome():
+    records = [
+        _event("selected", 100, "RAIDER_TARGET_SELECTED",
+               actors=[_part("captain", "raider_captain")],
+               targets=[_part("merchant_ship", "merchant_vessel")]),
+        _event("committed", 100, "RAIDER_PURSUIT_COMMITTED",
+               actors=[_part("raider_ship", "raider_vessel")],
+               targets=[_part("merchant_ship", "merchant_vessel")],
+               caused_by=["selected"]),
+        _event("encounter", 120, "ENCOUNTER_RESOLVED",
+               actors=[_part("raider_ship", "combatant"),
+                       _part("merchant_ship", "combatant")]),
+        _event("resolved", 120, "RAIDER_PURSUIT_RESOLVED",
+               actors=[_part("raider_ship", "raider_vessel")],
+               targets=[_part("merchant_ship", "merchant_vessel")],
+               data={"selected_event_id": "selected", "commitment_event_id": "committed",
+                     "outcome": "intercepted", "reason": "causally_linked_encounter"},
+               caused_by=["selected", "committed", "encounter"]),
+    ]
+
+    pursuit = audit_event_records(records)["raider_pursuit"]
+
+    assert pursuit["selections"] == pursuit["commitments"] == pursuit["resolutions"] == 1
+    assert pursuit["resolved_outcomes"] == {"intercepted": 1}
+    assert pursuit["successful_interceptions"] == 1
+    assert pursuit["interception_permille_of_selections"] == 1000
+    assert pursuit["uncommitted_selection_event_ids"] == []
+    assert pursuit["unresolved_selection_event_ids"] == []
+    assert pursuit["orphan_resolution_event_ids"] == []
+    assert pursuit["invalid_causal_links"] == []
+    assert pursuit["dispositions"][0]["causal_links_valid"] is True
 
 
 def test_audit_reports_repeating_pair_interval_and_outcome_histogram():
@@ -658,11 +770,65 @@ def test_audit_reports_repeating_pair_interval_and_outcome_histogram():
 
     assert report["repeated_encounter_pairs"][0]["most_common_interval_days"] == 7
     assert report["repeated_encounter_pairs"][0]["most_common_interval_count"] == 2
+    assert report["repeated_encounter_pairs"][0]["cadence_context"] == "spatial_context_missing"
+    assert report["unexplained_cadence_candidates"] == []
     assert report["encounter_outcomes"] == {"mutual_withdrawal": 2, "surrender": 1}
     assert report["exported_event_rows_and_bytes"]["by_tick_origin"][
         "initialization_tick_0"]["rows"] == 1
     assert report["exported_event_rows_and_bytes"]["by_tick_origin"][
         "simulation_tick_gt_0"]["rows"] == 3
+
+
+def test_cadence_audit_does_not_false_flag_observed_island_co_location():
+    records = [
+        _event(f"meet{index}", day * 24, "ENCOUNTER_RESOLVED",
+               location="isle_001",
+               data={"ships": ["ship_a", "ship_b"],
+                     "outcome": "mutual_withdrawal",
+                     "stances": {"ship_a": "avoid", "ship_b": "attack"}})
+        for index, day in enumerate((0, 7, 14, 21))
+    ]
+
+    report = audit_event_records(records)
+
+    pair = report["repeated_encounter_pairs"][0]
+    assert pair["cadence_context"] == "repeated_island_co_location_observed"
+    assert pair["regularity_permille"] == 1000
+    assert pair["repeated_outcome_share_permille"] == 1000
+    assert pair["cadence_assessment"] == "contextual_repeat_not_flagged"
+    assert report["unexplained_cadence_candidates"] == []
+
+
+def test_cadence_audit_flags_only_periodic_pairs_without_context_and_variation():
+    records = [
+        _event(f"meet{index}", day * 24, "ENCOUNTER_RESOLVED",
+               data={"ships": ["ship_a", "ship_b"],
+                     "outcome": "mutual_withdrawal",
+                     "stances": {"ship_a": "avoid", "ship_b": "avoid"}})
+        for index, day in enumerate((0, 7, 14, 21))
+    ]
+
+    report = audit_event_records(records)
+
+    assert len(report["unexplained_cadence_candidates"]) == 1
+    assert report["unexplained_cadence_candidates"][0]["cadence_assessment"] \
+        == "unexplained_periodicity_candidate"
+
+
+def test_cadence_audit_requires_every_location_to_be_missing_before_flagging():
+    records = [
+        _event(f"meet{index}", day * 24, "ENCOUNTER_RESOLVED",
+               location=(None if index == 1 else "isle_001"),
+               data={"ships": ["ship_a", "ship_b"],
+                     "outcome": "mutual_withdrawal",
+                     "stances": {"ship_a": "avoid", "ship_b": "avoid"}})
+        for index, day in enumerate((0, 7, 14, 21))
+    ]
+
+    report = audit_event_records(records)
+
+    assert report["repeated_encounter_pairs"][0]["cadence_context"] == "spatial_context_varies"
+    assert report["unexplained_cadence_candidates"] == []
 
 
 def test_audit_follows_merchant_loss_to_causal_encounter_and_owner_types():

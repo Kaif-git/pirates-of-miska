@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from sim.systems.characters import CharacterSystem
+
 
 LOD_PATH = Path(__file__).resolve().parents[1] / "data" / "lod.json"
 _INCIDENT_TYPES = {
@@ -332,8 +334,8 @@ class LODSystem:
                 or character.get("tier") != "MINOR" or character.get("crew_id") is not None
                 or character.get("ship_id") is not None):
             raise ValueError("Only an uncrewed promoted MINOR can be demoted")
-        if character.get("memory") or character.get("opinions"):
-            raise ValueError("Cannot demote a character with active memory state")
+        if character.get("memory") or character.get("opinions") or character.get("reputation"):
+            raise ValueError("Cannot demote a character with active memory or renown state")
         if any(character_id == faction.get("leader_id")
                or character_id in faction.get("council", [])
                for faction in world.politics.factions.values()):
@@ -365,6 +367,7 @@ class LODSystem:
                 continue
             if (character.get("crew_id") is not None or character.get("ship_id") is not None
                     or character.get("memory") or character.get("opinions")
+                    or character.get("reputation")
                     or any(character_id == faction.get("leader_id")
                            or character_id in faction.get("council", [])
                            for faction in world.politics.factions.values())):
@@ -387,6 +390,7 @@ class LODSystem:
             "birthplace": character["birthplace"], "location": dict(character["location"]),
             "lod_resident_origin": True,
             "stats": dict(character["stats"]), "traits": dict(character["traits"]),
+            "combat_equipment": _copy(character["combat_equipment"]),
             "values": list(character["values"]), "heritage": _copy(character["heritage"]),
             "role": character["role"], "age_years": character["age_years"],
             "archetype_id": character["archetype_id"], "tier": "BACKGROUND",
@@ -406,6 +410,9 @@ class LODSystem:
             "cause_of_death_event": None, "heritage": _copy(record["heritage"]),
             "home_faction": None, "location": dict(record["location"]),
             "stats": dict(record["stats"]), "traits": dict(record["traits"]),
+            "combat_equipment": _copy(record.get("combat_equipment")
+                                       or CharacterSystem.default_combat_equipment(
+                                           record["role"])),
             "values": list(record["values"]),
             "dream": {"kind": "protect_entity", "target_ref": None,
                       "progress": 0, "stated_tick": max(0, record["birth_tick"])},
@@ -498,7 +505,7 @@ class LODSystem:
                     or not record["history_event_ids"]):
                 raise ValueError(f"Invalid named-background record: {character_id}")
             world.characters._validate_character_record(
-                character_id, self._materialize(record), living=True)
+                world, character_id, self._materialize(record), living=True)
             for event_id in (*record["history_event_ids"], record["last_event_id"]):
                 world.event_log.get(event_id)
         names = [record["display_name"].strip().casefold()

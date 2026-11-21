@@ -1,7 +1,7 @@
 import pytest
 
 from pirates.duel_system.engine import Choice, commit_action
-from pirates.duel_system.exchange_log import describe_choice, format_exchange
+from pirates.duel_system.exchange_log import describe_choice, format_exchange, summarize_exchange
 from pirates.duel_system.model import ActionKind, EventType, Zone
 from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
@@ -17,9 +17,11 @@ def test_latest_exchange_names_both_exact_choices_and_observed_causes():
     ui.activate("Light")
     ui.activate("Torso")
     text = "\n".join(ui.round_result)
-    assert "You chose: Light at torso." in text
-    assert "Ronin chose: Dash + Light at torso, 3 tiles west." in text
-    assert "Why:" in text and "weapon reach" in text
+    choices = {event.actor: describe_choice(event.deltas)
+               for event in ui.session.state.event_log if event.type == EventType.ACTION_START}
+    assert f"You chose: {choices['player']}." in text
+    assert f"Ronin chose: {choices['ronin']}." in text
+    assert "Why:" in text or "weapon paths intersected" in text
     assert not any(term in text.lower() for term in ("damage trade", "net damage", "power - armor"))
     assert "You resources:" in text
 
@@ -36,14 +38,20 @@ def test_whiff_reason_is_actual_range_not_an_invented_accuracy_failure():
 
 def test_zone_drift_reports_strike_time_accuracy_and_actual_fallback():
     state = arena()
+    dispersion = state.config["accuracy"]["aim_dispersion"]
+    dispersion.update(clean_base=0, clean_min=0, clean_max=0,
+                      per_accuracy=0, difficulty_penalty=0, drift_share=1)
+    dispersion["nearby_zones"]["HEAD"] = ["TORSO"]
     state.fighters[0].accuracy = 1
     commit_action(state, "player", Choice(ActionKind.LIGHT, Zone.HEAD))
     advance_to(state, state.fighters[0].action.strike_tick)
     hit = next(event for event in state.event_log if event.type == EventType.HIT)
     text = "\n".join(format_exchange(state.event_log, NAMES))
-    assert hit.deltas["rolled_accuracy"] < hit.deltas["required_accuracy"]
-    assert "aim drifted from head to torso" in text
+    assert hit.deltas["clean_probability"] == 0
+    assert hit.deltas["resolved_zone"] == "TORSO"
+    assert "aim resolved from head to torso" in text
     assert f"Accuracy {hit.deltas['accuracy']:.1f}" in text
+    assert "clean chance 0%" in text
     assert hit.deltas["site"].replace("_", " ").lower() in text
     assert "net " not in text.lower()
     assert "You chose: Light at head." in text
@@ -65,6 +73,22 @@ def test_guard_break_reports_the_real_failed_strength_threshold():
     text = "\n".join(format_exchange(state.event_log, NAMES))
     assert "broke Ronin guard" in text
     assert "defender Strength <" in text
+
+
+def test_dash_light_into_held_guard_explains_uncovered_leg_without_duplicate_tissue():
+    state = arena()
+    state.fighters[0].pos, state.fighters[1].pos = (0, 0), (2, 0)
+    commit_action(state, "player", Choice(ActionKind.DASH_LIGHT, Zone.LEG, (1, 0), 1))
+    commit_action(state, "ronin", Choice(ActionKind.GUARD))
+    advance_to(state, state.fighters[0].action.strike_tick)
+    hit = next(event for event in state.event_log if event.type == EventType.HIT)
+    assert hit.deltas["defender_phase"] == "GUARD_HOLD"
+    assert "GUARD_BYPASSED" in hit.cause_tags
+    details = "\n".join(format_exchange(state.event_log, NAMES))
+    assert "guard was active" in details and "outside its covered line" in details
+    assert "reached muscle muscle" not in details
+    summary = summarize_exchange(state.event_log, NAMES)
+    assert "outside the covered guard line" in summary[3]
 
 
 def test_movement_and_non_attack_outcomes_are_not_silent():

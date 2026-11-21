@@ -48,7 +48,7 @@ def test_decision_candidates_have_hard_preconditions_and_explainable_scores():
     assert world.decisions.agents == {}
 
 
-def test_top_k_decision_executes_a_causal_dream_step():
+def test_counter_only_dream_progress_is_labeled_effort_not_objective_completion():
     world = WorldState.create("decision-execute")
     character_id, character = _unassigned_character(world)
     before = character["dream"]["progress"]
@@ -60,8 +60,13 @@ def test_top_k_decision_executes_a_causal_dream_step():
     assert world.entities[character_id]["dream"]["progress"] == before + 1
     action = world.event_log.by_type("AGENT_ACTION")[-1]
     result = world.event_log.get(result_id)
-    assert result.type == "DREAM_PROGRESS"
-    assert result.caused_by == (action.id,)
+    effort = world.event_log.by_type("DREAM_PROGRESS")[-1]
+    assert result.type == "PLAN_STEP_BLOCKED"
+    assert result.caused_by == (world.decisions.agents[character_id]["plan"]["source_event_id"], action.id)
+    assert effort.caused_by == (action.id,)
+    assert effort.data["effort_only"] is True
+    assert effort.data["objective_completed"] is False
+    assert effort.event_class == "routine"
     assert action.caused_by == (choice["caused_by"],)
     world.event_log.validate_causality()
     with pytest.raises(ValueError, match="stale or has already executed"):
@@ -261,24 +266,343 @@ def test_rest_action_changes_crew_morale_and_emits_a_child_event():
     assert outcome.caused_by == (world.event_log.by_type("AGENT_ACTION")[-1].id,)
 
 
-def test_dream_templates_queue_steps_and_complete_with_causal_events():
+def test_dream_templates_create_typed_steps_and_reject_unverified_completion():
     world = WorldState.create("decision-plan")
     agent_id, agent = _unassigned_character(world)
     cause = agent["last_event_id"]
     plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=cause)
     assert plan["dream_kind"] == agent["dream"]["kind"]
-    assert plan["steps"] == world.decisions.ai_data["plan_templates"][agent["dream"]["kind"]]
+    assert [step["step_id"] for step in plan["steps"]] == \
+        world.decisions.ai_data["plan_templates"][agent["dream"]["kind"]]
+    assert all(step["status"] == "pending" for step in plan["steps"])
     assert plan["status"] == "active"
     scores = world.decisions.score_actions(
         world, agent_id, caused_by=plan["source_event_id"])
     assert scores[0]["components"]["plan"] == 18
-    event_ids = []
-    for _ in plan["steps"]:
-        event_ids.append(world.decisions.advance_dream_plan_step(
-            world, agent_id, caused_by=world.entities[agent_id]["last_event_id"]))
-    assert world.decisions.agents[agent_id]["plan"]["status"] == "completed"
-    completed = world.event_log.get(event_ids[-1])
-    assert completed.type == "DREAM_PLAN_COMPLETED"
+    with pytest.raises(ValueError, match="verified registered executor"):
+        world.decisions.advance_dream_plan_step(
+            world, agent_id, caused_by=world.entities[agent_id]["last_event_id"])
+    assert world.decisions.agents[agent_id]["plan"]["status"] == "active"
+    assert world.decisions.agents[agent_id]["plan"]["current_step"] == 0
+    world.event_log.validate_causality()
+
+
+def test_treasure_dream_plan_cannot_complete_from_counter_only_progress():
+    world = WorldState.create("treasure-plan-counter-gap")
+    agent_id, agent = _unassigned_character(world)
+    agent["dream"]["kind"] = "find_treasure"
+    cause = agent["last_event_id"]
+
+    plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=cause)
+    assert [step["step_id"] for step in plan["steps"]] == [
+        "gather_clue", "travel_to_region", "survive_hazard", "claim_treasure", "return_home",
+    ]
+    assert plan["steps"][0]["action_id"] == "learn_treasure_clue"
+
+    with pytest.raises(ValueError, match="verified registered executor"):
+        world.decisions.advance_dream_plan_step(
+            world, agent_id, caused_by=plan["source_event_id"])
+
+    assert world.decisions.agents[agent_id]["plan"]["status"] == "active"
+    assert world.decisions.agents[agent_id]["plan"]["current_step"] == 0
+    assert world.event_log.by_type("TREASURE_FOUND") == ()
+    assert all(treasure["discovered_event_id"] is None
+               for treasure in world.environment.treasures.values())
+
+
+def test_treasure_executor_records_local_clue_blocker_without_advancing():
+    world = WorldState.create("treasure-plan-blocked-clue")
+    agent_id, agent = _unassigned_character(world)
+    agent["dream"]["kind"] = "find_treasure"
+    plan = world.decisions.ensure_dream_plan(
+        world, agent_id, caused_by=agent["last_event_id"])
+    action = world.event_log.append(
+        tick=world.clock.tick, event_type="AGENT_ACTION",
+        location=world.location_of(agent_id)["id"],
+        actors=[{"role": "agent", "entity_id": agent_id}],
+        data={"action_id": "pursue_dream_step", "decision_number": 1},
+        caused_by=[plan["source_event_id"]], causes_tags=["agent_decision"], magnitude=0.01,
+    )
+
+    result_id = world.decisions.execute_dream_plan_step(
+        world, agent_id, action_event_id=action.id)
+
+    result = world.event_log.get(result_id)
+    current = world.decisions.agents[agent_id]["plan"]
+    assert result.type == "PLAN_STEP_BLOCKED"
+    assert result.data["reason"] == "no_local_treasure_clue"
+    assert current["status"] == "active" and current["current_step"] == 0
+    assert current["steps"][0]["status"] == "blocked"
+    assert current["steps"][0]["reason"] == "no_local_treasure_clue"
+    world.event_log.validate_causality()
+
+
+def test_real_decision_action_dispatches_to_treasure_executor():
+    world = WorldState.create("treasure-plan-real-dispatch")
+    world.environment._seed_treasure_rumors(world, [])
+    agent_id, agent = _unassigned_character(world)
+    treasure_id, treasure = next(iter(world.environment.treasures.items()))
+    agent["location"] = {"kind": "island", "id": treasure["island_id"]}
+    agent["dream"]["kind"] = "find_treasure"
+
+    choice = world.decisions.decide(world, agent_id, caused_by=agent["last_event_id"])
+    assert choice["action_id"] == "pursue_dream_step"
+    result_id = world.decisions.execute(world, choice)
+
+    plan = world.decisions.agents[agent_id]["plan"]
+    assert plan["target_ref"] == treasure_id
+    assert agent["dream"]["target_ref"] == treasure_id
+    assert plan["current_step"] == 1
+    assert plan["steps"][0]["status"] == "completed"
+    assert world.event_log.get(result_id).type == "PLAN_STEP_COMPLETED"
+    assert not world.event_log.by_type("DREAM_PLAN_COMPLETED")
+
+
+def test_treasure_dream_executes_clue_discovery_reward_and_return():
+    world = WorldState.create("treasure-plan-positive-path")
+    world.environment._seed_treasure_rumors(world, [])
+    crew = next(row for row in world.crew_ships.crews.values()
+                if row.get("captain_id") and row.get("ship_ids"))
+    agent_id = crew["captain_id"]
+    agent = world.entities[agent_id]
+    ship_id = crew["ship_ids"][0]
+    treasure_id, treasure = next(iter(world.environment.treasures.items()))
+    island_id = treasure["island_id"]
+    # Place the fixture and its home at the clue island so the action-backed
+    # path exercises each predicate without spending simulation days at sea.
+    world.entities[ship_id]["location"] = {"kind": "island", "id": island_id}
+    agent["birthplace"] = island_id
+    agent["dream"].update({"kind": "find_treasure", "target_ref": None, "progress": 0})
+    agent["stats"]["cunning"] = max(agent["stats"]["cunning"], 50)
+    agent["health"]["hp"] = 100
+    plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=agent["last_event_id"])
+
+    def perform_current_step():
+        state = world.decisions.agents[agent_id]["plan"]
+        action = world.event_log.append(
+            tick=world.clock.tick, event_type="AGENT_ACTION",
+            location=world.location_of(agent_id)["id"],
+            actors=[{"role": "agent", "entity_id": agent_id}],
+            data={"action_id": "pursue_dream_step", "step_id":
+                  state["steps"][state["current_step"]]["step_id"]},
+            caused_by=[state["source_event_id"]],
+            causes_tags=["agent_decision", "test_fixture"], magnitude=0.01,
+        )
+        return world.decisions.execute_dream_plan_step(
+            world, agent_id, action_event_id=action.id)
+
+    perform_current_step()  # clue
+    assert world.decisions.agents[agent_id]["plan"]["target_ref"] == treasure_id
+    perform_current_step()  # already at the finite site's island
+    perform_current_step()  # verified local arrival/survival
+    found_completion_id = perform_current_step()
+    assert world.event_log.get(found_completion_id).type == "PLAN_STEP_COMPLETED"
+    asset_id = f"treasure_asset:{treasure_id}"
+    assert any(asset["id"] == asset_id for asset in agent["wealth"]["assets"])
+    perform_current_step()  # return to birthplace, carrying the relic
+
+    completed = world.decisions.agents[agent_id]["plan"]
+    assert completed["status"] == "completed"
+    assert completed["current_step"] == len(completed["steps"]) == 5
+    assert all(step["status"] == "completed" for step in completed["steps"])
+    assert treasure["discovered_by"] == agent_id
+    assert sum(event.data.get("treasure_id") == treasure_id
+               for event in world.event_log.by_type("TREASURE_FOUND")) == 1
+    assert world.event_log.by_type("DREAM_PLAN_COMPLETED")[-1].data[
+        "final_state_verified"] is True
+    world.event_log.validate_causality()
+    restored = WorldState.from_snapshot(world.to_snapshot())
+    assert restored.to_snapshot() == world.to_snapshot()
+
+
+def test_treasure_voyage_plan_resumes_mid_transit_and_verifies_arrival():
+    world = WorldState.create("treasure-plan-transit-resume")
+    world.environment._seed_treasure_rumors(world, [])
+    treasure_id, treasure = next(iter(world.environment.treasures.items()))
+    treasure["next_spread_day"] = 0
+    world.environment._spread_treasure_rumors(world, day=2, events=[])
+    clue_island = next(island for island in treasure["known_islands"]
+                       if island != treasure["island_id"])
+    crew = next(row for row in world.crew_ships.crews.values()
+                if row.get("captain_id") and row.get("ship_ids"))
+    agent_id, ship_id = crew["captain_id"], crew["ship_ids"][0]
+    agent = world.entities[agent_id]
+    world.entities[ship_id]["location"] = {"kind": "island", "id": clue_island}
+    agent["dream"].update({"kind": "find_treasure", "target_ref": None})
+    agent["stats"]["cunning"] = 100
+    plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=agent["last_event_id"])
+
+    def execute_step(target_world):
+        state = target_world.decisions.agents[agent_id]["plan"]
+        step_id = state["steps"][state["current_step"]]["step_id"]
+        action = target_world.event_log.append(
+            tick=target_world.clock.tick, event_type="AGENT_ACTION",
+            location=target_world.location_of(agent_id)["id"],
+            actors=[{"role": "agent", "entity_id": agent_id}],
+            data={"action_id": "pursue_dream_step", "step_id": step_id},
+            caused_by=[state["source_event_id"]],
+            causes_tags=["agent_decision", "transit_resume_fixture"], magnitude=0.01,
+        )
+        return target_world.decisions.execute_dream_plan_step(
+            target_world, agent_id, action_event_id=action.id)
+
+    execute_step(world)  # learn the spread clue at the neighboring island
+    execute_step(world)  # start a real voyage to the finite site
+    assert ship_id in world.travel.transits
+    arrival_tick = world.travel.transits[ship_id]["arrival_tick"]
+    resumed = WorldState.from_snapshot(world.to_snapshot())
+    assert resumed.to_snapshot() == world.to_snapshot()
+
+    world.run_until(arrival_tick)
+    resumed.run_until(arrival_tick)
+    assert world.event_log.to_jsonl() == resumed.event_log.to_jsonl()
+    travel_a = execute_step(world)  # travel_to_region verifies the recorded arrival
+    travel_b = execute_step(resumed)
+    assert travel_a == travel_b
+    assert world.event_log.get(travel_a).data["step_id"] == "travel_to_region"
+    survived_a = execute_step(world)  # survive_hazard verifies that arrival
+    survived_b = execute_step(resumed)
+    assert survived_a == survived_b
+    assert world.event_log.get(survived_a).type == "PLAN_STEP_COMPLETED"
+    assert world.event_log.get(survived_a).data["step_id"] == "survive_hazard"
+    assert world.decisions.agents[agent_id]["plan"]["current_step"] == 3
+    assert world.to_snapshot() == resumed.to_snapshot()
+
+
+def test_treasure_plan_wrong_location_stale_target_and_low_capability_do_not_advance():
+    world = WorldState.create("treasure-plan-negative-predicates")
+    world.environment._seed_treasure_rumors(world, [])
+    agent_id, agent = _unassigned_character(world)
+    treasure_id, treasure = next(iter(world.environment.treasures.items()))
+    agent["dream"]["kind"] = "find_treasure"
+    plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=agent["last_event_id"])
+    plan = world.decisions.agents[agent_id]["plan"]
+    plan["target_ref"] = treasure_id
+    plan["current_step"] = 3
+
+    def execute_search(label):
+        action = world.event_log.append(
+            tick=world.clock.tick, event_type="AGENT_ACTION",
+            location=world.location_of(agent_id)["id"],
+            actors=[{"role": "agent", "entity_id": agent_id}],
+            data={"action_id": "pursue_dream_step", "fixture": label},
+            caused_by=[plan["source_event_id"]], causes_tags=["agent_decision"], magnitude=0.01,
+        )
+        return world.event_log.get(world.decisions.execute_dream_plan_step(
+            world, agent_id, action_event_id=action.id))
+
+    wrong_location = execute_search("wrong_location")
+    assert wrong_location.type == "PLAN_STEP_BLOCKED"
+    assert wrong_location.data["reason"] == "wrong_treasure_island"
+    assert plan["current_step"] == 3 and plan["status"] == "active"
+
+    agent["location"] = {"kind": "island", "id": treasure["island_id"]}
+    agent["stats"]["cunning"] = 0
+    insufficient = execute_search("low_capability")
+    assert insufficient.type == "PLAN_STEP_BLOCKED"
+    assert insufficient.data["reason"] == "insufficient_search_capability"
+    assert plan["current_step"] == 3 and plan["status"] == "active"
+
+    agent["stats"]["cunning"] = 100
+    world.environment.discover_treasure(
+        world, treasure_id, agent_id, caused_by=treasure["last_rumor_event_id"])
+    stale = execute_search("already_discovered")
+    assert stale.type == "PLAN_STEP_FAILED"
+    assert stale.data["reason"] == "treasure_target_stale"
+    assert plan["status"] == "failed" and plan["current_step"] == 3
+
+
+def test_treasure_hazard_failure_is_terminal_and_causally_recorded():
+    world = WorldState.create("treasure-plan-hazard")
+    world.environment._seed_treasure_rumors(world, [])
+    agent_id, agent = _unassigned_character(world)
+    treasure_id, treasure = next(iter(world.environment.treasures.items()))
+    agent["location"] = {"kind": "island", "id": treasure["island_id"]}
+    agent["dream"]["kind"] = "find_treasure"
+    agent["stats"]["cunning"] = 100
+    plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=agent["last_event_id"])
+    plan = world.decisions.agents[agent_id]["plan"]
+    plan.update({"target_ref": treasure_id, "current_step": 3})
+    outbreak = world.event_log.append(
+        tick=world.clock.tick, event_type="DISEASE_OUTBREAK", location=treasure["island_id"],
+        data={"cause": "fixture"}, caused_by=[treasure["rumor_event_id"]],
+        causes_tags=["hazard_fixture"], magnitude=0.2,
+    )
+    world.environment.outbreaks[treasure["island_id"]] = {
+        "started_day": 1, "remaining_days": 2, "cases": 1, "event_id": outbreak.id}
+    action = world.event_log.append(
+        tick=world.clock.tick, event_type="AGENT_ACTION",
+        location=treasure["island_id"], actors=[{"role": "agent", "entity_id": agent_id}],
+        data={"action_id": "pursue_dream_step"}, caused_by=[plan["source_event_id"]],
+        causes_tags=["agent_decision"], magnitude=0.01,
+    )
+
+    result = world.event_log.get(world.decisions.execute_dream_plan_step(
+        world, agent_id, action_event_id=action.id))
+
+    assert result.type == "PLAN_STEP_FAILED"
+    assert result.data["reason"] == "active_disease_outbreak"
+    assert world.event_log.by_type("TREASURE_SEARCH_FAILED")[-1].caused_by == (
+        action.id, outbreak.id)
+    assert plan["status"] == "failed" and plan["current_step"] == 3
+    assert treasure["discovered_event_id"] is None
+    world.event_log.validate_causality()
+
+
+def test_active_treasure_plan_fails_on_death_and_capture_without_losing_relic():
+    dead_world = WorldState.create("treasure-plan-terminal-death")
+    dead_id, dead = _unassigned_character(dead_world)
+    dead["dream"]["kind"] = "find_treasure"
+    dead_plan = dead_world.decisions.ensure_dream_plan(
+        dead_world, dead_id, caused_by=dead["last_event_id"])
+    dead_world.characters.kill_character(
+        dead_world, dead_id, cause="test_terminal", caused_by=dead_plan["source_event_id"],
+        replace_majors=False)
+    failed = dead_world.decisions.agents[dead_id]["plan"]
+    assert failed["status"] == "failed"
+    terminal = dead_world.event_log.by_type("DREAM_PLAN_FAILED")[-1]
+    assert terminal.data["reason"] == "terminal_before_objective_completion"
+    assert terminal.caused_by
+    dead_world.event_log.validate_causality()
+
+    world = WorldState.create("treasure-plan-capture")
+    agent_id, agent = _unassigned_character(world)
+    agent["dream"]["kind"] = "find_treasure"
+    plan = world.decisions.ensure_dream_plan(world, agent_id, caused_by=agent["last_event_id"])
+    capture = world.event_log.append(
+        tick=world.clock.tick, event_type="ENCOUNTER_RESOLVED",
+        location=world.location_of(agent_id)["id"],
+        actors=[{"role": "combatant", "entity_id": agent_id}], targets=[],
+        data={"outcome": "captain_captured"}, caused_by=[plan["source_event_id"]],
+        causes_tags=["capture_fixture"], magnitude=0.2,
+    )
+    world.decisions.on_agent_inaccessible(
+        world, agent_id, cause_id=capture.id, reason="captured_before_objective_completion")
+    captured_plan = world.decisions.agents[agent_id]["plan"]
+    assert captured_plan["status"] == "failed"
+    assert world.event_log.by_type("DREAM_PLAN_FAILED")[-1].data["capture_event_id"] == capture.id
+    assert not any(asset.get("kind") == "charted_relic_cache"
+                   for asset in agent["wealth"]["assets"])
+    world.event_log.validate_causality()
+
+
+def test_replacing_a_living_dream_abandons_the_previous_plan_with_cause():
+    world = WorldState.create("treasure-plan-abandoned")
+    agent_id, agent = _unassigned_character(world)
+    agent["dream"]["kind"] = "find_treasure"
+    original = world.decisions.ensure_dream_plan(
+        world, agent_id, caused_by=agent["last_event_id"])
+    agent["dream"]["kind"] = "chart_region"
+    replacement = world.decisions.ensure_dream_plan(
+        world, agent_id, caused_by=original["source_event_id"])
+
+    abandoned = world.decisions.agents[agent_id]["plan"]
+    abandonment_event = world.event_log.by_type("DREAM_PLAN_ABANDONED")[-1]
+    assert abandoned["status"] == "active"
+    assert replacement["dream_kind"] == "chart_region"
+    assert abandonment_event.data["dream_kind"] == "find_treasure"
+    assert abandonment_event.data["reason"] == "dream_changed"
+    assert abandonment_event.id in world.event_log.get(replacement["source_event_id"]).caused_by
     world.event_log.validate_causality()
 
 
@@ -406,6 +730,7 @@ def test_beliefs_decay_spread_with_attribution_and_survive_snapshot(tmp_path):
     recipient = world.entities[recipient_id]
     recipient["location"] = dict(sender["location"])
     source_event = sender["last_event_id"]
+    actual_strength_before = world.crew_ships.combat_power(world, "ship_000001")["total"]
     world.decisions.set_belief(
         world, sender_id, "ship_000001", "estimated_strength", 100,
         source_event_id=source_event)
@@ -415,7 +740,7 @@ def test_beliefs_decay_spread_with_attribution_and_survive_snapshot(tmp_path):
         "distortion_basis_points": 10000,
         "max_distortion_permille": 1000,
     })
-    world.run_until(24)
+    world.decisions._spread_beliefs(day=1, world=world)
     world.decisions.ai_data["belief_rules"].update(original)
     received = world.decisions.belief(recipient_id, "ship_000001", "estimated_strength")
     assert received is not None
@@ -424,6 +749,9 @@ def test_beliefs_decay_spread_with_attribution_and_survive_snapshot(tmp_path):
     rumor = world.event_log.get(received["source"]["event_id"])
     assert rumor.type == "RUMOR_SHARED"
     assert rumor.data["original_source_event"] == source_event
+    assert rumor.data["distorted"] is True
+    assert rumor.data["value"] != rumor.data["original_value"]
+    assert world.crew_ships.combat_power(world, "ship_000001")["total"] == actual_strength_before
     assert rumor.caused_by[0] == source_event
     assert all(event.actors[0]["entity_id"] == sender_id
                for event in world.event_log.by_type("RUMOR_SHARED"))

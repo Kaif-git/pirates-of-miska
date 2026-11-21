@@ -18,6 +18,23 @@ _TRAITS = {"ambition", "honor", "greed", "loyalty", "cruelty", "curiosity",
 _PRECONDITIONS = {"living_character_with_dream", "crew_at_island_below_full_morale",
                    "captain_with_profitable_trade_route", "living_character_with_grudge"}
 _HANDLERS = {"advance_dream", "rest_crew", "dispatch_trade", "pursue_grudge"}
+_PLAN_STEP_ACTIONS = {
+    "gather_clue": {"action_id": "learn_treasure_clue",
+                    "preconditions": ["local_treasure_rumor"],
+                    "completion_predicate": "agent_knows_treasure_target"},
+    "travel_to_region": {"action_id": "travel_to_treasure",
+                         "preconditions": ["known_treasure_target", "commandable_vessel"],
+                         "completion_predicate": "alive_at_treasure_island"},
+    "survive_hazard": {"action_id": "survive_treasure_route",
+                       "preconditions": ["treasure_voyage_started"],
+                       "completion_predicate": "arrived_without_terminal_state"},
+    "claim_treasure": {"action_id": "search_treasure",
+                       "preconditions": ["at_treasure_island", "search_capability"],
+                       "completion_predicate": "finite_treasure_discovered"},
+    "return_home": {"action_id": "return_with_treasure",
+                    "preconditions": ["holding_treasure", "commandable_vessel"],
+                    "completion_predicate": "returned_with_treasure"},
+}
 _DREAM_KINDS = {
     "find_treasure", "become_title", "destroy_entity", "restore_house", "chart_region",
     "free_island", "become_wealthiest", "defeat_character", "find_person",
@@ -25,6 +42,7 @@ _DREAM_KINDS = {
 }
 _LOOP_RULES = {"loop_max_sequence_length", "loop_repeat_limit", "loop_penalty",
                "grudge_target_cooldown_days"}
+_PRE_PLAN_RULES_DIGEST = "799f00ece511c718f369d7d952650d3ddcd6914595dd71c0d2da491462bc8370"
 
 
 def load_action_data(path: str | Path = ACTIONS_PATH) -> tuple[dict[str, Any], str]:
@@ -61,7 +79,8 @@ def load_ai_rules_data(path: str | Path = AI_RULES_PATH) -> tuple[dict[str, Any]
 
 def validate_ai_rules_data(data: Any) -> None:
     if (not isinstance(data, dict) or set(data) != {
-            "schema_version", "belief_rules", "plan_templates", "wake_event_types"}
+            "schema_version", "belief_rules", "plan_templates", "plan_rules",
+            "wake_event_types"}
             or type(data["schema_version"]) is not int or data["schema_version"] != 1):
         raise ValueError("Invalid AI rules catalog schema")
     rules = data["belief_rules"]
@@ -90,6 +109,12 @@ def validate_ai_rules_data(data: Any) -> None:
                    or any(not isinstance(step, str) or not step for step in steps)
                    for steps in plans.values())):
         raise ValueError("Dream plan templates must cover all supported dreams")
+    plan_rules = data["plan_rules"]
+    if (not isinstance(plan_rules, dict)
+            or set(plan_rules) != {"treasure_min_cunning", "treasure_min_hp"}
+            or any(type(value) is not int or not 0 <= value <= 100
+                   for value in plan_rules.values())):
+        raise ValueError("Invalid dream-plan execution rules")
     wake_types = data["wake_event_types"]
     if (not isinstance(wake_types, list) or not wake_types
             or any(not isinstance(kind, str) or not kind
@@ -228,12 +253,75 @@ class DecisionSystem:
         agent = world.entities.get(agent_id) or world.archive.get(agent_id)
         if not self._terminal_agent(world, agent_id, agent):
             return
+        state = self.agents.get(agent_id)
+        plan = state.get("plan") if state else None
+        if plan and plan["status"] == "active":
+            cause_id = agent.get("last_event_id")
+            try:
+                world.event_log.get(cause_id)
+            except (KeyError, TypeError):
+                cause_id = plan["source_event_id"]
+            step = plan["steps"][plan["current_step"]]
+            step_id = step["step_id"] if isinstance(step, dict) else step
+            failed = world.event_log.append(
+                tick=world.clock.tick, event_type="DREAM_PLAN_FAILED",
+                location=world.location_of(agent_id)["id"],
+                actors=[{"role": "dreamer", "entity_id": agent_id}],
+                data={"dream_kind": plan["dream_kind"], "step_id": step_id,
+                      "reason": "terminal_before_objective_completion",
+                      "treasure_asset_retained_in_archive": self._holds_treasure_asset(
+                          agent, plan["target_ref"])},
+                caused_by=list(dict.fromkeys((plan["source_event_id"], cause_id))),
+                causes_tags=["dream_plan_failed", "terminal_state"], magnitude=0.2,
+            )
+            if isinstance(step, dict):
+                step.update({"status": "failed",
+                             "reason": "terminal_before_objective_completion",
+                             "result_event_id": cause_id})
+            plan["status"] = "failed"
+            agent["last_event_id"] = failed.id
         queue = self._pending_wakes_by_agent.pop(agent_id, None)
         self._pending_wake_ids_by_agent.pop(agent_id, None)
         self._pending_wake_scheduled.discard(agent_id)
         if queue:
             for wake in queue:
                 self._record_stale_wakeup(world, agent_id, wake["event_id"], agent)
+
+    def on_agent_inaccessible(self, world, agent_id: str, *, cause_id: str,
+                              reason: str) -> None:
+        """Fail an active plan when custody removes its actor from ordinary action."""
+        cause = world.event_log.get(cause_id)
+        state = self.agents.get(agent_id)
+        plan = state.get("plan") if state else None
+        agent = world.entities.get(agent_id) or world.archive.get(agent_id)
+        if not plan or plan["status"] != "active" or agent is None:
+            return
+        step = plan["steps"][plan["current_step"]]
+        step_id = step["step_id"] if isinstance(step, dict) else step
+        failed = world.event_log.append(
+            tick=world.clock.tick, event_type="DREAM_PLAN_FAILED",
+            location=world.location_of(agent_id)["id"],
+            actors=[{"role": "dreamer", "entity_id": agent_id}],
+            data={"dream_kind": plan["dream_kind"], "step_id": step_id,
+                  "reason": reason, "capture_event_id": cause.id,
+                  "treasure_asset_retained": self._holds_treasure_asset(
+                      agent, plan["target_ref"])},
+            caused_by=list(dict.fromkeys((plan["source_event_id"], cause_id))),
+            causes_tags=["dream_plan_failed", "custody_interruption"], magnitude=0.2,
+        )
+        if isinstance(step, dict):
+            step.update({"status": "failed", "reason": reason,
+                         "result_event_id": cause_id})
+        plan["status"] = "failed"
+        agent["last_event_id"] = failed.id
+
+    @staticmethod
+    def _holds_treasure_asset(character: dict[str, Any], treasure_id: str | None) -> bool:
+        if not isinstance(treasure_id, str):
+            return False
+        asset_id = f"treasure_asset:{treasure_id}"
+        return any(isinstance(asset, dict) and asset.get("id") == asset_id
+                   for asset in character.get("wealth", {}).get("assets", []))
 
     @classmethod
     def create(cls) -> "DecisionSystem":
@@ -251,7 +339,12 @@ class DecisionSystem:
                 or not isinstance(snapshot.get("debug_history"), list)
                 or not isinstance(snapshot.get("pending_wakes"), list)):
             raise ValueError("Invalid decision system snapshot")
-        return cls(digest=snapshot["digest"], agents=snapshot["agents"],
+        action_data, _ = load_action_data()
+        ai_data, _ = load_ai_rules_data()
+        current_digest = _catalog_digest(action_data, ai_data)
+        if snapshot["digest"] not in {current_digest, _PRE_PLAN_RULES_DIGEST}:
+            raise ValueError("Action catalog changed since snapshot creation")
+        return cls(digest=current_digest, agents=snapshot["agents"],
                    debug_history=snapshot["debug_history"],
                    pending_wakes=snapshot["pending_wakes"],
                    event_cursor=snapshot["event_cursor"],
@@ -282,7 +375,8 @@ class DecisionSystem:
         current_plan_step = None
         plan = state.get("plan")
         if plan and plan["status"] == "active" and plan["current_step"] < len(plan["steps"]):
-            current_plan_step = plan["steps"][plan["current_step"]]
+            step = plan["steps"][plan["current_step"]]
+            current_plan_step = step["step_id"] if isinstance(step, dict) else step
         scores = []
         for action_id in self.candidates(world, agent_id):
             definition = self.data["actions"][action_id]
@@ -467,8 +561,8 @@ class DecisionSystem:
             actors=[{"role": "agent", "entity_id": agent_id}],
             data=action_data,
             caused_by=parents, causes_tags=tags, magnitude=0.05,
-            event_class=("narrative" if definition["handler"] in {
-                "advance_dream", "pursue_grudge"} else "routine"),
+            event_class=("narrative" if definition["handler"] == "pursue_grudge"
+                         else "routine"),
         )
         if definition["handler"] == "pursue_grudge" and cost:
             crew["treasury_silver"] -= cost
@@ -483,10 +577,14 @@ class DecisionSystem:
                 tick=world.clock.tick, event_type="DREAM_PROGRESS", location=location["id"],
                 actors=[{"role": "dreamer", "entity_id": agent_id}],
                 data={"dream_kind": dream["kind"], "before": before,
-                      "after": dream["progress"]}, caused_by=[action_event.id],
-                causes_tags=["dream_pursuit"], magnitude=0.1,
+                      "after": dream["progress"], "effort_only": True,
+                      "objective_completed": False}, caused_by=[action_event.id],
+                causes_tags=["dream_effort"], magnitude=0.02,
+                event_class="routine",
             )
             agent["last_event_id"] = result.id
+            result = world.event_log.get(self.execute_dream_plan_step(
+                world, agent_id, action_event_id=action_event.id))
         elif handler == "rest_crew":
             crew = world.crew_ships.crews[agent["crew_id"]]
             before = crew["morale"]
@@ -662,56 +760,369 @@ class DecisionSystem:
         if (current and current["status"] == "active"
                 and current["dream_kind"] == dream_kind and current["target_ref"] == target):
             return json.loads(json.dumps(current, sort_keys=True))
+        plan_parents = [caused_by]
+        if current and current["status"] == "active":
+            old_step = current["steps"][current["current_step"]]
+            old_step_id = old_step["step_id"] if isinstance(old_step, dict) else old_step
+            abandonment = world.event_log.append(
+                tick=world.clock.tick, event_type="DREAM_PLAN_ABANDONED",
+                location=world.location_of(agent_id)["id"],
+                actors=[{"role": "dreamer", "entity_id": agent_id}],
+                data={"dream_kind": current["dream_kind"],
+                      "step_id": old_step_id, "reason": "dream_changed",
+                      "replacement_dream_kind": dream_kind},
+                caused_by=list(dict.fromkeys((current["source_event_id"], caused_by))),
+                causes_tags=["dream_plan_abandoned", "dream_changed"], magnitude=0.1,
+            )
+            if isinstance(old_step, dict):
+                old_step["status"] = "abandoned"
+                old_step["reason"] = "dream_changed"
+            current["status"] = "abandoned"
+            plan_parents.append(abandonment.id)
         event = world.event_log.append(
             tick=world.clock.tick, event_type="DREAM_PLAN_CREATED",
             location=world.location_of(agent_id)["id"],
             actors=[{"role": "dreamer", "entity_id": agent_id}],
             data={"dream_kind": dream_kind, "target_ref": target,
-                  "steps": list(template), "replaced_plan": current is not None},
-            caused_by=[caused_by], causes_tags=["dream_decomposition", f"dream:{dream_kind}"],
+                  "steps": [self._typed_plan_step(step_id) for step_id in template],
+                  "replaced_plan": current is not None},
+            caused_by=list(dict.fromkeys(plan_parents)),
+            causes_tags=["dream_decomposition", f"dream:{dream_kind}"],
             magnitude=0.1,
         )
         state["plan"] = {
             "dream_kind": dream_kind, "target_ref": target,
-            "steps": list(template), "current_step": 0, "status": "active",
+            "steps": [self._typed_plan_step(step_id) for step_id in template],
+            "current_step": 0, "status": "active",
             "created_tick": world.clock.tick, "source_event_id": event.id,
         }
         agent["last_event_id"] = event.id
         return json.loads(json.dumps(state["plan"], sort_keys=True))
 
     def advance_dream_plan_step(self, world, agent_id: str, *, caused_by: str) -> str:
+        """Reject unverified counter-based completion; registered executors own predicates."""
         state = self.agents.get(agent_id)
         plan = state.get("plan") if state else None
         if (not plan or plan["status"] != "active"
                 or plan["current_step"] >= len(plan["steps"])):
             raise ValueError("Character has no active dream plan")
         world.event_log.get(caused_by)
+        raise ValueError("Dream-plan steps can complete only through a verified registered executor")
+
+    @staticmethod
+    def _typed_plan_step(step_id: str) -> dict[str, Any]:
+        definition = _PLAN_STEP_ACTIONS.get(step_id)
+        action_id = definition["action_id"] if definition else None
+        return {"step_id": step_id, "action_id": action_id,
+                "preconditions": list(definition["preconditions"]) if definition else [],
+                "completion_predicate": (definition["completion_predicate"]
+                                         if definition else "unregistered"),
+                "status": "pending", "reason": None,
+                "action_event_id": None, "result_event_id": None}
+
+    def execute_dream_plan_step(self, world, agent_id: str, *, action_event_id: str) -> str:
+        """Execute one registered treasure-plan action or record its precise blocker."""
+        action_event = world.event_log.get(action_event_id)
+        if (action_event.type != "AGENT_ACTION"
+                or action_event.data.get("action_id") != "pursue_dream_step"):
+            raise ValueError("Dream-plan execution requires its legal pursuit action event")
+        state = self.agents.get(agent_id)
+        plan = state.get("plan") if state else None
+        character = world.entities.get(agent_id)
+        if (not plan or plan["status"] != "active" or not character
+                or character.get("kind") != "character"
+                or character.get("death_tick") is not None
+                or plan["current_step"] >= len(plan["steps"])
+                ):
+            raise ValueError("Plan executor requires a living dreamer with an active plan")
         index = plan["current_step"]
         step = plan["steps"][index]
-        event = world.event_log.append(
+        if isinstance(step, str):
+            step = self._typed_plan_step(step)
+            plan["steps"][index] = step
+        action_id = step["action_id"]
+        if action_id is None or plan["dream_kind"] != "find_treasure":
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "no_registered_executor")
+        if action_id == "learn_treasure_clue":
+            result_id = self._learn_treasure_clue(
+                world, agent_id, plan, step, action_event_id)
+            if result_id is not None:
+                return result_id
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "no_local_treasure_clue")
+        if action_id == "travel_to_treasure":
+            return self._execute_treasure_travel(
+                world, agent_id, plan, step, action_event_id,
+                world.environment.treasures.get(plan["target_ref"]),
+                target_island=True)
+        if action_id == "survive_treasure_route":
+            return self._complete_treasure_route_step(
+                world, agent_id, plan, step, action_event_id)
+        if action_id == "search_treasure":
+            return self._search_treasure(world, agent_id, plan, step, action_event_id)
+        if action_id == "return_with_treasure":
+            return self._execute_treasure_travel(
+                world, agent_id, plan, step, action_event_id, None, target_island=False)
+        return self._block_plan_step(
+            world, agent_id, plan, step, action_event_id, "executor_not_registered")
+
+    def _learn_treasure_clue(self, world, agent_id: str, plan: dict[str, Any],
+                             step: dict[str, Any], action_event_id: str) -> str | None:
+        location = world.location_of(agent_id)
+        if location.get("kind") != "island":
+            return None
+        candidates = []
+        for event in world.event_log.by_location(location["id"]):
+            if event.type not in {"TREASURE_RUMOR", "TREASURE_CLUE_SPREAD"}:
+                continue
+            treasure_id = event.data.get("treasure_id")
+            treasure = world.environment.treasures.get(treasure_id)
+            if treasure and treasure["discovered_event_id"] is None:
+                candidates.append((event.tick, event.id, treasure_id, event))
+        if not candidates:
+            return None
+        _tick, _event_id, treasure_id, rumor = min(candidates)
+        learned = world.event_log.append(
+            tick=world.clock.tick, event_type="TREASURE_CLUE_LEARNED",
+            location=location["id"],
+            actors=[{"role": "clue_lead", "entity_id": agent_id}],
+            targets=[{"role": "treasure_site", "entity_id": treasure_id}],
+            data={"treasure_id": treasure_id, "rumor_event_id": rumor.id,
+                  "target_island_id": world.environment.treasures[treasure_id]["island_id"],
+                  "clue_scope": "island_not_exact_cove"},
+            caused_by=list(dict.fromkeys((plan["source_event_id"], action_event_id, rumor.id))),
+            causes_tags=["treasure_plan", "clue_learned", "finite_site"], magnitude=0.2,
+        )
+        plan["target_ref"] = treasure_id
+        world.entities[agent_id]["dream"]["target_ref"] = treasure_id
+        step["action_event_id"] = action_event_id
+        step["result_event_id"] = learned.id
+        return self._complete_plan_step(world, agent_id, plan, step, action_event_id, learned.id)
+
+    def _execute_treasure_travel(self, world, agent_id: str, plan: dict[str, Any],
+                                 step: dict[str, Any], action_event_id: str,
+                                 treasure: dict[str, Any] | None, *,
+                                 target_island: bool) -> str:
+        character = world.entities[agent_id]
+        if target_island:
+            if treasure is None or treasure["discovered_event_id"] is not None:
+                return self._fail_plan_step(
+                    world, agent_id, plan, step, action_event_id, "treasure_target_stale")
+            destination = treasure["island_id"]
+        else:
+            destination = character.get("birthplace")
+            if destination not in world.geography.islands:
+                return self._block_plan_step(
+                    world, agent_id, plan, step, action_event_id, "home_island_unknown")
+            asset_id = f"treasure_asset:{plan['target_ref']}"
+            if not any(isinstance(asset, dict) and asset.get("id") == asset_id
+                       for asset in character.get("wealth", {}).get("assets", [])):
+                return self._fail_plan_step(
+                    world, agent_id, plan, step, action_event_id, "treasure_reward_not_held")
+        location = world.location_of(agent_id)
+        if location.get("kind") == "island" and location.get("id") == destination:
+            if step.get("status") == "in_progress" and step.get("result_event_id"):
+                arrival = self._arrival_for_voyage(
+                    world, step["result_event_id"], self._agent_commandable_ships(world, character))
+                if arrival is None:
+                    return self._block_plan_step(
+                        world, agent_id, plan, step, action_event_id, "arrival_event_unverified")
+                return self._complete_plan_step(
+                    world, agent_id, plan, step, action_event_id, arrival.id)
+            return self._complete_plan_step(
+                world, agent_id, plan, step, action_event_id, action_event_id)
+        ship_ids = self._agent_commandable_ships(world, character)
+        if not ship_ids:
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "no_commandable_vessel")
+        ship_id = ship_ids[0]
+        transit = world.travel.transits.get(ship_id)
+        if transit:
+            if transit["destination"] == destination:
+                step["status"] = "in_progress"
+                step["reason"] = None
+                step["action_event_id"] = step["action_event_id"] or action_event_id
+                return action_event_id
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "vessel_en_route_elsewhere")
+        if location.get("kind") != "island":
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "vessel_not_berthed")
+        try:
+            voyage_id = world.start_voyage(ship_id, destination, caused_by=action_event_id)
+        except ValueError as exc:
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, f"travel_blocked:{exc}")
+        step["status"] = "in_progress"
+        step["reason"] = None
+        step["action_event_id"] = action_event_id
+        step["result_event_id"] = voyage_id
+        started = world.event_log.append(
+            tick=world.clock.tick, event_type="PLAN_STEP_STARTED",
+            location=location["id"], actors=[{"role": "planner", "entity_id": agent_id}],
+            targets=[{"role": "vessel", "entity_id": ship_id}],
+            data={"dream_kind": plan["dream_kind"], "step_id": step["step_id"],
+                  "step_index": plan["current_step"], "destination": destination,
+                  "voyage_event_id": voyage_id},
+            caused_by=list(dict.fromkeys((plan["source_event_id"], action_event_id, voyage_id))),
+            causes_tags=["treasure_plan", "plan_step_started", "voyage"], magnitude=0.12,
+        )
+        step["status"] = "in_progress"
+        world.entities[agent_id]["last_event_id"] = started.id
+        return started.id
+
+    @staticmethod
+    def _agent_commandable_ships(world, character: dict[str, Any]) -> list[str]:
+        crew = world.crew_ships.crews.get(character.get("crew_id"))
+        if not crew or character["id"] not in crew["roster"]:
+            return []
+        return sorted(ship_id for ship_id in crew["ship_ids"]
+                      if ship_id in world.entities and world.ship_is_commandable(ship_id))
+
+    def _complete_treasure_route_step(self, world, agent_id: str, plan: dict[str, Any],
+                                      step: dict[str, Any], action_event_id: str) -> str:
+        character = world.entities[agent_id]
+        treasure = world.environment.treasures.get(plan["target_ref"])
+        if not treasure or character.get("death_tick") is not None:
+            return self._fail_plan_step(
+                world, agent_id, plan, step, action_event_id, "route_not_survived")
+        location = world.location_of(agent_id)
+        if location.get("id") != treasure["island_id"]:
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "awaiting_treasure_arrival")
+        prior = plan["steps"][plan["current_step"] - 1]
+        arrival_id = prior.get("result_event_id") if isinstance(prior, dict) else None
+        try:
+            arrival = world.event_log.get(arrival_id)
+        except (KeyError, TypeError):
+            arrival = None
+        already_at_site = (arrival is not None and arrival.type == "AGENT_ACTION"
+                           and plan["steps"][plan["current_step"] - 1]["status"] == "completed")
+        if arrival is None or arrival.type != "VOYAGE_ARRIVED" and not already_at_site:
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "arrival_event_unverified")
+        return self._complete_plan_step(world, agent_id, plan, step, action_event_id, arrival.id)
+
+    @staticmethod
+    def _arrival_for_voyage(world, voyage_id: str, ship_ids: list[str]):
+        return next((event for event in reversed(world.event_log.by_type("VOYAGE_ARRIVED"))
+                     if event.caused_by and voyage_id in event.caused_by
+                     and any(actor.get("entity_id") in ship_ids for actor in event.actors)), None)
+
+    def _search_treasure(self, world, agent_id: str, plan: dict[str, Any],
+                         step: dict[str, Any], action_event_id: str) -> str:
+        character = world.entities[agent_id]
+        treasure = world.environment.treasures.get(plan["target_ref"])
+        if treasure is None or treasure["discovered_event_id"] is not None:
+            return self._fail_plan_step(
+                world, agent_id, plan, step, action_event_id, "treasure_target_stale")
+        if world.location_of(agent_id).get("id") != treasure["island_id"]:
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "wrong_treasure_island")
+        rules = self.ai_data["plan_rules"]
+        if (world.characters.effective_stat(character, "cunning") < rules["treasure_min_cunning"]
+                or character["health"]["hp"] < rules["treasure_min_hp"]):
+            return self._block_plan_step(
+                world, agent_id, plan, step, action_event_id, "insufficient_search_capability")
+        outbreak = world.environment.outbreaks.get(treasure["island_id"])
+        if outbreak:
+            failed = world.event_log.append(
+                tick=world.clock.tick, event_type="TREASURE_SEARCH_FAILED",
+                location=treasure["island_id"],
+                actors=[{"role": "searcher", "entity_id": agent_id}],
+                targets=[{"role": "treasure", "entity_id": plan["target_ref"]}],
+                data={"reason": "active_disease_outbreak",
+                      "outbreak_event_id": outbreak["event_id"]},
+                caused_by=list(dict.fromkeys((action_event_id, outbreak["event_id"]))),
+                causes_tags=["treasure_search", "hazard_failure"], magnitude=0.2,
+            )
+            return self._fail_plan_step(
+                world, agent_id, plan, step, action_event_id,
+                "active_disease_outbreak", result_event_id=failed.id)
+        found_id = world.environment.discover_treasure(
+            world, plan["target_ref"], agent_id, caused_by=action_event_id)
+        step["result_event_id"] = found_id
+        return self._complete_plan_step(
+            world, agent_id, plan, step, action_event_id, found_id)
+
+    def _complete_plan_step(self, world, agent_id: str, plan: dict[str, Any],
+                            step: dict[str, Any], action_event_id: str,
+                            result_event_id: str) -> str:
+        world.event_log.get(result_event_id)
+        step_index = plan["current_step"]
+        step_event = world.event_log.append(
             tick=world.clock.tick, event_type="PLAN_STEP_COMPLETED",
             location=world.location_of(agent_id)["id"],
             actors=[{"role": "planner", "entity_id": agent_id}],
-            data={"dream_kind": plan["dream_kind"], "step": step,
-                  "step_index": index, "steps_total": len(plan["steps"])},
-            caused_by=[caused_by], causes_tags=["plan_progress", f"plan_step:{step}"],
-            magnitude=0.1,
+            data={"dream_kind": plan["dream_kind"], "step_id": step["step_id"],
+                  "step_index": step_index, "steps_total": len(plan["steps"]),
+                  "action_event_id": action_event_id, "result_event_id": result_event_id},
+            caused_by=list(dict.fromkeys((plan["source_event_id"], action_event_id,
+                                          result_event_id))),
+            causes_tags=["verified_plan_step", f"plan_step:{step['step_id']}"], magnitude=0.15,
         )
+        step.update({"status": "completed", "reason": None,
+                     "action_event_id": action_event_id,
+                     "result_event_id": result_event_id})
         plan["current_step"] += 1
+        final_id = step_event.id
         if plan["current_step"] == len(plan["steps"]):
             plan["status"] = "completed"
             completed = world.event_log.append(
                 tick=world.clock.tick, event_type="DREAM_PLAN_COMPLETED",
                 location=world.location_of(agent_id)["id"],
                 actors=[{"role": "dreamer", "entity_id": agent_id}],
-                data={"dream_kind": plan["dream_kind"], "steps_total": len(plan["steps"])},
-                caused_by=[event.id], causes_tags=["dream_plan_completed"], magnitude=0.2,
+                data={"dream_kind": plan["dream_kind"], "steps_total": len(plan["steps"]),
+                      "target_ref": plan["target_ref"],
+                      "final_state_verified": True},
+                caused_by=list(dict.fromkeys((plan["source_event_id"], step_event.id,
+                                              result_event_id))),
+                causes_tags=["dream_plan_completed", "verified_objective"], magnitude=0.35,
             )
-            event_id = completed.id
-        else:
-            event_id = event.id
-        world.entities[agent_id]["last_event_id"] = event_id
-        return event_id
+            final_id = completed.id
+        world.entities[agent_id]["last_event_id"] = final_id
+        return final_id
+
+    def _block_plan_step(self, world, agent_id: str, plan: dict[str, Any],
+                         step: dict[str, Any], action_event_id: str, reason: str) -> str:
+        step["status"] = "blocked"
+        step["reason"] = reason
+        step["action_event_id"] = action_event_id
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="PLAN_STEP_BLOCKED",
+            location=world.location_of(agent_id)["id"],
+            actors=[{"role": "planner", "entity_id": agent_id}],
+            data={"dream_kind": plan["dream_kind"], "step_id": step["step_id"],
+                  "step_index": plan["current_step"], "reason": reason},
+            caused_by=list(dict.fromkeys((plan["source_event_id"], action_event_id))),
+            causes_tags=["plan_step_blocked", f"plan_step:{step['step_id']}"], magnitude=0.03,
+        )
+        world.entities[agent_id]["last_event_id"] = event.id
+        return event.id
+
+    def _fail_plan_step(self, world, agent_id: str, plan: dict[str, Any],
+                        step: dict[str, Any], action_event_id: str, reason: str, *,
+                        result_event_id: str | None = None) -> str:
+        cause_ids = [plan["source_event_id"], action_event_id]
+        if result_event_id:
+            cause_ids.append(result_event_id)
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="PLAN_STEP_FAILED",
+            location=world.location_of(agent_id)["id"],
+            actors=[{"role": "planner", "entity_id": agent_id}],
+            data={"dream_kind": plan["dream_kind"], "step_id": step["step_id"],
+                  "step_index": plan["current_step"], "reason": reason,
+                  "result_event_id": result_event_id},
+            caused_by=list(dict.fromkeys(cause_ids)),
+            causes_tags=["plan_step_failed", f"plan_step:{step['step_id']}"], magnitude=0.12,
+        )
+        step.update({"status": "failed", "reason": reason,
+                     "action_event_id": action_event_id,
+                     "result_event_id": result_event_id})
+        plan["status"] = "failed"
+        world.entities[agent_id]["last_event_id"] = event.id
+        return event.id
 
     def set_voyage_plan(self, world, agent_id: str, steps: list[dict[str, Any]], *,
                         caused_by: str) -> str:
@@ -1198,22 +1609,67 @@ class DecisionSystem:
     def _valid_plan_record(self, plan: Any) -> bool:
         if plan is None:
             return True
-        return (isinstance(plan, dict)
+        if not (isinstance(plan, dict)
                 and set(plan) == {"dream_kind", "target_ref", "steps", "current_step",
                                   "status", "created_tick", "source_event_id"}
                 and plan["dream_kind"] in self.ai_data["plan_templates"]
                 and (plan["target_ref"] is None or isinstance(plan["target_ref"], str))
                 and isinstance(plan["steps"], list) and plan["steps"]
-                and all(isinstance(step, str) and step for step in plan["steps"])
+                and all((isinstance(step, str) and bool(step))
+                        or self._valid_plan_step_record(step) for step in plan["steps"])
                 and type(plan["current_step"]) is int
                 and 0 <= plan["current_step"] <= len(plan["steps"])
-                and plan["status"] in {"active", "completed"}
+                and plan["status"] in {"active", "completed", "failed", "abandoned"}
                 and (plan["status"] != "active" or plan["current_step"] < len(plan["steps"])
-                     )
+                      )
                 and (plan["status"] != "completed" or plan["current_step"] == len(plan["steps"])
-                     )
+                      )
                 and type(plan["created_tick"]) is int and plan["created_tick"] >= 0
-                and isinstance(plan["source_event_id"], str))
+                and isinstance(plan["source_event_id"], str)):
+            return False
+        typed = [step for step in plan["steps"] if isinstance(step, dict)]
+        if not typed:
+            return True
+        if len(typed) != len(plan["steps"]):
+            return False
+        statuses = [step["status"] for step in typed]
+        index = plan["current_step"]
+        return (
+            all(status == "completed" for status in statuses[:index])
+            and (plan["status"] != "active"
+                 or statuses[index] in {"pending", "in_progress", "blocked"})
+            and (plan["status"] != "completed"
+                 or all(status == "completed" for status in statuses))
+            and (plan["status"] != "failed" or statuses[index] == "failed")
+            and (plan["status"] != "abandoned" or statuses[index] == "abandoned")
+            and all(status == "pending" for status in statuses[index + 1:])
+        )
+
+    @staticmethod
+    def _valid_plan_step_record(step: Any) -> bool:
+        if (not isinstance(step, dict)
+                or set(step) != {"step_id", "action_id", "preconditions",
+                                 "completion_predicate", "status", "reason",
+                                 "action_event_id", "result_event_id"}
+                or not isinstance(step["step_id"], str) or not step["step_id"]
+                or step["action_id"] is not None and not isinstance(step["action_id"], str)
+                or not isinstance(step["preconditions"], list)
+                or any(not isinstance(item, str) or not item for item in step["preconditions"])
+                or step["status"] not in {
+                    "pending", "in_progress", "completed", "blocked", "failed", "abandoned"}
+                or step["reason"] is not None and not isinstance(step["reason"], str)
+                or step["action_event_id"] is not None
+                and not isinstance(step["action_event_id"], str)
+                or step["result_event_id"] is not None
+                and not isinstance(step["result_event_id"], str)):
+            return False
+        if step["action_id"] is None:
+            return (step["completion_predicate"] == "unregistered"
+                    and not step["preconditions"])
+        definition = _PLAN_STEP_ACTIONS.get(step["step_id"])
+        return bool(definition and step["action_id"] == definition["action_id"]
+                    and step["completion_predicate"] == definition["completion_predicate"]
+                    and step["preconditions"] == definition["preconditions"])
 
     def _valid_voyage_plan_record(self, plan: Any) -> bool:
         if plan is None:
@@ -1278,6 +1734,17 @@ class DecisionSystem:
                     raise ValueError(f"Dream plan references an unknown event: {agent_id}") from exc
                 if plan["created_tick"] > world.clock.tick:
                     raise ValueError(f"Dream plan was created in the future: {agent_id}")
+                for step in plan["steps"]:
+                    if not isinstance(step, dict):
+                        continue
+                    for reference_key in ("action_event_id", "result_event_id"):
+                        event_id = step[reference_key]
+                        if event_id is not None:
+                            try:
+                                world.event_log.get(event_id)
+                            except KeyError as exc:
+                                raise ValueError(
+                                    f"Dream plan step references unknown {reference_key}: {agent_id}") from exc
             voyage_plan = state["voyage_plan"]
             if voyage_plan is not None:
                 try:

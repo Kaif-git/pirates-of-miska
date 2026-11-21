@@ -2,9 +2,12 @@ import pytest
 
 from omnisim.world import tile as T
 from pirates.game import World
-from pirates.ship_building import candidate, queue
+from pirates.ship_building import candidate, queue, queue_blueprint
 from pirates.ship_model import ShipModel
 from pirates.ship_map import ORIGIN
+from pirates.management import job_explanation
+from pirates.ship_physics import calculate
+from pirates.ship_storage import queue_transfer
 
 
 def carpenter_world():
@@ -85,6 +88,35 @@ def test_midhaul_save_resume_and_cancellation_conserve_material(tmp_path):
     assert restored.ship.stores["planks"] == before - 1
 
 
+def test_connected_floor_construction_midcarry_save_load_keeps_reachable_worksite(tmp_path):
+    world, sailor = carpenter_world()
+    target = (72, 13)  # Edge extension has one reachable adjacent work tile.
+    before = world.ship.stores["planks"]
+    world.player.x, world.player.y = target[0], target[1] + 1
+    world.refresh()
+    job = queue(world, target, "build", "floor")
+    assert world.move(0, 1)  # Clear the sole work tile through normal movement.
+    run_until(world, lambda: bool(sailor.cargo))
+    assert job.state == "claimed" and job.phase == "work"
+    assert world.ship.path(world, sailor, (*job.target, 0)) is not None
+
+    path = tmp_path / "floor-midcarry.json"
+    world.save(path)
+    restored = World.load(path)
+    restored_job = restored.ship.job(job.id)
+    restored_sailor = restored.ship.sailor(sailor.id)
+    assert restored_sailor.cargo == {"planks": 1}
+    assert restored_job.state == "claimed" and restored_job.phase == "work"
+    assert restored.ship.path(restored, restored_sailor, (*restored_job.target, 0)) is not None
+
+    run_until(restored, lambda: restored_job.state == "done")
+    assert any(component.kind == "floor" and (component.x, component.y, component.z) == (3, 1, 0)
+               for component in restored.ship_model.components)
+    assert restored.ship.stores["planks"] == before - 1
+    assert not restored_sailor.cargo
+    assert restored.ship.check_orders() == []
+
+
 def test_missing_supplies_and_duplicate_order():
     world, sailor = carpenter_world()
     world.ship.stores["planks"] = 0
@@ -95,6 +127,91 @@ def test_missing_supplies_and_duplicate_order():
     with pytest.raises(ValueError, match="already exists"):
         queue(world, (78, 27), "build")
     assert not sailor.cargo
+
+
+def test_direct_and_blueprint_orders_share_one_active_construction_site(tmp_path):
+    world, _ = carpenter_world()
+    direct = queue(world, (78, 27), "build", "wall")
+    world.blueprint.set(9, 15, 0, "build", "wall")
+    jobs_before = len(world.ship.jobs)
+    with pytest.raises(ValueError, match="already exists"):
+        queue_blueprint(world)
+    assert len(world.ship.jobs) == jobs_before
+    assert world.ship.job(direct.id) is direct
+    assert world.blueprint.changes
+
+    world, _ = carpenter_world()
+    world.blueprint.set(9, 15, 0, "build", "wall")
+    jobs = queue_blueprint(world)
+    assert len(jobs) == 1
+    path = tmp_path / "blueprint-work.json"
+    world.save(path)
+    restored = World.load(path)
+    with pytest.raises(ValueError, match="already exists"):
+        queue(restored, (78, 27), "build", "wall")
+    assert len([job for job in restored.ship.jobs if job.construction]) == 1
+
+
+def test_construction_tool_bonus_changes_real_assigned_worker_progress():
+    ordinary, ordinary_worker = carpenter_world()
+    equipped, equipped_worker = carpenter_world()
+    hold_x, hold_y = equipped.ship.stations["hold"]
+    equipped.player.x, equipped.player.y = hold_x - 1, hold_y
+    equipped.economy.cargo = {"carpenter_tools": 1}
+    equipped.economy.equip(equipped, equipped_worker.id, "carpenter_tools")
+    ordinary.advance(1000)
+
+    ordinary_job = queue(ordinary, (78, 27), "build", "wall")
+    equipped_job = queue(equipped, (78, 27), "build", "wall")
+    ordinary.ship.assign(ordinary_job.id, ordinary_worker.id)
+    equipped.ship.assign(equipped_job.id, equipped_worker.id)
+    ordinary.advance(6000)
+    equipped.advance(6000)
+
+    assert equipped.economy.bonus(equipped_worker.id, "labor", "repair") == 1.2
+    assert equipped_job.progress > ordinary_job.progress
+
+
+def test_missing_repair_labor_explains_and_recovers_construction_order():
+    world, sailor = carpenter_world()
+    for crew in world.ship.crew:
+        crew.labors["repair"] = 0
+    job = queue(world, (78, 27), "build", "wall")
+    world.advance(100)
+    assert job.state == "blocked"
+    assert "No crew member has this labor enabled" in job_explanation(world, job)
+
+    world.ship.set_labor(sailor.id, "repair", 1)
+    run_until(world, lambda: bool(sailor.cargo))
+    assert job.state == "claimed"
+    assert sailor.cargo == {"planks": 1}
+
+
+def test_built_deck_extension_adds_real_storage_and_preserves_transferred_stock():
+    world, sailor = carpenter_world()
+    base_floors = world.ship_model.deck_geometry(0)["tiles"]
+    base_displacement = calculate(world)["displacement_limit_kg"]
+    base_storage_capacity = sum(pile.capacity_kg for pile in world.ship.storage.piles.values())
+    planks_before = world.ship.stores["planks"]
+
+    target = (72, 13)  # Verified connected one-tile starter-deck extension.
+    floor_job = queue(world, target, "build", "floor")
+    run_until(world, lambda: floor_job.state == "done")
+    expanded_floors = world.ship_model.deck_geometry(0)["tiles"]
+    expanded_displacement = calculate(world)["displacement_limit_kg"]
+    assert expanded_floors == base_floors + 1
+    assert expanded_displacement > base_displacement
+
+    pile = world.ship.storage.designate(world.ship_model, world.ship_fixtures,
+                                        *target, capacity_kg=750)
+    assert sum(p.capacity_kg for p in world.ship.storage.piles.values()) == base_storage_capacity + 750
+    transfer = queue_transfer(world, "hold", pile.id, {"planks": 1})
+    run_until(world, lambda: transfer.state == "done")
+    assert world.ship.storage.piles["hold"].contents["planks"] == planks_before - 2
+    assert pile.contents == {"planks": 1}
+    assert world.ship.stores["planks"] == planks_before - 1
+    assert not sailor.cargo
+    assert world.ship.check_orders() == []
 
 
 @pytest.mark.parametrize("target,action", [

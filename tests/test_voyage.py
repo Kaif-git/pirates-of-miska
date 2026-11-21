@@ -5,7 +5,8 @@ import pytest
 
 from pirates.game import World
 from pirates.economy import MERCHANTS, build_port
-from pirates.voyage import (SEA_NODES, VoyageSystem, NpcFleetSystem,
+from pirates import sea_encounter
+from pirates.voyage import (LANES, SEA_NODES, VoyageSystem, NpcFleetSystem,
                             CREW_ORDERS, CAPTAIN_ACTIONS,
                             ticks_to_next_day_boundary)
 from pirates.ship import LABORS
@@ -63,6 +64,36 @@ def test_equal_chart_routes_are_exposed_with_real_distinct_waypoints():
     assert world.voyages.plan(world, "cinder", "navy_lane")["route"] == ["verdant", "navy_lane", "cinder"]
     with pytest.raises(ValueError, match="Unknown chart location"):
         world.voyages.route_options("verdant", "uncharted")
+
+
+def test_authored_chart_connects_three_ports_and_only_allows_port_destinations():
+    from math import isfinite
+
+    world = World.new_authored_mvp()
+    assert all(a != b and a in SEA_NODES and b in SEA_NODES for a, b in LANES)
+    assert len({frozenset(edge) for edge in LANES}) == len(LANES)
+    assert all(len(row["xy"]) == 2 and all(isfinite(value) for value in row["xy"])
+               for row in SEA_NODES.values())
+    port_nodes = [node for node, row in SEA_NODES.items()
+                  if row.get("port") in ("verdant", "cinder", "freeport")]
+    assert set(port_nodes) == {"verdant", "cinder", "freeport"}
+    for start in port_nodes:
+        for end in port_nodes:
+            if start != end:
+                route, distance = world.voyages.shortest_route(start, end)
+                assert route[0] == start and route[-1] == end and distance > 0
+    world.voyages.position = "verdant"
+    plan = world.voyages.plan(world, "freeport")
+    assert plan["route"][0] == "verdant" and plan["route"][-1] == "freeport"
+    with pytest.raises(ValueError, match="three trading ports"):
+        world.voyages.plan(world, "shoals")
+    alternatives = world.voyages.route_options("verdant", "cinder")
+    assert len(alternatives) == 2
+    for option in alternatives:
+        authored = World.new_authored_mvp()
+        ordered = authored.voyages.confirm(authored, "cinder", option["waypoint"])
+        assert ordered["route"] == option["route"]
+        assert authored.voyages.voyage["route"] == option["route"]
 
 
 def test_hail_and_repair_aid_are_persisted_and_consume_real_cargo(tmp_path):
@@ -610,8 +641,11 @@ def test_npc_sighting_uses_nearby_chart_distance_not_only_identical_nodes():
     fleets.sighted.clear()
     fleets.hour = world.clock.total_ticks // 360000 - 1
     fleets.ships[0]["node"] = fleets.ships[0]["destination"] = "deepwater"
+    fleets.ships[0]["motion"] = None
     fleets.ships[1]["node"] = fleets.ships[1]["destination"] = "shoals"
+    fleets.ships[1]["motion"] = None
     fleets.ships[2]["node"] = fleets.ships[2]["destination"] = "freeport"
+    fleets.ships[2]["motion"] = None
     sighting = fleets.advance_second(world, (3.0, 2.6), sighting_enabled=True)
     assert sighting and sighting["id"] == "government_1"
 
@@ -738,6 +772,7 @@ def test_npc_trade_and_hunt_are_persistent_autonomous_actions():
     world = quiet_world()
     trader = fleets.ships[0]
     trader["node"] = trader["destination"] = "cinder"
+    trader["motion"] = None
     trader["cargo"] = {"grain": 3}
     silver = trader["silver"]
     sell_quote = world.economy.quote("dara", "grain", 3, False)
@@ -930,7 +965,7 @@ def test_voyage_ui_resolves_nearby_ship_in_normal_game_scene():
     assert world.at_sea
 
 
-def test_pirate_sighting_crossing_stops_at_combat_handoff_without_breach_or_resolution():
+def test_unsupported_pirate_sighting_crossing_is_blocked_without_breach_or_resolution():
     from pirates import sea_encounter
     from pirates.management import voyage_menu
 
@@ -961,9 +996,9 @@ def test_pirate_sighting_crossing_stops_at_combat_handoff_without_breach_or_reso
     assert world.hazards.breaches == hazard_state
     assert world.ship.hull == hull
     assert world.voyages.voyage["status"] == "encounter"
-    request = world.voyages.voyage["encounter"]["contact"]["combat_pending"]
-    assert request["cause"] == "forced_boarding"
-    assert request["participants"] == [world.player.id]
+    contact = world.voyages.voyage["encounter"]["contact"]
+    assert contact["combat_pending"] is None
+    assert contact["crossing"] is None
 
 
 def test_turnback_at_a_port_node_resolves_sighting_and_save_validates(tmp_path):
@@ -1038,16 +1073,20 @@ def test_ship_cannon_exchange_is_deterministic_and_conserves_both_sides_shot():
     assert a == b
     assert first.ship.hull == second.ship.hull
     assert first.npcs.ships[1]["condition"] == second.npcs.ships[1]["condition"]
+    assert any("returns fire" in row for row in a["log"])
+    encounter = first.voyages.voyage["encounter"]
+    assert sea_encounter.hostile_commitment_authorized(first, encounter)
 
 
-def test_voyage_sighting_ui_requires_confirmation_and_stops_at_cannon_handoff():
+def test_voyage_sighting_ui_explains_and_blocks_unsupported_hostility():
     from pirates.management import voyage_menu
 
     class Scripted:
         def __init__(self, answers):
             self.answers = iter(answers)
+            self.frames = []
         def render_list(self, *_args, **_kwargs):
-            pass
+            self.frames.append(_args[2] if len(_args) > 2 else [])
         def choose(self, _count):
             return next(self.answers)
         def wait_any(self):
@@ -1055,14 +1094,16 @@ def test_voyage_sighting_ui_requires_confirmation_and_stops_at_cannon_handoff():
 
     world = cannon_world()
     ammo = world.ship.ammo["port_cannon"]
-    voyage_menu(Scripted([6, 6, 0, 0, None]), world)
+    renderer = Scripted([6, 6, None])
+    voyage_menu(renderer, world)
     assert world.voyages.voyage["status"] == "encounter"
     request = world.voyages.voyage["encounter"]["contact"]["combat_pending"]
-    assert request["cause"] == "cannon_fire"
-    assert request["requested_action"] == {"kind": "fire_cannon", "cannon": "port_cannon"}
+    assert request is None
     assert world.ship.ammo["port_cannon"] == ammo
     assert not world.combat.active
     assert "combat" not in world.voyages.voyage["encounter"]
+    assert any("no witnessed attack or verified warrant" in " ".join(map(str, frame)).lower()
+               for frame in renderer.frames)
 
 
 def test_cannon_exchange_saves_and_resumes_the_same_deterministic_battle(tmp_path):
@@ -1073,6 +1114,9 @@ def test_cannon_exchange_saves_and_resumes_the_same_deterministic_battle(tmp_pat
     world.save(path)
     restored = World.load(path)
     assert restored.voyages.voyage["encounter"]["combat"] == world.voyages.voyage["encounter"]["combat"]
+    assert restored.voyages.conduct_ledger.snapshot() == world.voyages.conduct_ledger.snapshot()
+    assert sea_encounter.hostile_commitment_authorized(
+        restored, restored.voyages.voyage["encounter"])
     restored.voyages.cannon_exchange(restored, "starboard_cannon")
     uninterrupted.voyages.cannon_exchange(uninterrupted, "starboard_cannon")
     assert restored.voyages.voyage["encounter"]["combat"] == uninterrupted.voyages.voyage["encounter"]["combat"]

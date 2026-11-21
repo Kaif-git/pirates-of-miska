@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from sim.systems.personal_combat import resolve_exchange
+
 
 DEFAULT_BATTLE_PATH = Path(__file__).resolve().parents[1] / "data" / "battles.json"
 
@@ -53,8 +55,10 @@ def _validate_data(data: Any) -> None:
         if (not isinstance(name, str) or not name
                 or not isinstance(doctrine, dict)
                 or set(doctrine) != {"power_permille", "morale_permille", "description"}
-                or type(doctrine["power_permille"]) is not int or doctrine["power_permille"] < 1
-                or type(doctrine["morale_permille"]) is not int or doctrine["morale_permille"] < 1
+                or type(doctrine["power_permille"]) is not int
+                or not 500 <= doctrine["power_permille"] <= 1500
+                or type(doctrine["morale_permille"]) is not int
+                or not 500 <= doctrine["morale_permille"] <= 1500
                 or not isinstance(doctrine["description"], str) or not doctrine["description"]):
             raise ValueError("Invalid fleet doctrine")
     traits = data["legend_traits"]
@@ -68,7 +72,8 @@ def _validate_data(data: Any) -> None:
                 or not isinstance(trait["name"], str) or not trait["name"]
                 or type(trait["round_power_permille"]) is not int
                 or not 500 <= trait["round_power_permille"] <= 2000
-                or type(trait["duel_bonus"]) is not int or trait["duel_bonus"] < 0
+                or type(trait["duel_bonus"]) is not int
+                or not 0 <= trait["duel_bonus"] <= 20
                 or not isinstance(trait["description"], str) or not trait["description"]):
             raise ValueError("Invalid legend trait")
         ids.add(trait["id"])
@@ -89,6 +94,8 @@ class BattleSystem:
         self.battles_per_year = dict(battles_per_year or {})
         self.battle_count = battle_count
         self.last_updated_day = last_updated_day
+        # Non-authoritative diagnostics: intentionally excluded from snapshots.
+        self.opportunity_observations: list[dict[str, Any]] = []
 
     @classmethod
     def create(cls, path: str | Path = DEFAULT_BATTLE_PATH) -> "BattleSystem":
@@ -191,14 +198,24 @@ class BattleSystem:
         return triggered
 
     def _maybe_resolve_set_piece(self, world, encounter, day: int) -> str | None:
+        def observe(reason: str, **details) -> None:
+            self.opportunity_observations.append({
+                "tick": encounter.tick, "day": day, "encounter_event_id": encounter.id,
+                "reason": reason, **details,
+            })
+
         if encounter.data.get("outcome") in {"mutual_withdrawal", "one_side_flees", "parley_ended_fight"}:
+            observe("encounter_not_hostile_continuation",
+                    encounter_outcome=encounter.data.get("outcome"))
             return None
         ship_ids = encounter.data.get("ships", [])
         if len(ship_ids) != 2 or any(ship_id not in world.entities for ship_id in ship_ids):
+            observe("encounter_missing_two_active_ships", ships=list(ship_ids))
             return None
         ships = [world.entities[ship_id] for ship_id in ship_ids]
         crews = [world.crew_ships.crews.get(ship.get("crew_id")) for ship in ships]
         if any(crew is None for crew in crews):
+            observe("encounter_ship_crew_unavailable", ships=ship_ids)
             return None
         factions = [crew.get("faction_id") for crew in crews]
         captains = [crew.get("captain_id") for crew in crews]
@@ -206,23 +223,44 @@ class BattleSystem:
                 or any(captain not in world.entities for captain in captains)
                 or any(faction_id not in self.fleet_commands for faction_id in factions)
                 or any(world.entities[captain].get("tier") != "LEGEND" for captain in captains)):
+            observe("founding_fleet_legend_commander_requirement_failed",
+                    factions=factions, captains=captains,
+                    captain_tiers=[world.entities.get(captain, {}).get("tier")
+                                   for captain in captains],
+                    fleet_command_present=[faction in self.fleet_commands for faction in factions])
             return None
         pair_key = "|".join(sorted(factions))
-        if day - self.pair_last_battle_day.get(pair_key, -10**9) \
-                < self.data["rules"]["battle_cooldown_days"]:
+        elapsed_since_pair_battle = day - self.pair_last_battle_day.get(pair_key, -10**9)
+        if elapsed_since_pair_battle < self.data["rules"]["battle_cooldown_days"]:
+            observe("pair_cooldown_active", factions=factions,
+                    days_remaining=self.data["rules"]["battle_cooldown_days"]
+                    - elapsed_since_pair_battle)
             return None
         year = (day - 1) // world.config["time"]["days_per_year"] + 1
         year_key = str(year)
         if self.battles_per_year.get(year_key, 0) >= self.data["rules"]["max_battles_per_year"]:
+            observe("annual_battle_cap_reached", factions=factions,
+                    battles_this_year=self.battles_per_year.get(year_key, 0),
+                    annual_battle_cap=self.data["rules"]["max_battles_per_year"])
             return None
         location = encounter.location
         if location is None:
+            observe("encounter_location_missing", factions=factions)
             return None
         side_ships = [self._nearby_fleet_ships(world, factions[index], ship_ids[index], location)
                       for index in range(2)]
         if any(len(group) < self.data["rules"]["minimum_active_ships_per_side"]
                for group in side_ships):
+            observe("minimum_fleet_size_not_met", factions=factions,
+                    side_ship_counts=[len(group) for group in side_ships],
+                    minimum_active_ships_per_side=(
+                        self.data["rules"]["minimum_active_ships_per_side"]))
             return None
+        observe("eligible_set_piece_converted", factions=factions,
+                side_ship_counts=[len(group) for group in side_ships],
+                cooldown_days=self.data["rules"]["battle_cooldown_days"],
+                battles_this_year=self.battles_per_year.get(year_key, 0),
+                annual_battle_cap=self.data["rules"]["max_battles_per_year"])
         recognition_events = []
         traits_by_id = {trait["id"]: trait for trait in self.data["legend_traits"]}
         for captain_id in captains:
@@ -366,7 +404,8 @@ class BattleSystem:
                 if duel_winner is not None:
                     momentum[duel_winner] = max(power[duel_winner] // 20, 1)
             for side, captain_id in enumerate(captains):
-                world.entities[captain_id]["last_event_id"] = round_event.id
+                world.entities[captain_id]["last_event_id"] = (
+                    duel_event.id if round_number == 2 else round_event.id)
         winner_side = (0 if totals[0] > totals[1] else
                        1 if totals[1] > totals[0] else None)
         if winner_side is None:
@@ -507,12 +546,11 @@ class BattleSystem:
 
     def _resolve_legend_duel(self, world, battle, round_event, captains: list[str],
                              factions: list[str], location: str) -> tuple[Any, int | None]:
-        stats = [world.characters.effective_stat(world.entities[captain], "combat")
-                 for captain in captains]
+        duel = self.resolve_personal_combat(
+            world, captains, caused_by=[battle.id, round_event.id], location=location,
+            context="legend_duel", context_id=battle.id)
         bonuses = [self._duel_bonus(world.entities[captain]) for captain in captains]
-        stream = world.rng.stream(f"battle-duel:{battle.id}")
-        rolls = [stream.randbelow(21) - 10 for _ in range(2)]
-        scores = [stats[index] + bonuses[index] + rolls[index] for index in range(2)]
+        scores = [duel["impact_scores"][index] + bonuses[index] for index in range(2)]
         winner = 0 if scores[0] > scores[1] else 1 if scores[1] > scores[0] else None
         outcome = "draw" if winner is None else f"side_{'a' if winner == 0 else 'b'}_edge"
         event = world.event_log.append(
@@ -520,13 +558,226 @@ class BattleSystem:
             actors=[{"role": "duelist", "entity_id": captains[0]}],
             targets=[{"role": "challenger", "entity_id": captains[1]}],
             data={"battle_event_id": battle.id, "round_event_id": round_event.id,
-                  "factions": factions, "combat_stats": stats,
-                  "trait_bonuses": bonuses, "rolls": rolls, "scores": scores,
-                  "outcome": outcome, "winner_side": winner},
-            caused_by=[battle.id, round_event.id],
-            causes_tags=["named_legend_duel", outcome], magnitude=0.9,
+                  "personal_combat_started_event_id": duel["started_event_id"],
+                  "personal_exchange_event_ids": duel["exchange_event_ids"],
+                  "personal_combat_child_event_ids": duel["child_event_ids"],
+                  "factions": factions, "combat_stats": duel["combat_stats"],
+                  "trait_bonuses": bonuses, "rolls": duel["rolls"], "scores": scores,
+                  "impact_scores": duel["impact_scores"], "outcome": outcome,
+                  "winner_side": winner},
+            caused_by=list(dict.fromkeys([
+                battle.id, round_event.id, duel["started_event_id"],
+                *duel["child_event_ids"],
+            ])),
+            causes_tags=["named_legend_duel", "grounded_personal_combat", outcome],
+            magnitude=0.9,
         )
+        for captain_id in captains:
+            world.entities[captain_id]["last_event_id"] = event.id
         return event, winner
+
+    def resolve_personal_combat(self, world, combatants: list[str], *,
+                                caused_by: list[str], location: str,
+                                context: str, context_id: str) -> dict[str, Any]:
+        """Resolve a bounded named-person duel independently of ship/fleet power."""
+        if (len(combatants) != 2 or combatants[0] == combatants[1]
+                or any(character_id not in world.entities
+                       or world.entities[character_id].get("kind") != "character"
+                       for character_id in combatants)
+                or context not in {"legend_duel", "boarding"}):
+            raise ValueError("Personal combat requires two active named combatants and a valid context")
+        parent_ids = list(dict.fromkeys(caused_by))
+        for event_id in parent_ids:
+            world.event_log.get(event_id)
+        profiles = [world.characters.personal_combat_profile(world.entities[key])
+                    for key in combatants]
+        combat_stats = [profile["stats"]["combat"]["effective"] for profile in profiles]
+        start = world.event_log.append(
+            tick=world.clock.tick, event_type="PERSONAL_COMBAT_STARTED", location=location,
+            actors=[{"role": "first_combatant", "entity_id": combatants[0]},
+                    {"role": "second_combatant", "entity_id": combatants[1]}],
+            data={"context": context, "context_id": context_id,
+                  "combatants": list(combatants),
+                  "profiles_before": profiles,
+                  "morale_before": [self._combatant_morale(world, key) for key in combatants]},
+            caused_by=parent_ids,
+            causes_tags=["personal_combat", "named_combat", context], magnitude=0.65,
+        )
+        equipment_catalog = world.characters.data["combat_equipment"]
+        rules = equipment_catalog["rules"]
+        stats = [{name: profile["stats"][name]["effective"] for name in (
+            "combat", "speed", "strength", "endurance", "toughness", "willpower")}
+                 for profile in profiles]
+        stamina = [100, 100]
+        impact_scores = [0, 0]
+        exchange_ids = []
+        child_event_ids = []
+        rolls = []
+        initiative_stream_id = f"personal-combat:{context}:{context_id}:initiative"
+        initiative_stream = world.rng.stream(initiative_stream_id)
+        initiative_rolls = [initiative_stream.randint(rules["hit_roll_min"],
+                                                       rules["hit_roll_max"])
+                            for _ in combatants]
+        initiative_scores = [stats[index]["speed"] + initiative_rolls[index]
+                             for index in range(2)]
+        first_to_act = (0 if initiative_scores[0] > initiative_scores[1] else
+                        1 if initiative_scores[1] > initiative_scores[0] else
+                        min(range(2), key=lambda index: combatants[index]))
+        initiative = world.event_log.append(
+            tick=world.clock.tick, event_type="PERSONAL_INITIATIVE", location=location,
+            actors=[{"role": "first_combatant", "entity_id": combatants[first_to_act]}],
+            targets=[{"role": "second_combatant", "entity_id": combatants[1 - first_to_act]}],
+            data={"context": context, "context_id": context_id,
+                  "speed": [stats[index]["speed"] for index in range(2)],
+                  "rolls": initiative_rolls, "scores": initiative_scores,
+                  "first_actor_index": first_to_act, "rng_stream": initiative_stream_id},
+            caused_by=[start.id],
+            causes_tags=["personal_combat_initiative", "seeded_speed_contest"],
+            magnitude=0.15,
+        )
+        child_event_ids.append(initiative.id)
+        last_cause = initiative.id
+        for exchange_index in range(rules["max_exchanges"]):
+            attacker_index = (first_to_act + exchange_index) % 2
+            defender_index = 1 - attacker_index
+            attacker_id = combatants[attacker_index]
+            defender_id = combatants[defender_index]
+            attacker = world.entities[attacker_id]
+            defender = world.entities[defender_id]
+            attacker_gear = attacker["combat_equipment"]
+            defender_gear = defender["combat_equipment"]
+            weapon = equipment_catalog["weapons"][attacker_gear["weapon_id"]]
+            armor = equipment_catalog["armor"][defender_gear["armor_id"]]
+            defensive_action = self._personal_defense_action(
+                stats[defender_index], stamina[defender_index], rules)
+            morale = [self._combatant_morale(world, key) for key in combatants]
+            stream = world.rng.stream(
+                f"personal-combat:{context}:{context_id}:exchange:{exchange_index + 1}")
+            attack_roll = stream.randint(rules["hit_roll_min"], rules["hit_roll_max"])
+            defense_roll = stream.randint(rules["hit_roll_min"], rules["hit_roll_max"])
+            result = resolve_exchange(
+                stats[attacker_index], stats[defender_index], weapon=weapon, armor=armor,
+                weapon_condition_permille=attacker_gear["weapon_condition_permille"],
+                armor_condition_permille=defender_gear["armor_condition_permille"],
+                attacker_stamina=stamina[attacker_index],
+                defender_stamina=stamina[defender_index],
+                defender_action=defensive_action, attacker_roll=attack_roll,
+                defender_roll=defense_roll, rules=rules,
+                attacker_morale=morale[attacker_index],
+                defender_morale=morale[defender_index])
+            exchange = world.event_log.append(
+                tick=world.clock.tick, event_type="PERSONAL_EXCHANGE", location=location,
+                actors=[{"role": "attacker", "entity_id": attacker_id}],
+                targets=[{"role": "defender", "entity_id": defender_id}],
+                data={"context": context, "context_id": context_id,
+                      "exchange_index": exchange_index,
+                      "attacker_action": result["attacker_action"],
+                      "defender_action": result["defender_action"],
+                      "weapon_id": attacker_gear["weapon_id"],
+                      "armor_id": defender_gear["armor_id"],
+                      "weapon_condition_before_permille":
+                          result["weapon_condition_before_permille"],
+                      "armor_condition_before_permille":
+                          result["armor_condition_before_permille"],
+                      "attack_score": result["attack_score"],
+                      "defense_score": result["defense_score"], "hit": result["hit"],
+                      "force": result["force"], "protection": result["protection"],
+                      "impact": result["impact"],
+                      "distance": result["distance"],
+                      "attacker_morale": morale[attacker_index],
+                      "defender_morale": morale[defender_index],
+                      "attacker_stamina_before": stamina[attacker_index],
+                      "attacker_stamina_after": result["attacker_stamina_after"],
+                      "defender_stamina_before": stamina[defender_index],
+                      "defender_stamina_after": result["defender_stamina_after"],
+                      "attacker_exhausted": result["attacker_exhausted"],
+                      "defender_exhausted": result["defender_exhausted"],
+                      "rng_stream":
+                          f"personal-combat:{context}:{context_id}:exchange:{exchange_index + 1}"},
+                caused_by=list(dict.fromkeys([start.id, last_cause])),
+                causes_tags=["personal_combat_exchange", "grounded_outcome",
+                             "hit" if result["hit"] else "miss"],
+                magnitude=min(1.0, result["impact"] / 100),
+            )
+            exchange_ids.append(exchange.id)
+            child_event_ids.append(exchange.id)
+            last_cause = exchange.id
+            rolls.append([attack_roll, defense_roll])
+            stamina[attacker_index] = result["attacker_stamina_after"]
+            stamina[defender_index] = result["defender_stamina_after"]
+            impact_scores[attacker_index] += result["impact"] + int(result["hit"])
+            wear_event = self._apply_personal_equipment_wear(
+                world, attacker_id, "weapon", result["weapon_condition_before_permille"],
+                result["weapon_condition_after_permille"], exchange.id)
+            if wear_event:
+                child_event_ids.append(wear_event)
+                last_cause = wear_event
+            wear_event = self._apply_personal_equipment_wear(
+                world, defender_id, "armor", result["armor_condition_before_permille"],
+                result["armor_condition_after_permille"], exchange.id)
+            if wear_event:
+                child_event_ids.append(wear_event)
+                last_cause = wear_event
+            if result["hit"] and result["impact"] >= rules["injury_impact_threshold"]:
+                injury_chance = min(
+                    rules["max_injury_basis_points"],
+                    (result["impact"] - rules["injury_impact_threshold"] + 1)
+                    * rules["injury_basis_points_per_impact"])
+                injury_roll = stream.randbelow(10_000)
+                if injury_roll < injury_chance:
+                    injury_event_id = world.characters.inflict_injury(
+                        world, defender_id, "broken_arm", caused_by=exchange.id)
+                    child_event_ids.append(injury_event_id)
+                    last_cause = injury_event_id
+                    stats[defender_index] = {
+                        name: world.characters.effective_stat(defender, name)
+                        for name in stats[defender_index]
+                    }
+            rolls[-1].append(result["impact"])
+        winner_side = (0 if impact_scores[0] > impact_scores[1] else
+                       1 if impact_scores[1] > impact_scores[0] else None)
+        return {"started_event_id": start.id, "initiative_event_id": initiative.id,
+                "exchange_event_ids": exchange_ids,
+                "child_event_ids": child_event_ids,
+                "impact_scores": impact_scores, "combat_stats": combat_stats,
+                "rolls": rolls, "stamina_after": stamina, "winner_side": winner_side}
+
+    @staticmethod
+    def _combatant_morale(world, character_id: str) -> int:
+        character = world.entities[character_id]
+        crew = world.crew_ships.crews.get(character.get("crew_id"))
+        return crew["morale"] if crew else 50
+
+    @staticmethod
+    def _personal_defense_action(stats: dict[str, int], stamina: int,
+                                 rules: dict[str, int]) -> str:
+        if stamina < rules["evade_stamina_cost"]:
+            return "guard"
+        return "evade" if stats["speed"] > stats["combat"] else "guard"
+
+    @staticmethod
+    def _apply_personal_equipment_wear(world, character_id: str, equipment_kind: str,
+                                       before: int, after: int, caused_by: str) -> str | None:
+        if after >= before:
+            return None
+        character = world.entities[character_id]
+        field = f"{equipment_kind}_condition_permille"
+        gear = character["combat_equipment"]
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="COMBAT_EQUIPMENT_WORN",
+            location=world.location_of(character_id)["id"],
+            targets=[{"role": "equipment_owner", "entity_id": character_id}],
+            data={"character_id": character_id, "equipment_kind": equipment_kind,
+                  "equipment_id": gear[f"{equipment_kind}_id"],
+                  "condition_before_permille": before,
+                  "condition_after_permille": after,
+                  "condition_loss_permille": before - after},
+            caused_by=[caused_by], causes_tags=["equipment_wear", equipment_kind],
+            magnitude=min(1.0, (before - after) / 1000),
+        )
+        gear[field] = after
+        character["last_event_id"] = event.id
+        return event.id
 
     def _fleet_power(self, world, faction_id: str, captain_id: str,
                      ship_ids: list[str], doctrine: str) -> int:

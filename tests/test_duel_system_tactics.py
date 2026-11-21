@@ -15,12 +15,13 @@ from pirates.duel_system.guide import legal_choices
 from pirates.duel_system.stats import effective_stats
 from pirates.duel_system.wounds import defense_snapshot, resolve_strike
 from test_duel_system_foundation import bare_fighter
+from duel_test_helpers import force_clean_aims
 from test_duel_system_scheduler import advance_to, arena
 
 
 def tactic_state(*, walkable=None):
     cfg = load_config()
-    cfg["accuracy"]["jitter"] = 0
+    force_clean_aims(cfg)
     return CombatState([bare_fighter(pos=(0, 0)), bare_fighter("ronin", pos=(1, 0))],
                        config=cfg, walkable=walkable)
 
@@ -37,12 +38,14 @@ def test_disengage_is_one_tile_away_movement_and_has_no_dodge_immunity():
     choice = Choice(ActionKind.DISENGAGE, direction=(-1, 0))
     assert not legality(state, player.id, choice)
     commit_action(state, player.id, choice)
+    disengage_end = player.action.end_tick
     assert player.action.path == [(7, (-1, 0))]
     commit_action(state, enemy.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     advance_to(state, enemy.action.strike_tick)
     assert events(state, EventType.HIT, enemy.id)
-    advance_to(state, player.action.end_tick)
-    assert player.pos == (-1, 0)
+    advance_to(state, disengage_end)
+    assert player.action is None  # injury reflex interrupted the unresolved disengage
+    assert player.pos == (-1, 0)  # forced flinch/recoil, not a dodge
 
 
 def test_feint_only_disrupts_an_in_reach_committed_guard_and_consumes_riposte():
@@ -84,6 +87,8 @@ def test_parry_opening_fits_riposte_disarm_but_keeps_it_inside_stagger_window():
 
     session = DuelSession.new(seed=68, guide_mode="off")
     player, enemy = session.player, session.enemy
+    from duel_test_helpers import force_clean_aims
+    force_clean_aims(session.state.config)
     player.pos, enemy.pos = (4, 3), (5, 3)
     player.strength, player.accuracy = 14, 100
     light = commit_action(session.state, enemy.id,
@@ -117,8 +122,42 @@ def test_feint_at_range_costs_action_but_does_not_change_guard_or_riposte():
     advance_to(state, player.action.end_tick)
     event = events(state, EventType.FEINT, player.id)[0]
     assert event.deltas["outcome"] == "NO_EFFECT"
+    assert event.deltas["guard_active"] is True
+    assert event.deltas["distance"] == 4 and event.deltas["reach"] == 1
     assert enemy.riposte
     assert event.deltas["guard_stamina_drained"] == 0
+
+
+def test_feint_disrupts_an_active_in_reach_guard_and_reports_why():
+    from pirates.duel_system.exchange_log import format_exchange, summarize_exchange
+
+    state = tactic_state()
+    player, enemy = state.fighters
+    commit_action(state, enemy.id, Choice(ActionKind.GUARD))
+    commit_action(state, player.id, Choice(ActionKind.FEINT))
+    advance_to(state, player.action.end_tick)
+
+    event = events(state, EventType.FEINT, player.id)[0]
+    assert event.deltas["outcome"] == "GUARD_DISRUPTED"
+    assert event.deltas["guard_active"] is True
+    assert event.deltas["distance"] == event.deltas["reach"] == 1
+    recap = " ".join(summarize_exchange(state.event_log, {player.id: "You", enemy.id: "Ronin"}))
+    assert "disrupted" in recap and "guard interrupted through" in recap
+
+
+def test_feint_out_of_range_recap_names_distance_and_reach():
+    from pirates.duel_system.exchange_log import summarize_exchange
+
+    state = tactic_state()
+    player, enemy = state.fighters
+    enemy.pos = (4, 0)
+    commit_action(state, enemy.id, Choice(ActionKind.GUARD))
+    commit_action(state, player.id, Choice(ActionKind.FEINT))
+    advance_to(state, player.action.end_tick)
+
+    recap = " ".join(summarize_exchange(state.event_log, {player.id: "You", enemy.id: "Ronin"}))
+    assert "Guard was active but out of reach" in recap
+    assert "distance 4; reach 1" in recap
 
 
 def test_shove_wins_strength_balance_contest_pushes_one_tile_and_costs_stability():
@@ -151,6 +190,8 @@ def test_equal_novice_shove_can_move_a_genuinely_unsteady_target():
 
 
 def test_shove_blocked_by_edge_still_transfers_impact():
+    from pirates.duel_system.exchange_log import format_exchange
+
     state = tactic_state(walkable={(0, 0), (1, 0)})
     player, enemy = state.fighters
     player.strength = 40
@@ -159,12 +200,39 @@ def test_shove_blocked_by_edge_still_transfers_impact():
     advance_to(state, player.action.end_tick)
     assert events(state, EventType.SHOVE, player.id)[0].deltas["outcome"] == "BLOCKED"
     assert enemy.pos == (1, 0) and enemy.stability < 100
-    assert events(state, EventType.STABILITY, enemy.id)[0].deltas["source"] == "SHOVE_IMPACT"
+    assert enemy.stability <= state.config["stability"]["stable_threshold"] - 1
+    shove_event = events(state, EventType.SHOVE, player.id)[0]
+    assert shove_event.deltas["pile_up"]
+    assert player.pos == enemy.pos and player.grounded and enemy.grounded
+    assert events(state, EventType.STABILITY, enemy.id)[0].deltas["source"] == "SHOVE_COLLISION"
+    restored = CombatState.from_data(state.to_data())
+    assert restored.fighters[0].pos == restored.fighters[1].pos
+    assert all(fighter.grounded for fighter in restored.fighters)
+    recap = "\n".join(format_exchange(state.event_log, {player.id: "You", enemy.id: "Enemy"}))
+    assert "collapsed both fighters into a ground pile" in recap
+    assert "route blocked by" in recap and "moved 0/1 steps" in recap
+
+
+def test_ground_attack_resolves_against_a_piled_opponent_on_the_same_tile():
+    state = tactic_state()
+    player, enemy = state.fighters
+    enemy.pos = player.pos
+    enemy.stability, enemy.grounded, enemy.grounded_since = 0, True, state.tick
+    force_clean_aims(state.config)
+    action = commit_action(state, player.id,
+                           Choice(ActionKind.LIGHT, Zone.TORSO, target_id=enemy.id))
+
+    advance_to(state, action.strike_tick)
+
+    hit = next(event for event in events(state, EventType.HIT) if event.actor == player.id)
+    assert hit.target == enemy.id
+    assert not any(event.type == EventType.WHIFF and event.actor == player.id
+                   for event in state.event_log)
 
 
 @pytest.mark.parametrize(
     "attacker_strength,defender_strength,expected_outcome,expected_steps",
-    [(10, 10, "RESISTED", 0), (20, 10, "OFF_BALANCE", 0),
+    [(10, 10, "SUCCESS", 1), (20, 10, "SUCCESS", 1), (10, 40, "RESISTED", 0),
      (40, 1, "SUCCESS", 1), (70, 10, "SUCCESS", 2)],
 )
 def test_shove_pressure_grades_resistance_and_bounded_displacement(
@@ -226,7 +294,7 @@ def test_forced_displacement_interrupts_stale_run_path():
     commit_action(state, enemy.id, Choice(ActionKind.RUN, direction=(0, 1), tiles=3))
     shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
     advance_to(state, shove.end_tick)
-    assert enemy.pos == (3, 3)
+    assert enemy.pos == (3, 0)
     assert enemy.action is None
     interruption = events(state, EventType.INTERRUPT, enemy.id)[0]
     assert interruption.deltas["kind"] == "RUN"
@@ -235,7 +303,122 @@ def test_forced_displacement_interrupts_stale_run_path():
                if move.tick > next(e.tick for e in events(state, EventType.SHOVE, player.id)))
 
 
+def test_shove_displacement_interrupts_heavy_before_its_later_strike():
+    from pirates.duel_system.exchange_log import format_exchange
+
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength, player.speed, enemy.strength = 40, 25, 1
+    heavy = commit_action(state, enemy.id, Choice(ActionKind.HEAVY, Zone.TORSO))
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    assert shove.end_tick < heavy.strike_tick
+
+    advance_to(state, heavy.strike_tick)
+
+    assert enemy.action is None
+    assert any(event.type == EventType.INTERRUPT and event.actor == enemy.id
+               and event.deltas["kind"] == "HEAVY" for event in state.event_log)
+    assert not any(event.type == EventType.HIT and event.actor == enemy.id
+                   for event in state.event_log)
+    recap = "\n".join(format_exchange(
+        state.event_log, {player.id: "You", enemy.id: "Enemy"}))
+    assert "displacement at t2 interrupted the target's committed action" in recap.lower()
+
+
+def test_matched_novice_shove_resolves_at_windup_not_after_heavy_strike():
+    state = tactic_state()
+    player, enemy = state.fighters
+    heavy = commit_action(state, enemy.id, Choice(ActionKind.HEAVY, Zone.TORSO))
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    effect_tick = shove.start_tick + shove.windup_len
+    assert (effect_tick, heavy.strike_tick, shove.end_tick) == (5, 7, 9)
+
+    advance_to(state, shove.end_tick)
+
+    shove_event = events(state, EventType.SHOVE, player.id)[0]
+    assert shove_event.tick == effect_tick < heavy.strike_tick
+    assert shove_event.deltas["outcome"] == "SUCCESS"
+    assert shove_event.deltas["actual_steps"] == 1
+    assert enemy.action is None
+    assert any(event.type == EventType.INTERRUPT and event.actor == enemy.id
+               and event.deltas["kind"] == "HEAVY" for event in state.event_log)
+    assert any(event.type == EventType.STABILITY and event.actor == enemy.id
+               and event.deltas.get("source") == "SHOVE_IMPACT" for event in state.event_log)
+    assert not any(event.type == EventType.SHOVE and event.tick > effect_tick
+                   for event in state.event_log)
+    advance_to(state, heavy.strike_tick)
+    assert not events(state, EventType.HIT, enemy.id)
+
+
+def test_standard_duel_shove_disrupts_equal_novice_committed_heavy_before_impact():
+    session = DuelSession.new(seed=1, guide_mode="off")
+    state = session.state
+    player, enemy = session.player, session.enemy
+    player.pos, enemy.pos = (6, 3), (7, 3)
+    heavy = commit_action(state, enemy.id, Choice(ActionKind.HEAVY, Zone.TORSO,
+                                                  target_id=player.id))
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE, target_id=enemy.id))
+    effect_tick = shove.start_tick + shove.windup_len
+    assert heavy.strike_tick == 8 and effect_tick == 6
+
+    advance_to(state, effect_tick)
+
+    event = events(state, EventType.SHOVE, player.id)[0]
+    assert event.deltas["committed_heavy"]
+    assert event.deltas["outcome"] == "SUCCESS"
+    assert event.deltas["actual_steps"] == 1
+    assert enemy.action is None
+    assert any(row.type == EventType.INTERRUPT and row.actor == enemy.id
+               and row.deltas["kind"] == "HEAVY" for row in state.event_log)
+    from pirates.duel_system.exchange_log import format_exchange
+    recap = "\n".join(format_exchange(state.event_log,
+                                     {player.id: "You", enemy.id: "Ronin"}))
+    assert "displacement at t6 interrupted the target's committed action" in recap.lower()
+    from pirates.duel_system.exchange_log import summarize_exchange
+    summary_reason = summarize_exchange(state.event_log,
+                                        {player.id: "You", enemy.id: "Ronin"})[3]
+    assert "displacement at t6 interrupted the target's committed action" in summary_reason.lower()
+    advance_to(state, heavy.strike_tick)
+    assert not events(state, EventType.HIT, enemy.id)
+
+
+def test_shove_effect_is_saved_once_while_recovery_remains_committed():
+    state = tactic_state()
+    player, enemy = state.fighters
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    effect_tick = shove.start_tick + shove.windup_len
+    advance_to(state, effect_tick)
+    assert player.action is not None and player.action.tactical_resolved
+    assert len(events(state, EventType.SHOVE, player.id)) == 1
+
+    restored = CombatState.from_data(state.to_data())
+    restored_player = restored.fighter(player.id)
+    assert restored_player.action.tactical_resolved
+    advance_to(restored, shove.end_tick)
+    assert len(events(restored, EventType.SHOVE, player.id)) == 1
+    assert restored_player.action is None
+
+
+def test_dash_can_evade_a_committed_shove_before_it_resolves():
+    state = tactic_state()
+    player, enemy = state.fighters
+    player.strength = 40
+    dash = commit_action(state, enemy.id,
+                         Choice(ActionKind.DASH, direction=(1, 0), tiles=1))
+    shove = commit_action(state, player.id, Choice(ActionKind.SHOVE))
+    assert dash.path[0][0] < shove.end_tick
+
+    advance_to(state, shove.end_tick)
+
+    event = events(state, EventType.SHOVE, player.id)[0]
+    assert event.deltas["outcome"] == "OUT_OF_RANGE"
+    assert enemy.pos == (2, 0)
+    assert not events(state, EventType.STABILITY, enemy.id)
+
+
 def test_simultaneous_shoves_contending_for_same_tile_block_both_routes():
+    from pirates.duel_system.exchange_log import format_exchange, summarize_exchange
+
     left_attacker = bare_fighter("left_attacker", pos=(0, 1), team_id="attackers")
     left_target = bare_fighter("left_target", pos=(1, 1), team_id="targets")
     right_target = bare_fighter("right_target", pos=(3, 1), team_id="targets")
@@ -255,6 +438,11 @@ def test_simultaneous_shoves_contending_for_same_tile_block_both_routes():
                for event in shove_events)
     assert left_target.pos == (1, 1) and right_target.pos == (3, 1)
     assert len({fighter.pos for fighter in state.fighters}) == len(state.fighters)
+    names = {fighter.id: fighter.name for fighter in state.fighters}
+    details = "\n".join(format_exchange(state.event_log, names))
+    summary = summarize_exchange(state.event_log, names)
+    assert details.count("neither shove won displacement") == 2
+    assert "neither shove won displacement" in summary[3]
 
 
 def test_v7_active_session_migrates_legacy_shove_tuning_and_deadline():
@@ -267,24 +455,41 @@ def test_v7_active_session_migrates_legacy_shove_tuning_and_deadline():
     data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 7
     data["notebook"]["version"] = 7
     tactics = data["state"]["config"]["tactics"]
-    for key in ("shove_move_margin", "shove_two_step_margin", "shove_min_stability_loss",
+    for key in ("shove_resist_strength_gap", "shove_move_margin", "shove_two_step_margin", "shove_min_stability_loss",
                 "shove_max_stability_loss", "shove_margin_for_max_loss",
                 "shove_braced_impact_mult", "shove_blocked_impact_mult"):
         tactics.pop(key)
     tactics["shove_stability_loss"] = 23
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 18
+    assert restored.state.config["schema_version"] == 27
     assert restored.state.config["tactics"]["shove_max_stability_loss"] == 23
     assert restored.player.action.end_tick == deadline
+
+
+def test_v20_active_session_migrates_new_shove_strength_threshold_and_commitment():
+    session = DuelSession.new(seed=930, guide_mode="off")
+    action = commit_action(session.state, session.player.id,
+                           Choice(ActionKind.RUN, direction=(0, 1), tiles=2))
+    data = session.to_data()
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 20
+    data["notebook"]["version"] = 20
+    data["state"]["config"]["tactics"].pop("shove_resist_strength_gap")
+
+    restored = DuelSession.from_data(data)
+
+    assert restored.to_data()["version"] == 27
+    assert restored.state.config["tactics"]["shove_resist_strength_gap"] == 20
+    assert restored.player.action.path == action.path
 
 
 def test_committed_shove_misses_if_target_disengages_before_resolution():
     state = tactic_state()
     player, enemy = state.fighters
     player.strength = 40
+    enemy.speed = 30
     commit_action(state, enemy.id, Choice(ActionKind.DISENGAGE, direction=(1, 0)))
     commit_action(state, player.id, Choice(ActionKind.SHOVE))
-    advance_to(state, player.action.end_tick)
+    advance_to(state, player.action.start_tick + player.action.windup_len)
     assert enemy.pos == (2, 0)
     assert events(state, EventType.SHOVE, player.id)[0].deltas["outcome"] == "OUT_OF_RANGE"
     assert enemy.stability == 100
@@ -300,17 +505,20 @@ def test_committed_shove_misses_if_target_disengages_before_resolution():
     assert enemy.pos == (1, 0) and enemy.stability < 100
 
 
-def test_same_tick_strike_resolves_before_forced_shove_movement():
+def test_landed_cut_during_shove_windup_interrupts_the_committed_shove():
     state = tactic_state()
     player, enemy = state.fighters
     player.strength = 40
     enemy.strength = 1
     commit_action(state, enemy.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     commit_action(state, player.id, Choice(ActionKind.SHOVE))
-    advance_to(state, player.action.end_tick)
+    planned_effect_tick = player.action.start_tick + player.action.windup_len
+    advance_to(state, planned_effect_tick)
     assert events(state, EventType.HIT, enemy.id)
-    assert events(state, EventType.SHOVE, player.id)[0].deltas["outcome"] == "SUCCESS"
-    assert enemy.pos == (2, 0)
+    assert not events(state, EventType.SHOVE, player.id)
+    assert enemy.pos == (1, 0)
+    assert any(event.type == EventType.INTERRUPT and event.actor == player.id
+               and event.deltas["kind"] == "SHOVE" for event in state.event_log)
 
 
 def test_thrust_uses_standard_strike_pipeline_and_rejects_blunt_weapons():
@@ -416,6 +624,7 @@ def test_tactical_choices_are_legal_ai_and_guide_choices_with_public_setup_gates
     player.pos, ronin.pos = (6, 3), (7, 3)
     action = commit_action(ai_state, player.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     advance_to(ai_state, action.strike_tick+1)
+    player.pos, ronin.pos = (6, 3), (7, 3)
     scores = {row.category: dict(row.reasons) for row in score_actions(ai_state, ronin.id)}
     assert "P5_SHOVE_OPENING" in scores["SHOVE"]
     assert "P5_THRUST_OPENING" in scores["THRUST"]
@@ -442,8 +651,8 @@ def test_v4_config_and_session_migrate_to_v7_without_changing_active_deadlines()
             fighter_data.pop(key, None)
     data["notebook"]["version"] = 4
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 18
-    assert restored.to_data()["version"] == 18
+    assert restored.state.config["schema_version"] == 27
+    assert restored.to_data()["version"] == 27
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_end
 

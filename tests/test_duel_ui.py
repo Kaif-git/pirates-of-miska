@@ -5,7 +5,7 @@ import pytest
 from pirates.duel_system.engine import Choice
 from pirates.duel_system.model import ActionKind, Status
 from pirates.duel_system.session import DuelSession
-from pirates.duel_ui import DuelUI
+from pirates.duel_ui import DuelUI, _choose_duel_archetype, _new_sword_duel_session
 
 
 def test_sidebar_explains_state_stats_and_bleeding_without_ascii_map_or_predictions():
@@ -17,6 +17,94 @@ def test_sidebar_explains_state_stats_and_bleeding_without_ascii_map_or_predicti
         assert label in text
     assert "YOU   " not in text and "#  #  #" not in text
     assert session.state.to_data() == before
+
+
+def test_fresh_duel_opponent_picker_is_clear_safe_and_maps_to_authored_profiles():
+    class Renderer:
+        def __init__(self, selected):
+            self.selected = selected
+            self.rows = None
+            self.footer = None
+
+        def render_list(self, world, title, rows, footer):
+            self.title, self.rows, self.footer = title, rows, footer
+
+        def choose(self, count):
+            assert count == len(self.rows)
+            return self.selected
+
+    renderer = Renderer(3)
+    assert _choose_duel_archetype(renderer, object()) == "counterfighter"
+    assert renderer.title == "Choose your sword-duel opponent"
+    assert any("Veteran" in row for row in renderer.rows)
+    assert any("Counterfighter" in row for row in renderer.rows)
+    assert "Esc cancels without campaign changes" in renderer.footer
+    assert _choose_duel_archetype(Renderer(None), object()) is None
+
+
+@pytest.mark.parametrize("selection,profile", enumerate(
+    ("brute", "aggressor", "veteran", "counterfighter", "recruit", "bully")))
+def test_fresh_duel_setup_starts_selected_profile_deterministically_without_world_mutation(selection, profile):
+    class Renderer:
+        def render_list(self, *_args):
+            pass
+
+        def choose(self, _count):
+            return selection
+
+    class Clock:
+        total_ticks = 1234
+
+    class World:
+        clock = Clock()
+        duel_journal = None
+
+    world = World()
+    session = _new_sword_duel_session(Renderer(), world)
+    replay = _new_sword_duel_session(Renderer(), world)
+
+    assert session.enemy.personality.archetype == profile
+    assert session.state.rng_seed == world.clock.total_ticks
+    assert session.state.to_data() == replay.state.to_data()
+    assert world.duel_journal is None
+
+
+def test_cancelled_fresh_duel_setup_does_not_create_session_or_journal():
+    class Renderer:
+        def render_list(self, *_args):
+            pass
+
+        def choose(self, _count):
+            return None
+
+    class World:
+        class Clock:
+            total_ticks = 42
+        clock = Clock()
+        duel_journal = None
+
+    world = World()
+    assert _new_sword_duel_session(Renderer(), world) is None
+    assert world.duel_journal is None
+
+
+def test_disengage_opens_direction_picker_and_explains_clear_space_is_not_enough():
+    session = DuelSession.new(seed=14, guide_mode="off")
+    player, enemy = session.state.fighters
+    player.pos, enemy.pos = (4, 3), (5, 3)
+    ui = DuelUI(session, rounds=True)
+
+    ui.activate("Disengage")
+    assert ui.panel == "direction"
+    assert "strictly increases distance" in ui.message
+    ui.choose_direction((0, -1))
+    assert "must increase distance" in ui.message
+    assert ui.panel == "direction"
+
+    ui.choose_direction((-1, 0))
+    starts = [event for event in session.state.event_log
+              if event.type.value == "ACTION_START" and event.actor == player.id]
+    assert starts[-1].deltas["kind"] == "DISENGAGE"
 
 
 def test_preview_sidebar_uses_exact_selected_action_timing_not_generic_estimate():
@@ -121,7 +209,7 @@ def test_dash_light_multiple_targets_lists_only_reachable_hostiles():
     assert set(ui._dash_light_choices) == {"near-a", "near-b"}
     rows = "\n".join(ui.sidebar_rows(ui.model())).lower()
     assert "near-a" in rows and "near-b" in rows and "far" not in rows
-    assert "direction" in rows.lower()  # explained as automatic, never prompted
+    assert "direction" in rows.lower()  # explicitly explained as automatic
     ui.activate("Target 2")
     assert ui.panel == "zones" and ui.target_id == "near-b"
     assert ui._dash_light_choices["near-b"].tiles <= 3
@@ -133,7 +221,7 @@ def test_dash_light_out_of_range_returns_to_actions_without_direction_or_distanc
     player = bare_fighter("player", pos=(1, 3), team_id="players")
     hostile = bare_fighter("hostile", pos=(8, 3), team_id="raiders")
     session = DuelSession.new_group([player, hostile], guide_mode="off", seed=14)
-    ui = DuelUI(session, rounds=True)
+    ui = DuelUI(session, rounds=False)
     before = session.state.to_data()
 
     ui.activate("Dash+Light")

@@ -1,6 +1,7 @@
 import pytest
 
-from pirates.duel_layout import context_labels, dashboard_geometry
+from pirates.duel_layout import compact_injury_row, context_labels, dashboard_geometry
+from pirates.duel_system.model import Severity, Wound, Zone
 from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
 
@@ -74,6 +75,16 @@ def test_direct_tactical_controls_fit_without_hiding_tactics_in_more(size):
     assert layout["controls"][1] + layout["controls"][3] <= height
     assert layout["arena"][1] + layout["arena"][3] <= layout["info"][1]
     assert layout["info"][1] + layout["info"][3] <= layout["controls"][1]
+
+
+def test_compact_injury_row_keeps_site_severity_and_actual_bleed_amount_visible():
+    session = DuelSession.new(guide_mode="off")
+    session.player.wounds = [Wound(Zone.TORSO, Severity.CUT, 2.4)]
+    row = session.render_model().player_injury_rows[0]
+    compact = compact_injury_row(row, 40)
+    assert compact.startswith("torso cut muscle-cut")
+    assert "bleed 2.4/t" in compact
+    assert "muscle muscle" not in row.lower()
 
 
 def test_retry_clears_previous_exchange_feedback():

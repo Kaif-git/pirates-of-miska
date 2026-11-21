@@ -144,11 +144,11 @@ def test_balance_rating_applies_load_fatigue_pain_and_leg_wounds_once():
     assert balance_rating(fighter, state.config, state.tick) == injured_rating
 
 
-def test_grounded_legality_allows_only_cover_crawl_and_rise():
+def test_grounded_legality_allows_ground_attack_cover_crawl_and_rise():
     state = arena()
     fighter = state.fighters[0]
     grounded(fighter)
-    assert legality(state, fighter.id, Choice(ActionKind.LIGHT, Zone.TORSO)) == "Grounded: cover, crawl or rise"
+    assert legality(state, fighter.id, Choice(ActionKind.LIGHT, Zone.TORSO)) == ""
     assert legality(state, fighter.id, Choice(ActionKind.GUARD)) == ""
     assert legality(state, fighter.id, Choice(ActionKind.CRAWL, direction=(0, 1), tiles=1)) == ""
     assert legality(state, fighter.id, Choice(ActionKind.RISE)) == ""
@@ -156,6 +156,14 @@ def test_grounded_legality_allows_only_cover_crawl_and_rise():
     state.fighters[0].grounded = False
     assert legality(state, standing.id, Choice(ActionKind.RISE)) == "Only a grounded fighter can rise"
     assert legality(state, standing.id, Choice(ActionKind.CRAWL, direction=(0, 1))) == "Only a grounded fighter can crawl"
+
+
+def test_grounded_fighter_must_crawl_clear_of_standing_pile_partner_before_rising():
+    state = arena()
+    fighter, standing = state.fighters
+    fighter.pos = standing.pos
+    grounded(fighter)
+    assert "Crawl clear" in legality(state, fighter.id, Choice(ActionKind.RISE))
 
 
 def test_disarmed_grounded_fighter_can_still_use_cover():
@@ -240,7 +248,8 @@ def test_grounded_ai_candidates_are_legal_cover_crawl_or_rise_only():
     view = observe(state, fighter.id)
     options = candidates(state, fighter, view)
     assert options
-    assert {choice.kind for _, choice in options} <= {ActionKind.GUARD, ActionKind.CRAWL, ActionKind.RISE}
+    assert {choice.kind for _, choice in options} <= {
+        ActionKind.GUARD, ActionKind.CRAWL, ActionKind.RISE, ActionKind.LIGHT}
     assert all(not legality(state, fighter.id, choice) for _, choice in options)
 
 
@@ -258,7 +267,7 @@ def test_v3_snapshot_migration_preserves_actions_and_defaults_stable_state():
         for key in ("stability", "grounded", "grounded_since", "last_fast_direction", "last_fast_move_tick"):
             fighter.pop(key, None)
     restored = CombatState.from_data(data)
-    assert restored.config["schema_version"] == 18
+    assert restored.config["schema_version"] == 27
     assert restored.fighters[0].stability == 100
     assert not restored.fighters[0].grounded
     assert restored.fighters[0].action.path == [(tick, tuple(pos)) for tick, pos in old_path]
@@ -287,8 +296,8 @@ def test_v3_session_migration_keeps_mid_action_and_deterministic_continuation():
             fighter.pop(key, None)
     restored = DuelSession.from_data(data)
     replay = DuelSession.from_data(restored.to_data())
-    assert restored.to_data()["version"] == 18
-    assert restored.notebook.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
+    assert restored.notebook.to_data()["version"] == 27
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_deadline
     restored.run_to_player()
@@ -319,7 +328,7 @@ def test_v3_world_journal_migrates_and_resumes_with_the_same_action_schedule(tmp
     loaded = World.load(save_path)
     restored = DuelSession.from_data(loaded.duel_journal)
     replay = DuelSession.from_data(data)
-    assert loaded.duel_journal["version"] == 18
+    assert loaded.duel_journal["version"] == 27
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     restored.run_to_player()
     replay.run_to_player()

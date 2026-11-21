@@ -7,7 +7,7 @@ from pirates.game import World
 from pirates.economy import CATALOG, MERCHANTS, PORTS, Economy, TRADE_MASS_G, harbor_tiles
 from pirates.ship import LABORS
 from pirates.ship_storage import bundle_mass, UNIT_MASS
-from pirates.trading_ui import merchant_menu, cargo_menu, port_menu
+from pirates.trading_ui import merchant_menu, cargo_menu, port_menu, trade_preview_rows
 from pirates.management import context_menu
 from pirates.provisioning import forecast_provisions
 from omnisim.world import tile as T
@@ -44,18 +44,21 @@ def purse_total(economy):
     return economy.money + economy.treasury + sum(m["money"] for m in economy.markets.values())
 
 
-def test_two_islands_have_character_merchants_and_reciprocal_prices():
+def test_three_ports_have_character_merchants_and_reciprocal_prices():
     world = World()
     e = world.economy
     assert len(e.merchants()) == 3
-    assert len({m["name"] for m in MERCHANTS.values()}) == 6
+    assert len({m["name"] for m in MERCHANTS.values()}) == 7
+    assert {row["port"] for row in MERCHANTS.values()} == set(PORTS)
     assert e.price("ada", "grain", True) < e.price("dara", "grain", True)
     assert e.price("brann", "carpenter_tools", True) < e.price("lina", "carpenter_tools", True)
     assert e.price("dara", "grain", False) > e.price("ada", "grain", True)
     assert e.price("lina", "carpenter_tools", False) > e.price("brann", "carpenter_tools", True)
     assert (harbor_tiles("verdant") != harbor_tiles("cinder")).any()
+    assert (harbor_tiles("freeport") != harbor_tiles("verdant")).any()
     assert harbor_tiles("verdant")[33, 14] == T.FARM
     assert harbor_tiles("cinder")[33, 14] == T.HEARTH
+    assert harbor_tiles("freeport")[30, 14] == T.ROAD
 
 
 def test_supply_item_weights_match_spatial_supply_units():
@@ -478,6 +481,36 @@ def test_daily_regional_production_and_import_consumption_are_bounded():
     assert e.markets["dara"]["stock"]["grain"] == 0
 
 
+def test_day_boundary_restock_and_payroll_match_bulk_and_stepped_advancement():
+    from tales_sim.clock import TICKS_PER_DAY
+
+    def prepared():
+        world = World.new_authored_mvp()
+        at_merchant(world, "ada")
+        candidate = next(row for row in world.economy.recruitment.at_port("verdant")
+                         if row["id"] == "pippin_ash")
+        world.economy.recruit_candidate(world, candidate["id"])
+        world.economy.markets["ada"]["stock"]["grain"] = 0
+        world.clock.total_ticks = TICKS_PER_DAY - 500
+        return world
+
+    bulk, stepped = prepared(), prepared()
+    bulk.advance(1000)
+    for _ in range(10):
+        stepped.advance(100)
+
+    for world in (bulk, stepped):
+        assert world.clock.day == 2
+        assert world.economy.markets["ada"]["stock"]["grain"] == 10
+        assert world.economy.employment.records["hire:pippin_ash"]["paid_total"] == 1
+        stock = world.economy.markets["ada"]["stock"]["grain"]
+        world.economy.update_day(world.clock.day)
+        assert world.economy.markets["ada"]["stock"]["grain"] == stock
+    assert bulk.clock.total_ticks == stepped.clock.total_ticks
+    assert bulk.economy.snapshot(bulk) == stepped.economy.snapshot(stepped)
+    assert bulk.economy.money == stepped.economy.money
+
+
 @pytest.mark.parametrize("port", ["verdant", "cinder"])
 def test_economy_roundtrip_preserves_money_markets_cargo_gear_and_ports(tmp_path, port):
     world = quiet_world()
@@ -495,6 +528,30 @@ def test_economy_roundtrip_preserves_money_markets_cargo_gear_and_ports(tmp_path
     assert restored.economy.snapshot(restored) == e.snapshot(world)
     assert (restored.game_map.tiles == world.game_map.tiles).all()
     assert not restored.ship.check_orders()
+
+
+def test_buy_save_reload_sell_cannot_duplicate_trade_cargo_or_market_money(tmp_path):
+    world = quiet_world()
+    at_merchant(world, "ada")
+    opening_silver = purse_total(world.economy)
+    buy_total = world.economy.trade(world, "ada", "grain", 2, True)
+    path = tmp_path / "buy-reload-sell.json"
+    world.save(path)
+
+    restored = World.load(path)
+    at_merchant(restored, "ada")
+    assert restored.economy.cargo == {"grain": 2}
+    sale_total = restored.economy.trade(restored, "ada", "grain", 2, False)
+    assert restored.economy.cargo == {}
+    assert restored.economy.markets["ada"]["stock"]["grain"] == 30
+    assert purse_total(restored.economy) == opening_silver
+    assert restored.economy.money == 600 - buy_total + sale_total
+
+    restored.save(path)
+    resumed_again = World.load(path)
+    at_merchant(resumed_again, "ada")
+    with pytest.raises(ValueError, match="Not enough unissued cargo"):
+        resumed_again.economy.trade(resumed_again, "ada", "grain", 1, False)
 
 
 @pytest.mark.parametrize("bad", ["money", "stock", "item", "slot", "owner", "port", "memory", "wall_pile"])
@@ -564,6 +621,20 @@ def test_browsing_multiple_merchants_and_cargo_never_ticks_time():
     assert world.clock.total_ticks == before
 
 
+def test_trade_history_is_an_optional_read_only_screen():
+    world = quiet_world()
+    world.economy.record("Bought 1 sack of grain for 10 Marks.")
+    before = world.economy.snapshot(world)
+    ticks = world.clock.total_ticks
+    renderer = Scripted([8, None])
+
+    cargo_menu(renderer, world)
+
+    assert any("Trade / equipment history" in title for title in renderer.titles)
+    assert world.economy.snapshot(world) == before
+    assert world.clock.total_ticks == ticks
+
+
 def test_buy_ui_confirms_the_real_quote():
     world = quiet_world()
     at_merchant(world, "ada")
@@ -571,6 +642,136 @@ def test_buy_ui_confirms_the_real_quote():
     merchant_menu(Scripted([1, 0, 0, 0, None]), world, "ada")
     assert world.economy.cargo["grain"] == 1
     assert world.economy.money == 600 - quote
+
+
+def test_trade_preview_discloses_quantity_total_fee_load_and_real_time_without_mutation():
+    world = quiet_world()
+    economy = world.economy
+    at_merchant(world, "ada")
+    before = economy.snapshot(world)
+    ticks = world.clock.total_ticks
+    total = economy.quote("ada", "grain", 5, True)
+
+    rows = trade_preview_rows(world, "ada", "grain", 5, True)
+
+    text = "\n".join(rows)
+    assert f"Quantity-sensitive total: {total} Marks due." in text
+    assert "Goods: " in text and "Delivery: 2 Marks per order." in text
+    assert "Captain's purse: 600 →" in text
+    assert "Trade + issued-kit load:" in text and "g, " in text and "ml →" in text
+    assert "Time: 60 seconds" in text
+    assert economy.snapshot(world) == before
+    assert world.clock.total_ticks == ticks
+
+
+def test_split_and_bulk_orders_transfer_the_same_goods_but_split_pays_each_order_fee():
+    bulk = quiet_world()
+    split = quiet_world()
+    at_merchant(bulk, "ada")
+    at_merchant(split, "ada")
+    total_before = purse_total(bulk.economy)
+
+    bulk_total = bulk.economy.trade(bulk, "ada", "grain", 10, True)
+    split_total = (split.economy.trade(split, "ada", "grain", 5, True)
+                   + split.economy.trade(split, "ada", "grain", 5, True))
+
+    assert split_total == bulk_total + 2  # same stock-sensitive goods quote; one extra order fee
+    assert bulk.economy.cargo == split.economy.cargo == {"grain": 10}
+    assert bulk.economy.markets["ada"]["stock"] == split.economy.markets["ada"]["stock"]
+    assert bulk.economy.markets["ada"]["money"] == split.economy.markets["ada"]["money"]
+    assert purse_total(bulk.economy) == total_before
+    assert purse_total(split.economy) == total_before
+    assert bulk.clock.total_ticks + 6000 == split.clock.total_ticks
+
+
+def test_replayed_sale_after_first_fill_cannot_pay_twice():
+    world = quiet_world()
+    at_merchant(world, "ada")
+    economy = world.economy
+    economy.cargo = {"grain": 1}
+    first = economy.trade(world, "ada", "grain", 1, False)
+    after_first = economy.snapshot(world)
+    ticks = world.clock.total_ticks
+
+    with pytest.raises(ValueError, match="Not enough unissued cargo"):
+        economy.trade(world, "ada", "grain", 1, False)
+
+    assert economy.snapshot(world) == after_first
+    assert world.clock.total_ticks == ticks
+    assert first > 0
+
+
+def test_sell_menu_uses_unreserved_cargo_and_cancel_is_free(monkeypatch):
+    world = quiet_world()
+    economy = world.economy
+    at_merchant(world, "ada")
+    economy.cargo = {"grain": 5}
+    economy.contracts = [{"offer_id": "reserved", "item": "grain", "quantity": 4,
+                          "status": "active"}]
+    before = economy.snapshot(world)
+    ticks = world.clock.total_ticks
+    menus = []
+    panels = []
+    answers = iter((2, 0, 0, 2, 4))  # Sell, grain, quantity 1, cancel, leave.
+
+    def choose(_renderer, _world, title, rows, *_args, **_kwargs):
+        menus.append((title, list(rows)))
+        return next(answers)
+
+    monkeypatch.setattr("pirates.trading_ui.choose", choose)
+    monkeypatch.setattr("pirates.trading_ui.panel",
+                        lambda _renderer, _world, title, rows, *_args, **_kwargs:
+                        panels.append((title, list(rows))))
+
+    merchant_menu(object(), world, "ada")
+
+    sell_rows = next(rows for title, rows in menus if title == "Sell")
+    assert any("available 1" in row for row in sell_rows)
+    assert any(title == "Transaction preview" for title, _rows in panels)
+    assert economy.snapshot(world) == before
+    assert world.clock.total_ticks == ticks
+
+
+def test_ui_commit_rechecks_stock_after_preview_and_rejects_stale_quote(monkeypatch):
+    world = quiet_world()
+    economy = world.economy
+    at_merchant(world, "ada")
+    cash = economy.money
+    purse = economy.markets["ada"]["money"]
+    treasury = economy.treasury
+    ticks = world.clock.total_ticks
+    stock = economy.markets["ada"]["stock"]["grain"]
+    titles = []
+    panels = []
+    merchant_answers = iter((1, 4))  # Buy menu, then leave after the rejected commit.
+
+    def choose(_renderer, _world, title, rows, *_args, **_kwargs):
+        titles.append(title)
+        if title.startswith("Ada Reed"):
+            return next(merchant_answers)
+        if title == "Buy":
+            return 0
+        if title == "Quantity":
+            return 0
+        if title.startswith("Buy 1"):
+            economy.markets["ada"]["stock"]["grain"] = 0
+            return 0
+        raise AssertionError(f"Unexpected menu {title!r}")
+
+    monkeypatch.setattr("pirates.trading_ui.choose", choose)
+    monkeypatch.setattr("pirates.trading_ui.panel",
+                        lambda _renderer, _world, title, rows, *_args, **_kwargs:
+                        panels.append((title, list(rows))))
+
+    merchant_menu(object(), world, "ada")
+
+    assert economy.money == cash and economy.markets["ada"]["money"] == purse
+    assert economy.treasury == treasury and not economy.cargo
+    assert economy.markets["ada"]["stock"]["grain"] == 0 < stock
+    assert world.clock.total_ticks == ticks
+    assert any(title == "Transaction preview" for title, _rows in panels)
+    assert any("insufficient stock" in " ".join(rows).lower() for title, rows in panels
+               if title == "Cannot complete transaction")
 
 
 def test_enter_reaches_the_nearby_merchant_without_changing_existing_ship_options():

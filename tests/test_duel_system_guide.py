@@ -149,7 +149,8 @@ def test_stat_shortfall_is_disclosed_and_exhausted_actions_are_not_offered():
     player.stamina = 0
     advice = guide(make_guide_view(state, "player", book.public_view()), book.public_view())
     assert advice.action.kind not in {ActionKind.HEAVY, ActionKind.DASH, ActionKind.DASH_LIGHT}
-    assert any("20" in risk and "hand" in risk.lower() for risk in advice.risk)
+    assert any("hand" in risk.lower() and "clean-contact odds" in risk.lower()
+               for risk in advice.risk)
 
 
 def test_hints_off_and_near_equal_alternatives():

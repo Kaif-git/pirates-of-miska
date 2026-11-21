@@ -44,6 +44,24 @@ def test_snapshot_resume_matches_uninterrupted_future(tmp_path):
     assert resumed.rng.stream("weather").random() == uninterrupted.rng.stream("weather").random()
 
 
+def test_snapshot_resume_preserves_pending_actor_recruitment_deadline():
+    uninterrupted = WorldState.create("actor-deadline-resume", director_enabled=False)
+    ticks_per_day = (uninterrupted.config["time"]["hours_per_day"]
+                     // uninterrupted.config["time"]["hours_per_tick"])
+    uninterrupted.run_until(5 * ticks_per_day)
+    snapshot = uninterrupted.to_snapshot()
+    resumed = WorldState.from_snapshot(snapshot)
+
+    uninterrupted.run_until(8 * ticks_per_day)
+    resumed.run_until(8 * ticks_per_day)
+
+    assert resumed.event_log.to_jsonl() == uninterrupted.event_log.to_jsonl()
+    assert resumed.to_snapshot() == uninterrupted.to_snapshot()
+    assert resumed.crew_ships.actor_deadlines == uninterrupted.crew_ships.actor_deadlines
+    assert resumed.crew_ships.actor_recruitment_diagnostics == \
+        uninterrupted.crew_ships.actor_recruitment_diagnostics
+
+
 def test_weather_and_event_log_match_across_chunked_advancement():
     whole = WorldState.create("weather-chunking")
     chunked = WorldState.create("weather-chunking")
@@ -171,6 +189,43 @@ def test_schema_18_snapshot_migrates_faction_coalition_membership_fields():
 
     assert restored.politics.factions == expected_factions
     assert restored.to_snapshot()["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
+
+
+def test_schema_19_snapshot_migrates_physical_stats_deterministically():
+    world = WorldState.create("schema19-physical-stats")
+    deceased_id = next(entity_id for entity_id, entity in world.entities.items()
+                       if entity.get("kind") == "character")
+    world.characters.kill_character(
+        world, deceased_id, cause="migration_fixture",
+        caused_by=world.entities[deceased_id]["last_event_id"], replace_majors=False)
+    prior = world.to_snapshot()
+    prior["snapshot_schema_version"] = 19
+    prior["characters"]["digest"] = (
+        "ce9c335acff824d65a60e67d51e5a442dc6897ba1e6a443fb355fd137959e198")
+    expected_ids = sorted(prior["entities"])
+    for table_name in ("entities", "archive"):
+        for character in prior[table_name].values():
+            if character.get("kind") == "character":
+                for stat in ("strength", "speed", "endurance", "toughness"):
+                    character["stats"].pop(stat)
+                character.pop("combat_equipment")
+
+    first = WorldState.from_snapshot(copy.deepcopy(prior))
+    second = WorldState.from_snapshot(copy.deepcopy(prior))
+
+    assert first.to_snapshot()["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
+    assert first.to_snapshot() == second.to_snapshot()
+    assert len(first.event_log) == len(prior["events"])
+    assert sorted(first.entities) == expected_ids
+    assert deceased_id in first.archive
+    assert all(all(0 <= row["stats"][stat] <= 100 for stat in
+                   ("strength", "speed", "endurance", "toughness"))
+               for row in (*first.entities.values(), *first.archive.values())
+               if row.get("kind") == "character")
+    first.run_until(first.clock.tick + 24)
+    second.run_until(second.clock.tick + 24)
+    assert first.event_log.to_jsonl() == second.event_log.to_jsonl()
+    assert first.to_snapshot() == second.to_snapshot()
 
 
 def test_snapshot_preserves_explicitly_uncommanded_ship_with_onboard_crew(tmp_path):
@@ -360,17 +415,47 @@ def test_one_year_cli_run_persists_weather_calendar_and_transition_events(tmp_pa
     }
 
 
-def test_batch_harness_reports_seeded_runs():
+def test_batch_harness_reports_seeded_runs(tmp_path):
     result = subprocess.run(
-        [sys.executable, "-m", "sim.tools.batch_test", "--seeds", "3", "--years", "0"],
+        [sys.executable, "-m", "sim.tools.batch_test", "--seeds", "3", "--years", "0",
+         "--output-dir", str(tmp_path)],
         cwd=ROOT, check=False, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    runs = json.loads(result.stdout)["runs"]
+    batch = json.loads(result.stdout)
+    runs = batch["runs"]
+    assert set(batch["acceptance_gates"]) == set(batch["acceptance"])
+    assert all(row["status"] in {"pass", "fail", "N/A"}
+               and row["required_horizon"] and row["reason"]
+               for row in batch["acceptance_gates"].values())
+    assert batch["acceptance_gates"]["actor_bands_within_budget"]["status"] == "N/A"
+    assert batch["acceptance_gates"]["director_off_liveness_density"]["status"] == "N/A"
+    assert batch["acceptance_gates"]["director_on_liveness_density"]["status"] == "N/A"
+    assert batch["acceptance_gates"]["director_off_liveness_density"][
+        "not_applicable_kind"] == "configuration"
+    assert batch["acceptance_gates"]["routine_event_log_reduction_80_percent"][
+        "not_applicable_kind"] == "horizon"
+    assert batch["acceptance_gates"]["trade_volume_stable"]["status"] == "N/A"
+    assert batch["run_id"] and all(run["run_id"] == batch["run_id"] for run in runs)
+    assert len({run["diagnostic_reports"]["json"] for run in runs}) == 3
     assert [run["seed"] for run in runs] == [0, 1, 2]
     initial_event_count = len(WorldState.create(0).event_log)
     assert all(run["event_count"] == initial_event_count and run["tick"] == 0 for run in runs)
     assert all(run["annual_trade"] == [] and run["ledger_balanced"] for run in runs)
+    assert all(run["diagnostic_integrity"]["event_scope_reconciles"] for run in runs)
+    for run in runs:
+        assert run["metadata"]["effective_config_sha256"]
+        assert set(run["actor_bands"]["counts"]) == set(run["actor_bands"]["bands"])
+        report = json.loads(Path(run["diagnostic_reports"]["json"]).read_text(encoding="utf-8"))
+        assert report["run_id"] == batch["run_id"] and report["seed"] == run["seed"]
+        assert report["event_count_scope"]["yearly_event_count"] == 0
+        assert report["actor_population_census"][0]["label"] == "opening"
+        assert run["actor_population_census"] == report["actor_population_census"]
+        census = run["actor_population_census"][0]
+        assert census["living_character_count"] == sum(
+            census["living_character_dispositions"].values())
+        assert census["stranded_crews"] == []
+        assert census["transitions_since_previous_sample"] is None
 
 
 def test_batch_progress_is_jsonl_on_stderr_and_preserves_final_json_stdout():
@@ -381,6 +466,12 @@ def test_batch_progress_is_jsonl_on_stderr_and_preserves_final_json_stdout():
     )
     summary = json.loads(result.stdout)
     progress = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
+    gates = summary["acceptance_gates"]
+    assert gates["director_off_liveness_density"]["status"] in {"pass", "fail"}
+    assert gates["director_on_liveness_density"]["status"] == "N/A"
+    assert gates["director_on_liveness_density"]["not_applicable_kind"] == "configuration"
+    assert gates["trade_volume_stable"]["status"] == "N/A"
+    assert gates["trade_volume_stable"]["not_applicable_kind"] == "horizon"
     assert len(progress) == 1
     assert progress[0]["seed"] == 0
     assert progress[0]["year"] == 1

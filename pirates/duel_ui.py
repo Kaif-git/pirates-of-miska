@@ -66,6 +66,7 @@ class DuelUI:
         self.target_id = None
         self.target_page = 0
         self._dash_light_choices = {}
+        self._dash_slash_choices = {}
         self.closed = self.quit = False
         self.timeline = True
         self.manual = False
@@ -121,13 +122,14 @@ class DuelUI:
         # The live decision state is paused. Include mutable fighter fields so
         # debug/test edits at the same tick cannot leave stale resource cards.
         key = (id(self.session), state.tick, len(state.event_log), repr(state.fighters),
-               self.session.selected, self.session.guide_mode, self.timeline, state.end_reason, state.winner,
-               self.panel, self.target_id, self.target_page,
-                self.panel == 'zones' and self.kind == ActionKind.HEAVY)
+                self.session.selected, self.session.guide_mode, self.timeline, state.end_reason, state.winner,
+                self.panel, self.target_id, self.target_page, self.kind)
         if self._model_cache is None or self._model_cache[0] != key:
             # The round dashboard displays observed outcomes, not a tactical
             # recommendation. Never run its unused combinatorial solver here.
-            self._model_cache = (key, self.session.render_model(timeline=self.timeline, include_advice=not self.rounds))
+            self._model_cache = (key, self.session.render_model(
+                timeline=self.timeline, include_advice=not self.rounds,
+                zone_kind=self.kind if self.panel == "zones" else None))
         return self._model_cache[1]
 
     def _preview(self, choice):
@@ -241,10 +243,19 @@ class DuelUI:
                 self.panel = "zones"
                 self.message = (f"Dash+Light target locked: {target.name}. "
                                 "The approach path is automatic; choose a strike zone.")
+            elif self.kind == ActionKind.DASH_SLASH:
+                if target.actor_id not in self._dash_slash_choices:
+                    self.message = "That hostile is no longer in Dash+Slash range."
+                    self.panel = "main"
+                    return
+                self.panel = "direction"
+                self.tiles = 1
+                self.message = (f"Dash+Slash target locked: {target.name}. Choose any legal retreat or lateral tile; "
+                                "the slash lands before your step.")
             elif self.kind in {ActionKind.LIGHT, ActionKind.HEAVY, ActionKind.THRUST}:
                 self.panel = "zones"
             elif self.kind in {ActionKind.DASH, ActionKind.RUN, ActionKind.WALK,
-                               ActionKind.DISENGAGE, ActionKind.CRAWL}:
+                                ActionKind.DISENGAGE, ActionKind.CRAWL}:
                 self.panel = "direction"
             else:
                 aim = Zone.HAND if self.kind == ActionKind.DISARM else None
@@ -255,7 +266,7 @@ class DuelUI:
             self.target_page = max(0, min((count-1)//5, self.target_page + (-1 if label == "Prev Targets" else 1)))
             self._model_cache = None
             return
-        combat = {"Light", "Heavy", "Defend", "Guard", "Dash", "Move", "Run", "Dash+Light", "Wait",
+        combat = {"Light", "Heavy", "Defend", "Guard", "Dash", "Move", "Run", "Dash+Light", "Dash+Slash", "Wait",
                   "Feint", "Shove", "Thrust", "Disarm", "Adrenaline",
                   "Rise", "Crawl", "Cover",
                   "Bandage", "Eat", "Drink", "Pickup", "Eye", "Head", "Torso", "Arm", "Hand", "Leg"}
@@ -277,6 +288,9 @@ class DuelUI:
         elif label == "Dash+Light":
             self.kind = ActionKind.DASH_LIGHT
             self._begin_dash_light()
+        elif label == "Dash+Slash":
+            self.kind = ActionKind.DASH_SLASH
+            self._begin_dash_slash()
         elif label == "Defend":
             from pirates.duel_system.defense import choose_defend
             plan = choose_defend(self.session.state, self.session.player.id)
@@ -308,6 +322,13 @@ class DuelUI:
             self.target_id = None
             self.kind = ActionKind(label.upper())
             self._choose_target_panel("preview")
+        elif label == "Disengage":
+            self.target_id = None
+            self.kind = ActionKind.DISENGAGE
+            self._choose_target_panel("direction")
+            if self.panel == "direction":
+                self.message = ("Choose a clear one-tile direction that strictly increases distance from the target; "
+                                "open space alone is not enough.")
         elif label == "Disarm":
             self.target_id = None
             self.kind = ActionKind.DISARM
@@ -334,6 +355,7 @@ class DuelUI:
             self.panel, self.pending = "main", None
             self.target_id = None
             self._dash_light_choices = {}
+            self._dash_slash_choices = {}
             self.session.cancel()
         elif label == "Retry":
             self.session = self.session.restart()
@@ -351,21 +373,21 @@ class DuelUI:
             except ValueError as error:
                 self.message = str(error)
         elif label in {"Eye", "Head", "Torso", "Arm", "Hand", "Leg"}:
-            dash_choice = (self._dash_light_choices.get(self.target_id)
-                           if self.kind == ActionKind.DASH_LIGHT else None)
             self._preview(Choice(self.kind, Zone(label.upper()),
-                                 dash_choice.direction if dash_choice else None,
-                                 dash_choice.tiles if dash_choice else 1,
+                                 self.direction if self.kind in {ActionKind.DASH_LIGHT, ActionKind.DASH_SLASH} else None,
+                                 self.tiles if self.kind in {ActionKind.DASH_LIGHT, ActionKind.DASH_SLASH} else 1,
                                  target_id=self.target_id))
 
     def _current_target_options(self):
         options = self.model().target_options
         if self.panel == "targets" and self.kind == ActionKind.DASH_LIGHT:
             return tuple(option for option in options if option.actor_id in self._dash_light_choices)
+        if self.panel == "targets" and self.kind == ActionKind.DASH_SLASH:
+            return tuple(option for option in options if option.actor_id in self._dash_slash_choices)
         return options
 
     def _dash_light_path(self, target_id):
-        """Choose the shortest clear straight dash that ends in strike reach."""
+        """Choose the shortest clear approach route that ends within Light reach."""
         from pirates.duel_system.engine import legality, movement_path
         from pirates.duel_system.stats import weapon_reach
 
@@ -374,7 +396,6 @@ class DuelUI:
         before = max(abs(player.pos[0]-target.pos[0]), abs(player.pos[1]-target.pos[1]))
         reach = weapon_reach(player, state.config)
         maximum = state.config["actions"][ActionKind.DASH_LIGHT.value]["max_tiles"]
-        dx_target, dy_target = target.pos[0]-player.pos[0], target.pos[1]-player.pos[1]
         options = []
         for dx, dy in ((0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)):
             for tiles in range(1, maximum+1):
@@ -383,14 +404,9 @@ class DuelUI:
                 if legality(state, player.id, choice):
                     continue
                 endpoint = movement_path(state, player, choice)[-1]
-                if any(other.id != player.id and state.occupies_tile(other) and other.pos == endpoint
-                       for other in state.fighters):
-                    continue
-                after = max(abs(endpoint[0]-target.pos[0]), abs(endpoint[1]-target.pos[1]))
-                if after > reach or after > before:
-                    continue
-                deviation = abs(dx*dy_target - dy*dx_target)
-                options.append(((tiles, after, deviation, dx, dy), choice))
+                gap = max(abs(endpoint[0]-target.pos[0]), abs(endpoint[1]-target.pos[1]))
+                if gap <= reach and gap <= before:
+                    options.append(((tiles, gap, dx, dy), choice))
         return min(options, key=lambda item: item[0])[1] if options else None
 
     def _begin_dash_light(self):
@@ -420,8 +436,38 @@ class DuelUI:
         else:
             self.panel = "targets"
             self.target_page = 0
-            self.message = ("Choose a visible hostile in the Dash+Light target area. "
-                            "Direction and distance are chosen automatically.")
+            self.message = "Choose a visible hostile in the Dash+Light target area. Direction and distance are automatic."
+
+    def _begin_dash_slash(self):
+        from pirates.duel_system.engine import legality
+
+        self.target_id = None
+        self._dash_slash_choices = {}
+        directions = ((0, -1), (1, -1), (1, 0), (1, 1), (0, 1),
+                      (-1, 1), (-1, 0), (-1, -1))
+        for target in self.model().target_options:
+            choice = next((Choice(ActionKind.DASH_SLASH, Zone.TORSO, direction, 1,
+                                  target_id=target.actor_id)
+                           for direction in directions
+                           if not legality(self.session.state, self.session.player.id,
+                                           Choice(ActionKind.DASH_SLASH, Zone.TORSO, direction, 1,
+                                                  target_id=target.actor_id))), None)
+            if choice is not None:
+                self._dash_slash_choices[target.actor_id] = choice
+        if not self._dash_slash_choices:
+            self.message = "Dash+Slash needs a visible enemy in current sword reach and a clear retreat/lateral tile."
+            self.panel = "main"
+        elif len(self._dash_slash_choices) > 1:
+            self.panel = "targets"
+            self.target_page = 0
+            self.message = "Choose a visible hostile within current weapon reach."
+        else:
+            self.target_id = next(iter(self._dash_slash_choices))
+            target = self.session.state.fighter(self.target_id)
+            self.tiles = 1
+            self.panel = "direction"
+            self.message = (f"Dash+Slash target locked: {target.name}. Choose any legal retreat or lateral tile; "
+                            "the slash lands before your step.")
 
     def _choose_target_panel(self, destination):
         options = self.model().target_options
@@ -505,9 +551,44 @@ class DuelUI:
 
     def choose_direction(self, direction):
         if self.panel == "direction":
+            if self.kind == ActionKind.DASH_SLASH:
+                from pirates.duel_system.engine import legality
+                choice = Choice(ActionKind.DASH_SLASH, Zone.TORSO, direction, 1,
+                                target_id=self.target_id)
+                error = legality(self.session.state, self.session.player.id, choice)
+                if error:
+                    self.message = error
+                    return
+                self.direction, self.tiles = direction, 1
+                self.panel = "zones"
+                self.message = "Slash resolves from your current position, then the one-tile retreat/lateral step resolves. Choose a zone."
+                return
             self.direction = direction
             if self.kind == ActionKind.DASH_LIGHT:
+                from pirates.duel_system.engine import legality, movement_path
+                from pirates.duel_system.stats import weapon_reach
+                choice = Choice(ActionKind.DASH_LIGHT, Zone.TORSO, direction, self.tiles,
+                                target_id=self.target_id)
+                error = legality(self.session.state, self.session.player.id, choice)
+                if error:
+                    self.message = error
+                    return
+                endpoint = movement_path(self.session.state, self.session.player, choice)[-1]
+                target = self.session.state.fighter(self.target_id)
+                gap = max(abs(endpoint[0]-target.pos[0]), abs(endpoint[1]-target.pos[1]))
+                reach = weapon_reach(self.session.player, self.session.state.config)
+                if gap > reach + 1:
+                    self.message = (f"That route leaves the target {gap} tiles away after your dash; "
+                                    f"slash reach is {reach}. Choose a closer route or reposition first.")
+                    return
+                direction_name = {(0, -1): "north", (1, -1): "northeast", (1, 0): "east",
+                                  (1, 1): "southeast", (0, 1): "south", (-1, 1): "southwest",
+                                  (-1, 0): "west", (-1, -1): "northwest"}[tuple(direction)]
                 self.panel = "zones"
+                self.message = (f"Route selected: {self.tiles} tile(s) {direction_name}; target is {gap} tile(s) "
+                                f"away after your dash. Slash reach is {reach}; "
+                                f"{'the target must move closer or this may miss' if gap > reach else 'contact remains conditional'}. "
+                                "Choose a body zone.")
             else:
                 self._preview(Choice(self.kind, direction=direction, tiles=self.tiles,
                                      target_id=self.target_id))
@@ -538,7 +619,7 @@ class DuelUI:
                            "", "ENEMY STATS (learned by fighting)",
                            *(f"{key}: {value}" for key, value in model.enemy_sheet))
             elif self.panel == "more":
-                content = ("[Tactics][Run][Dash+Light]", "[Bandage][Eat][Drink][Pickup]",
+                content = ("[Tactics][Run][Dash+Light][Dash+Slash]", "[Bandage][Eat][Drink][Pickup]",
                            "[Notebook][Guide][Log][Help]", "[Timeline][Sheet]")
             elif self.panel == "tactics":
                 content = ("TACTICAL ACTIONS", model.adrenaline_status,
@@ -570,7 +651,7 @@ class DuelUI:
                             "Walk to a > exit to flee.") if self.rounds else
                            ("Time pauses at every player decision.", "1. Choose an action; attacks open zones.",
                            "2. Read the cost, landing tick and danger.", "3. Enter confirms; Esc cancels preview.",
-                           "Arrows: WALK preview, not an instant step.", "D then arrows: Dash. J: Dash + Light.",
+                             "Arrows: WALK preview, not an instant step.", "D then arrows: Dash. J: Dash+Light; More: Dash+Slash.",
                            "Guard: raise, hold, then G releases.", "Enter while guarding holds one turn.",
                            "Blood kills. Stamina/fatigue slow you.", "! is committed enemy reach; ~ is a guess.",
                            "K: notebook | I: guide OFF/HINTS/FULL", "Tab: timeline | L: log | ?: enemy sheet",
@@ -607,8 +688,11 @@ class DuelUI:
                       ('[Next Targets]' if start+5 < len(target_options) else ''))])
             elif self.panel == "zones":
                 rows.extend(["Choose target: [Eye][Head][Torso]", "[Arm][Hand][Leg] (E/H/T/A/X/L)"])
-                rows.extend(f"{z.zone.value}: {z.difficulty:g} ACC {'OPEN' if z.exposed else 'closed'} / you {z.accuracy:.1f}"
+                from pirates.duel_system.geometry import attack_lane
+                rows.append(f"Committed {attack_lane(self.kind).lower()} line: intersecting opposing paths clash within 1 tick; a 2+ tick lead may land first.")
+                rows.extend(f"{z.zone.value}: aim difficulty {z.difficulty:g} · {'OPEN' if z.exposed else 'closed'} · Accuracy {z.accuracy:.1f} affects clean-contact odds"
                             + (f" / unavailable: {z.blocked_reason}" if z.blocked_reason else "")
+                            + (f" / {z.forecast}" if z.forecast else "")
                             for z in model.zones)
             elif self.panel == "direction":
                 rows.extend([f"{self.kind.value}: choose direction", f"Arrows/numpad or click. Tiles: {self.tiles}", "1/2/3 changes distance. Esc cancels."])
@@ -638,6 +722,7 @@ class DuelUI:
             selected = self.session.selected
             label = ({ActionKind.LIGHT: "Light", ActionKind.HEAVY: "Heavy",
                       ActionKind.THRUST: "Thrust", ActionKind.DASH_LIGHT: "Dash+Light",
+                      ActionKind.DASH_SLASH: "Dash+Slash",
                       ActionKind.WALK: "Move", ActionKind.RUN: "Run", ActionKind.DASH: "Dash",
                       ActionKind.DISENGAGE: "Disengage", ActionKind.FEINT: "Feint",
                       ActionKind.SHOVE: "Shove", ActionKind.DISARM: "Disarm",
@@ -661,13 +746,14 @@ class DuelUI:
                     p.error if not p.valid else "", "",
                     "Time has not advanced.", "Confirm commits; Back cancels for free.", "[Confirm][Back]")
         if self.panel == "zones":
-            title = ("DASH + LIGHT — CHOOSE HIT ZONE" if self.kind == ActionKind.DASH_LIGHT
+            title = ("DASH + LIGHT — CHOOSE HIT ZONE" if self.kind == ActionKind.DASH_LIGHT else
+                     "DASH + SLASH — CHOOSE HIT ZONE" if self.kind == ActionKind.DASH_SLASH
                      else f"{self.kind.value.replace('_', ' ')} — CHOOSE TARGET")
             return (title,
                     self.message,
                     "Click a body part to resolve this round." if self.rounds else "Choose a body part, then review before committing.", "",
-                    *(f"{z.zone.value.title()}: needs {z.difficulty:g} accuracy; yours {z.accuracy:.1f}. "
-                      f"{'Exposed' if z.exposed else 'Covered: may drift to another part'}."
+                     *(f"{z.zone.value.title()}: aim difficulty {z.difficulty:g}; Accuracy {z.accuracy:.1f} influences clean contact, not legality. "
+                       f"{'Exposed' if z.exposed else 'Covered: may drift or miss'}."
                       + (f" Unavailable: {z.blocked_reason}." if z.blocked_reason else "")
                       for z in model.zones),
                     "", "Choose target: [Head][Torso][Arm]", "[Hand][Leg]", "[Back]")
@@ -675,8 +761,10 @@ class DuelUI:
             step = dict(model.movement_timing).get(self.kind.value)
             timing = (f"Travel: {step} ticks/tile ({step*self.tiles} total); strikes resolve before same-tick movement."
                       if step is not None else "")
-            distance_note = ("Disengage is exactly one tile away; distance cannot be changed."
+            distance_note = ("Disengage is one tile; the destination must be strictly farther from the target."
                              if self.kind == ActionKind.DISENGAGE else
+                             "Dash+Slash is one tile; slash resolves before the retreat/lateral step."
+                             if self.kind == ActionKind.DASH_SLASH else
                              f"Distance: {self.tiles} tile(s). 1/2/3 changes it.")
             return (f"{self.kind.value.replace('_', ' ')} — CHOOSE DIRECTION",
                     distance_note, timing, self.message,
@@ -711,7 +799,8 @@ class DuelUI:
                       "Speed: affects this exchange, never extra actions." if self.rounds else "Speed: faster windup, recovery and movement.",
                      "Accuracy: which body parts can be hit reliably.",
                      "", "LATEST EXCHANGE", *(model.log or ("No strikes exchanged yet.",)),
-                     "", "Click an action below; hover for details.",
+                      "", "Buttons: + favorable, ? conditional, ! exposed; gray unavailable.",
+                      "Hover for cost, time and opponent response deadline.",
                      "Green: you. Red: Ronin. >: exit."])
         if model.danger:
             rows.append("Amber: possible reach, not an area hit.")
@@ -774,7 +863,7 @@ class DuelDisplay:
         top = padding
         self.buttons = []
         self.header_rect = (left, top, model.columns * cell_w, line_h * 4)
-        known_buttons = {"Light", "Heavy", "Defend", "Guard", "Dash", "Move", "Wait", "More", "Run", "Dash+Light",
+        known_buttons = {"Light", "Heavy", "Defend", "Guard", "Dash", "Move", "Wait", "More", "Run", "Dash+Light", "Dash+Slash",
                          "Bandage", "Eat", "Drink", "Pickup", "Notebook", "Guide", "Log", "Help", "Timeline",
                           "Tactics", "Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline",
                           "Sheet", "Back", "Eye", "Head", "Torso", "Arm", "Hand", "Leg", "Confirm", "Retry", "Next"}
@@ -918,9 +1007,42 @@ class GameDuelDisplay(DuelDisplay):
         return super().tile_at(pos)
 
 
+def _choose_duel_archetype(renderer, world):
+    profiles = (
+        ("brute", "Brute — presses forward and attacks directly"),
+        ("aggressor", "Aggressor — fast, assertive pressure"),
+        ("veteran", "Veteran — patient, disciplined choices"),
+        ("counterfighter", "Counterfighter — guards and punishes openings"),
+        ("recruit", "Recruit — cautious and easier to unsettle"),
+        ("bully", "Bully — confident, forceful attacks"),
+    )
+    renderer.render_list(
+        world, "Choose your sword-duel opponent",
+        [description for _, description in profiles],
+        "Standalone practice duel; campaign clock pauses. Esc cancels without campaign changes.")
+    selected = renderer.choose(len(profiles))
+    if selected is None:
+        return None
+    if isinstance(selected, bool) or not isinstance(selected, int) or not 0 <= selected < len(profiles):
+        raise ValueError("Renderer returned an invalid sword-duel opponent selection")
+    return profiles[selected][0]
+
+
+def _new_sword_duel_session(renderer, world):
+    """Start a fresh, authored-profile duel only after an explicit selection."""
+    archetype = _choose_duel_archetype(renderer, world)
+    if archetype is None:
+        return None
+    return DuelSession.new(seed=world.clock.total_ticks, archetype=archetype)
+
+
 def _run_sword_duel(renderer, world):
-    session = (DuelSession.from_data(world.duel_journal) if world.duel_journal else
-               DuelSession.new(seed=world.clock.total_ticks))
+    if world.duel_journal:
+        session = DuelSession.from_data(world.duel_journal)
+    else:
+        session = _new_sword_duel_session(renderer, world)
+        if session is None:
+            return "paused"
     ui, display = DuelUI(session, rounds=True, coach_enabled=bool((world.duel_journal or {}).get('coach_enabled', False))), GameDuelDisplay()
     # Finish an older saved tick-mode commitment before entering round mode.
     if any(fighter.action is not None for fighter in session.state.fighters):

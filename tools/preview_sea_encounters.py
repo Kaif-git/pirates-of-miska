@@ -79,6 +79,11 @@ def main():
         # echo mission/cargo payloads from the simulation record.
         target["mission"] = "secret_target_island"
         target["cargo"] = {"gold": 999}
+        target["chart_position"] = [3.25, 2.4]
+        target["relative_observation"] = {
+            "range_units": 1.12, "bearing_deg": 32.4,
+            "relative_motion": "crossing",
+        }
         world.society.organizations["preview_registry"] = {
             "name": "Preview Merchant Registry", "kind": "merchant_company",
             "reputation": 57,
@@ -92,6 +97,7 @@ def main():
         info_rows = sea_encounter.sighting_rows(world, target) + [
             "", *sea_encounter.contact_rows(world, target)]
         assert all("secret_target_island" not in row and "999" not in row for row in info_rows)
+        assert any("Observed motion: crossing" in row for row in info_rows)
         capture("01-lookout-report", "Lookout and contact report", info_rows)
 
         distant_options = [

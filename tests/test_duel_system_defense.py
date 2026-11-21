@@ -2,9 +2,11 @@
 from copy import deepcopy
 
 from pirates.duel_system.defense import choose_defend
-from pirates.duel_system.engine import Choice, advance_one_tick, commit_action
-from pirates.duel_system.model import ActionKind, EventType, Zone
+from pirates.duel_system.engine import Choice, advance_one_tick, commit_action, legality
+from pirates.duel_system.config import load_config
+from pirates.duel_system.model import ActionKind, CombatState, EventType, Zone
 from pirates.duel_system.session import DuelSession
+from test_duel_system_foundation import bare_fighter
 
 
 def duel():
@@ -42,10 +44,168 @@ def test_defend_uses_least_cost_timely_escape_from_heavy_line():
     plan = choose_defend(session.state, player.id)
     assert plan.safe and plan.choice.kind in {ActionKind.WALK, ActionKind.RUN, ActionKind.DASH}
     action = commit_action(session.state, player.id, plan.choice)
+    assert legality(session.state, player.id,
+                    Choice(ActionKind.LIGHT, Zone.TORSO, target_id=enemy.id)) == "Already committed to an action"
     assert action.path[0][0] < enemy.action.strike_tick
     advance_to(session.state, enemy.action.strike_tick)
     assert not any(event.type == EventType.HIT and event.actor == enemy.id
                    for event in session.state.event_log)
+
+
+def test_defend_turns_visible_shove_into_one_side_dash_slash_that_interrupts_it():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    player.speed = 40
+    commit_action(session.state, enemy.id, Choice(ActionKind.SHOVE, target_id=player.id))
+
+    plan = choose_defend(session.state, player.id)
+
+    assert plan.choice.kind == ActionKind.DASH_LIGHT
+    assert plan.choice.direction in {(0, -1), (0, 1)}
+    player_action = commit_action(session.state, player.id, plan.choice)
+    assert legality(session.state, player.id, Choice(ActionKind.LIGHT, Zone.TORSO))
+    advance_to(session.state, player_action.strike_tick)
+    assert any(event.type == EventType.HIT and event.actor == player.id
+               and event.target == enemy.id for event in session.state.event_log)
+    assert any(event.type == EventType.INTERRUPT and event.actor == enemy.id
+               for event in session.state.event_log)
+    assert not any(event.type == EventType.SHOVE for event in session.state.event_log)
+
+
+def test_defend_side_dash_slash_can_interrupt_an_observed_dash_light():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    player.speed, enemy.speed = 40, 4
+    commit_action(session.state, enemy.id,
+                  Choice(ActionKind.DASH_LIGHT, Zone.TORSO, direction=(0, -1),
+                         tiles=1, target_id=player.id))
+
+    plan = choose_defend(session.state, player.id)
+
+    assert plan.choice.kind == ActionKind.DASH_LIGHT
+    assert plan.choice.direction in {(0, -1), (0, 1)}
+    action = commit_action(session.state, player.id, plan.choice)
+    advance_to(session.state, action.strike_tick)
+    assert any(event.type == EventType.HIT and event.actor == player.id
+               and event.target == enemy.id for event in session.state.event_log)
+    assert any(event.type == EventType.INTERRUPT and event.actor == enemy.id
+               for event in session.state.event_log)
+
+
+def test_defend_parries_heavy_when_well_timed_and_strength_can_support_it():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    player.strength = 40
+    enemy.strength = 1
+    session.state.config["guard"]["defend_parry_window"] = 12
+    session.state.config["guard"]["defend_hold"] = 20
+    commit_action(session.state, enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=player.id))
+
+    plan = choose_defend(session.state, player.id)
+    assert plan.choice.kind == ActionKind.GUARD
+    assert "strength ratio" in plan.reason
+    commit_action(session.state, player.id, plan.choice)
+    advance_to(session.state, enemy.action.strike_tick)
+    assert any(event.type == EventType.PARRY and event.actor == player.id
+               and event.target == enemy.id for event in session.state.event_log)
+
+
+def test_defend_never_selects_strength_overmatched_heavy_parry_when_escape_exists():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    player.strength, enemy.strength = 1, 40
+    session.state.config["guard"]["defend_parry_window"] = 12
+    session.state.config["guard"]["defend_hold"] = 20
+    commit_action(session.state, enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=player.id))
+
+    plan = choose_defend(session.state, player.id)
+    assert plan.choice.kind in {ActionKind.WALK, ActionKind.RUN, ActionKind.DASH}
+    assert plan.safe
+
+
+def test_defend_braces_when_every_escape_route_is_blocked_or_outside_floor():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    session.state.walkable = {player.pos, enemy.pos}
+    commit_action(session.state, enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=player.id))
+
+    plan = choose_defend(session.state, player.id)
+    assert plan.choice.kind == ActionKind.GUARD
+    assert plan.choice.contextual_defense
+    assert not plan.safe and plan.response == "brace"
+
+
+def test_defend_braces_when_every_legal_step_arrives_after_fast_impact():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    enemy.speed = 50
+    session.state.config["actions"]["HEAVY"]["windup"] = 1
+    commit_action(session.state, enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=player.id))
+
+    plan = choose_defend(session.state, player.id)
+
+    assert plan.choice.kind == ActionKind.GUARD
+    assert not plan.safe and plan.response == "brace"
+    assert "before impact" in plan.reason
+
+
+def test_defend_escapes_all_secondary_visible_threats_not_only_first_attacker():
+    config = load_config()
+    config["group"]["vision_range"] = 6
+    player = bare_fighter("player", pos=(4, 3), team_id="crew")
+    first = bare_fighter("first", pos=(5, 3), team_id="raiders")
+    second = bare_fighter("second", pos=(3, 3), team_id="raiders")
+    state = CombatState([player, first, second], config=config)
+    commit_action(state, first.id, Choice(ActionKind.LIGHT, Zone.TORSO,
+                                          target_id=player.id))
+    commit_action(state, second.id, Choice(ActionKind.HEAVY, Zone.TORSO,
+                                           target_id=player.id))
+
+    plan = choose_defend(state, player.id)
+    assert plan.safe and plan.choice.kind in {ActionKind.WALK, ActionKind.RUN, ActionKind.DASH}
+    move = commit_action(state, player.id, plan.choice)
+    assert move.path[0][0] < min(first.action.strike_tick, second.action.strike_tick)
+    advance_to(state, min(first.action.strike_tick, second.action.strike_tick))
+    assert not any(event.type == EventType.HIT and event.target == player.id
+                   for event in state.event_log)
+
+
+def test_defend_tie_break_is_deterministic_without_mutating_rng_or_state():
+    session = duel()
+    player, enemy = session.player, session.enemy
+    commit_action(session.state, enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=player.id))
+    before = session.state.to_data()
+
+    first = choose_defend(session.state, player.id)
+    second = choose_defend(session.state, player.id)
+
+    assert first == second
+    assert session.state.to_data() == before
+
+
+def test_group_defend_evaluation_does_not_deepcopy_unseen_fighter_profile():
+    config = load_config()
+    config["group"]["vision_range"] = 2
+    player = bare_fighter("player", pos=(0, 0), team_id="crew")
+    enemy = bare_fighter("enemy", pos=(1, 0), team_id="raiders")
+    unseen = bare_fighter("unseen", pos=(10, 10), team_id="crew")
+    state = CombatState([player, enemy, unseen], config=config)
+    commit_action(state, enemy.id, Choice(ActionKind.HEAVY, Zone.TORSO,
+                                          target_id=player.id))
+
+    class NoCopy:
+        def __deepcopy__(self, memo):
+            raise AssertionError("Defend must not clone unseen fighter profiles")
+
+    unseen.personality = NoCopy()
+    plan = choose_defend(state, player.id)
+
+    assert plan.choice.kind in {ActionKind.WALK, ActionKind.RUN, ActionKind.DASH}
 
 
 def test_defend_without_observed_threat_does_not_predict_hidden_choice():
@@ -91,7 +251,7 @@ def test_v12_active_attack_session_migrates_with_locked_bearing_and_defend_confi
                 "defend_raise", "defend_hold", "defend_lower", "defend_parry_window"):
         data["state"]["config"]["guard"].pop(key)
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.player.action.attack_bearing == (1, 0)
     assert restored.state.config["guard"]["defend_parry_window"] > 0
 
@@ -108,7 +268,7 @@ def test_v13_active_session_migrates_new_action_contracts_without_losing_commitm
     data["state"]["config"]["guard"].pop("riposte_disarm_windup_mult")
     data["state"]["config"]["tactics"].pop("feint_disrupt_ticks")
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.player.action.strike_tick == action.strike_tick
     assert restored.player.action.attack_bearing == action.attack_bearing
     assert restored.state.config["actions"]["THRUST"]["damage_type"] == "PIERCING"
@@ -116,7 +276,7 @@ def test_v13_active_session_migrates_new_action_contracts_without_losing_commitm
     assert restored.state.config["tactics"]["feint_disrupt_ticks"] == 6
 
 
-def test_v14_active_session_neutralizes_accuracy_modifiers_and_preserves_commitment():
+def test_v14_active_session_migrates_legacy_accuracy_modifiers_and_preserves_commitment():
     session = duel()
     action = commit_action(session.state, session.player.id,
                            Choice(ActionKind.HEAVY, Zone.HEAD,
@@ -136,14 +296,14 @@ def test_v14_active_session_neutralizes_accuracy_modifiers_and_preserves_commitm
     config["weapon_integrity"]["eye_accuracy_penalty_max"] = 0.35
     restored = DuelSession.from_data(data)
     migrated = restored.state.config
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.player.action.strike_tick == action.strike_tick
     assert restored.player.action.aim == action.aim
     assert restored.player.accuracy == session.player.accuracy
     assert migrated["stats"]["fatigue_accuracy"] == 0
     assert migrated["stats"]["pain_accuracy"] == 0
-    assert migrated["stats"]["fear_accuracy"] == 0
-    assert migrated["anger"]["acc_penalty"] == 0
+    assert migrated["stats"]["fear_accuracy"] == 0.25
+    assert migrated["anger"]["acc_penalty"] == 0.2
     assert migrated["zones"]["heavy_acc_mod"] == 0
     assert migrated["actions"]["HEAVY"]["acc_mod"] == 0
     assert "accuracy_mult" not in migrated["wounds"]["HEAD"]["DEEP"]
@@ -167,7 +327,7 @@ def test_v15_active_session_migrates_anatomical_catalogue_and_legacy_wound():
     enemy["wounds"][0].pop("side")
 
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.state.config["anatomy_sites"]["HEAD"]
     assert restored.player.action.strike_tick == action.strike_tick
     assert restored.enemy.wounds[0].site == "HAND"
@@ -191,7 +351,7 @@ def test_v16_session_migration_adds_wrist_sites_and_explicit_weapon_hand():
         fighter["permanent_injuries"].pop("severed_hands", None)
 
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.state.config["anatomy_sites"]["HAND"][-2:] == ["LEFT_WRIST", "RIGHT_WRIST"]
     assert restored.player.weapon_hand == "RIGHT"
     assert restored.player.action.strike_tick == action.strike_tick

@@ -4,7 +4,7 @@
     "given": ["Alden", "Anwen", "Arlen", "Bastian", "Belen", "Bram", "Brina", "Calla", "Caspian", "Cora", "Dain", "Dara", "Edda", "Elias", "Elowen", "Ember", "Evander", "Fara", "Fen", "Galen", "Hale", "Ilyra", "Iona", "Jalen", "Jessa", "Kael", "Kara", "Kellan", "Liora", "Lucan", "Mara", "Maren", "Mira", "Neris", "Nessa", "Orrin", "Pella", "Perrin", "Quillan", "Rhea", "Riven", "Rowan", "Sable", "Sella", "Tarin", "Tessa", "Thane", "Vara", "Venn", "Wren"],
     "family": ["Ashford", "Ashen", "Bale", "Bell", "Blackwell", "Brine", "Calder", "Cairn", "Cask", "Crowe", "Darrow", "Drake", "Emberly", "Fenwick", "Ferry", "Flint", "Gannet", "Grey", "Hallow", "Harbor", "Hearth", "Hollis", "Kest", "Keel", "Kerr", "Lantern", "Lowell", "Marlow", "Mere", "Morrow", "Norr", "Orin", "Pike", "Reef", "Rill", "Sable", "Salt", "Sedge", "Shore", "Spar", "Stone", "Tide", "Vale", "Vey", "Wake", "Ward", "Wick", "Wren", "Yarrow", "Quill" ]
   },
-  "stat_names": ["combat", "seamanship", "navigation", "leadership", "cunning", "willpower", "gunnery", "medicine", "trade"],
+  "stat_names": ["combat", "seamanship", "navigation", "leadership", "cunning", "willpower", "gunnery", "medicine", "trade", "strength", "speed", "endurance", "toughness"],
   "trait_names": ["ambition", "honor", "greed", "loyalty", "cruelty", "curiosity", "pride", "paranoia", "boldness", "sociability"],
   "default_traits": {
     "ambition": 50, "honor": 50, "greed": 50, "loyalty": 50, "cruelty": 20,
@@ -28,18 +28,18 @@
     "death_max_basis_points": 9500,
     "generation_stat_spread": 8,
     "generation_trait_spread": 8,
-    "age_decay_stats": ["combat", "seamanship", "gunnery"]
+    "age_decay_stats": ["combat", "seamanship", "gunnery", "speed", "endurance"]
   },
   "role_profiles": {
-    "captain": {"offsets": {"leadership": 15, "combat": 8}, "values": ["glory", "freedom", "wealth"], "dream_kinds": ["reach_legend_tier", "become_title", "find_treasure"]},
-    "first_mate": {"offsets": {"leadership": 12, "seamanship": 8, "combat": 5}, "values": ["kin", "freedom", "wealth"], "dream_kinds": ["protect_entity", "become_title", "find_treasure"]},
-    "navigator": {"offsets": {"navigation": 22, "cunning": 8}, "values": ["knowledge", "freedom", "glory"], "dream_kinds": ["chart_region", "find_treasure", "find_person"]},
+    "captain": {"offsets": {"leadership": 15, "combat": 8, "strength": 5, "speed": 2, "endurance": 4, "toughness": 4}, "values": ["glory", "freedom", "wealth"], "dream_kinds": ["reach_legend_tier", "become_title", "find_treasure"]},
+    "first_mate": {"offsets": {"leadership": 12, "seamanship": 8, "combat": 5, "strength": 3, "endurance": 3, "toughness": 2}, "values": ["kin", "freedom", "wealth"], "dream_kinds": ["protect_entity", "become_title", "find_treasure"]},
+    "navigator": {"offsets": {"navigation": 22, "cunning": 8, "speed": 4, "endurance": 1}, "values": ["knowledge", "freedom", "glory"], "dream_kinds": ["chart_region", "find_treasure", "find_person"]},
     "merchant": {"offsets": {"trade": 22, "cunning": 8}, "values": ["wealth", "order", "knowledge"], "dream_kinds": ["become_wealthiest", "find_treasure", "restore_house"]},
     "official": {"offsets": {"leadership": 12, "willpower": 8}, "values": ["order", "wealth", "glory"], "dream_kinds": ["become_title", "protect_entity", "restore_house"]},
     "surgeon": {"offsets": {"medicine": 24, "willpower": 5}, "values": ["knowledge", "kin", "order"], "dream_kinds": ["find_person", "protect_entity", "chart_region"]},
-    "gunner": {"offsets": {"gunnery": 22, "combat": 8}, "values": ["glory", "wealth", "freedom"], "dream_kinds": ["become_title", "defeat_character", "find_treasure"]},
+    "gunner": {"offsets": {"gunnery": 22, "combat": 8, "strength": 3, "toughness": 3}, "values": ["glory", "wealth", "freedom"], "dream_kinds": ["become_title", "defeat_character", "find_treasure"]},
     "shipwright": {"offsets": {"trade": 8, "cunning": 8, "willpower": 8}, "values": ["knowledge", "wealth", "order"], "dream_kinds": ["restore_house", "become_wealthiest", "chart_region"]},
-    "sailor": {"offsets": {"seamanship": 12, "combat": 4}, "values": ["freedom", "wealth", "kin"], "dream_kinds": ["find_treasure", "protect_entity", "reach_legend_tier"]},
+    "sailor": {"offsets": {"seamanship": 12, "combat": 4, "strength": 2, "speed": 3, "endurance": 5, "toughness": 2}, "values": ["freedom", "wealth", "kin"], "dream_kinds": ["find_treasure", "protect_entity", "reach_legend_tier"]},
     "cook": {"offsets": {"leadership": 4, "willpower": 5}, "values": ["kin", "wealth", "knowledge"], "dream_kinds": ["find_person", "restore_house", "become_title"]},
     "civilian": {"offsets": {"leadership": 2}, "values": ["kin", "wealth", "order"], "dream_kinds": ["protect_entity", "restore_house", "find_person"]}
   },
@@ -78,10 +78,60 @@
   "initial_minor_roles": ["sailor", "civilian", "cook", "navigator", "merchant", "surgeon", "gunner", "shipwright", "official", "captain"],
   "rookie_roles": ["captain", "navigator", "merchant", "sailor"],
   "rookie_age_years": 18,
+  "combat_equipment": {
+    "weapons": {
+      "cutlass": {"force": 8, "accuracy": 2, "reach": 1, "wear_permille": 3},
+      "boarding_axe": {"force": 10, "accuracy": -1, "reach": 1, "wear_permille": 5},
+      "knife": {"force": 5, "accuracy": 3, "reach": 1, "wear_permille": 2},
+      "unarmed": {"force": 0, "accuracy": 0, "reach": 1, "wear_permille": 0}
+    },
+    "armor": {
+      "none": {"protection": 0, "handling": 0, "wear_permille": 0},
+      "padded_coat": {"protection": 3, "handling": 0, "wear_permille": 2},
+      "leather_jack": {"protection": 5, "handling": -1, "wear_permille": 2}
+    },
+    "role_loadouts": {
+      "captain": {"weapon_id": "cutlass", "armor_id": "leather_jack"},
+      "first_mate": {"weapon_id": "cutlass", "armor_id": "leather_jack"},
+      "navigator": {"weapon_id": "knife", "armor_id": "padded_coat"},
+      "merchant": {"weapon_id": "knife", "armor_id": "none"},
+      "official": {"weapon_id": "cutlass", "armor_id": "padded_coat"},
+      "surgeon": {"weapon_id": "knife", "armor_id": "padded_coat"},
+      "gunner": {"weapon_id": "cutlass", "armor_id": "padded_coat"},
+      "shipwright": {"weapon_id": "knife", "armor_id": "padded_coat"},
+      "sailor": {"weapon_id": "boarding_axe", "armor_id": "padded_coat"},
+      "cook": {"weapon_id": "knife", "armor_id": "none"},
+      "civilian": {"weapon_id": "knife", "armor_id": "none"}
+    },
+    "rules": {
+      "max_exchanges": 4,
+      "hit_roll_min": -10,
+      "hit_roll_max": 10,
+      "attack_skill_weight": 2,
+      "attack_speed_weight": 1,
+      "defense_skill_weight": 1,
+      "defense_speed_weight": 1,
+      "defense_willpower_weight": 1,
+      "morale_composure_per_10": 1,
+      "guard_bonus": 8,
+      "strength_force_weight": 1,
+      "toughness_protection_per_10": 1,
+      "armor_protection_weight": 1,
+      "attack_stamina_cost": 18,
+      "guard_stamina_cost": 8,
+      "evade_stamina_cost": 15,
+      "endurance_cost_reduction_per_10": 1,
+      "exhaustion_penalty": 8,
+      "injury_impact_threshold": 18,
+      "injury_basis_points_per_impact": 100,
+      "max_injury_basis_points": 1500,
+      "boarding_morale_shift": 3
+    }
+  },
   "injuries": {
-    "scar": {"severity": 10, "hp_loss": 0, "stat_effects": {"leadership": 2}},
-    "broken_arm": {"severity": 55, "hp_loss": 25, "stat_effects": {"combat": -12, "gunnery": -10}},
-    "lost_eye": {"severity": 80, "hp_loss": 35, "stat_effects": {"gunnery": -18, "navigation": -5}},
-    "chronic_fever": {"severity": 65, "hp_loss": 20, "stat_effects": {"willpower": -8, "seamanship": -5}}
+    "scar": {"severity": 10, "hp_loss": 0, "recovery_days": 0, "scar_on_recovery": false, "fatal_basis_points": 0, "fatal_care_reduction_basis_points_per_point": 0, "stat_effects": {}},
+    "broken_arm": {"severity": 55, "hp_loss": 25, "recovery_days": 30, "scar_on_recovery": true, "fatal_basis_points": 0, "fatal_care_reduction_basis_points_per_point": 0, "stat_effects": {"combat": -12, "gunnery": -10, "strength": -8}},
+    "lost_eye": {"severity": 80, "hp_loss": 35, "recovery_days": 0, "scar_on_recovery": false, "fatal_basis_points": 0, "fatal_care_reduction_basis_points_per_point": 0, "stat_effects": {"gunnery": -18, "navigation": -5, "speed": -3}},
+    "chronic_fever": {"severity": 65, "hp_loss": 20, "recovery_days": 21, "scar_on_recovery": false, "fatal_basis_points": 100, "fatal_care_reduction_basis_points_per_point": 10, "stat_effects": {"willpower": -8, "seamanship": -5, "endurance": -12}}
   }
 }

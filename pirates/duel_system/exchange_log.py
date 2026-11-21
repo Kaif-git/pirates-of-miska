@@ -15,6 +15,87 @@ def describe_choice(data):
     return label
 
 
+def injury_numbers(event, private_actor_ids=(), *, compact=False):
+    """Describe a resolved wound using recorded force, thresholds and consequences."""
+    data = event.deltas
+    if event.actor in private_actor_ids or event.target in private_actor_ids:
+        return ""
+    context = data.get("injury_numbers", {})
+    net = data.get("net")
+    if net is None:
+        return ""
+    def number(value):
+        if value is None:
+            return "?"
+        return f"{float(value):.1f}".rstrip("0").rstrip(".")
+    bands = context.get("bands", {})
+    threshold_text = (f"per-hit bands: graze {bands['graze_min']:g}–{bands['cut_min']-1:g}; "
+                      f"cut {bands['cut_min']:g}–{bands['deep_min']-1:g}; deep ≥{bands['deep_min']:g} wound-force points"
+                      if "graze_min" in bands and "cut_min" in bands and "deep_min" in bands else "")
+    if context.get("next_label") and context.get("net_to_next") is not None:
+        next_text = (f"{context['next_label']} starts at {number(context['next_net_threshold'])} points "
+                     f"(+{number(context['net_to_next'])} on one hit)")
+    elif net >= bands.get("deep_min", float("inf")):
+        next_text = "deep band reached"
+    else:
+        next_text = ""
+    # Net is the resolved post-armor impact. Keep the recap decision-useful without
+    # turning the player-facing summary into a raw calculation ledger.
+    power, armor = data.get("power"), data.get("armor_applied")
+    armor_text = (f"attack {number(power)} − {event.zone.value.lower()} protection {number(armor)}"
+                  if power is not None and armor is not None else "post-armor")
+    impact = f"wound force {number(net)} points ({armor_text})"
+    if context.get("special"):
+        specials = []
+        for item in context["special"]:
+            if item["label"] == "lasting eye injury" and "trauma_current" in item:
+                current = data.get("eye_trauma_after", item["trauma_current"])
+                before = data.get("eye_trauma_before", item["trauma_current"])
+                before_eyes = data.get("eyes_damaged_before", 0)
+                eyes = data.get("eyes_damaged_after")
+                if eyes is not None and eyes > before_eyes:
+                    carry = (f"{number(current)} points carry toward the next eye ("
+                             f"{number(item['net_threshold'])}-point threshold"
+                             + (" already met)" if current >= item["net_threshold"] else ")"))
+                    special_text = (f"Eye trauma reached {number(item['net_threshold'])}: permanently impaired "
+                                    f"eye {eyes}/2; {carry}")
+                elif current >= item["net_threshold"] and before_eyes < 2:
+                    special_text = (f"eye-trauma threshold already banked ({number(current)} points; "
+                                    f"threshold {number(item['net_threshold']):g}); next eligible clean eye wound "
+                                    f"permanently impairs eye {before_eyes+1}/2")
+                else:
+                    special_text = (f"eye trauma {number(current)}/{number(item['net_threshold'])} points toward "
+                                    f"next permanent eye impairment ({number(max(0, item['net_threshold']-current))} more)")
+                specials.append(special_text)
+            elif item["net_threshold"] > net:
+                specials.append(f"{item['label']} ≥{number(item['net_threshold'])} (+{number(item['net_threshold']-net)})")
+            else:
+                specials.append(f"{item['label']} threshold {item['net_threshold']:g} reached")
+        if specials:
+            next_text = "; ".join(part for part in (next_text, *specials) if part)
+    if compact:
+        return f"{impact}; {next_text or threshold_text}".rstrip("; ")
+    rows = [f"Wound force: {number(net)} points after zone protection ({armor_text}); "
+            f"{threshold_text or 'threshold bands not recorded'}"
+            + (f"; next: {next_text}" if next_text else ".")]
+    effects = []
+    numeric = data.get("numeric_effects", {})
+    for key, label in (("strength_mult", "Strength"), ("speed_mult", "Speed"),
+                       ("accuracy_mult", "Accuracy")):
+        if key in numeric:
+            effects.append(f"{label} ×{number(numeric[key])}")
+    if "parry_penalty" in numeric:
+        effects.append(f"parry penalty +{number(numeric['parry_penalty'])}")
+    if numeric.get("duration_ticks"):
+        effects.append(f"{number(numeric['duration_ticks'])} ticks")
+    effects.append(f"bleed {number(data.get('bleed_per_turn', 0))} blood/turn")
+    if data.get("initial_blood_loss", 0) > 0:
+        effects.append(f"immediate blood loss {number(data['initial_blood_loss'])}")
+    effects.append(f"pain +{number(data.get('pain', 0))}")
+    rows.append("Injury numbers: " + "; ".join(effects) + ".")
+    return "\n".join(rows)
+
+
 def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=()):
     """Compact choices, bodily outcomes and causal explanation; never score damage."""
     choices = {event.actor: event for event in events if event.type.value == "ACTION_START"}
@@ -36,31 +117,68 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
         actor, target = who(event.actor), who(event.target)
         if kind == "WHIFF":
             outcomes.append(f"{actor} missed.")
-            reason = (f"Distance {data['distance']:g} > reach {data['reach']:g}."
-                      if "distance" in data else "Target was outside weapon reach.")
-            checks.append((70, "Reach: " + reason))
+            moved_before = next((move for move in events
+                                 if move.type.value == "MOVE" and move.actor == event.target
+                                 and move.tick < event.tick), None)
+            if "AIM_DISPERSION_MISS" in event.cause_tags:
+                reason = (f"Aimed at {data.get('aimed_zone', 'target').lower()}; seeded dispersion left no clean or "
+                          f"nearby-site contact (clean chance {data.get('clean_probability', 0):.0%}).")
+                checks.append((75, "Aim: " + reason))
+            elif "OUTSIDE_LOCKED_ATTACK_GEOMETRY" in event.cause_tags and moved_before:
+                reason = (f"Target moved to {tuple(moved_before.deltas['to'])} before impact t{event.tick}; "
+                          "the committed strike's locked sector no longer covered that position.")
+            elif "OUT_OF_REACH" in event.cause_tags and moved_before:
+                reason = (f"Target moved before impact t{event.tick}; distance {data.get('distance', '?')} "
+                          f"exceeded reach {data.get('reach', '?')}.")
+            else:
+                reason = (f"Distance {data['distance']:g} > reach {data['reach']:g}."
+                          if "distance" in data else "Target was outside weapon reach.")
+            if "AIM_DISPERSION_MISS" not in event.cause_tags:
+                checks.append((70, "Reach: " + reason))
+        elif kind == "CLASH":
+            lane = data.get("lane", "MID").lower()
+            outcomes.append(f"{actor} and {target}'s {lane}-line weapon paths clashed; neither body strike landed.")
+            checks.append((95, f"Clash: committed paths intersected on the {lane} line within "
+                           f"{data.get('tick_gap', 0)} tick(s); both strikes were consumed."))
         elif kind == "HIT":
             possessive = "your" if target == "You" else f"{target}'s"
             site = data.get("site", event.zone.value).replace("_", " ").lower()
             side = f"{data['side'].lower()} " if data.get("side") else ""
-            outcomes.append(f"{actor} hit {possessive} {side}{site} ({event.severity.value.lower()}).")
+            numbers = injury_numbers(event, private_actor_ids, compact=True)
+            number_text = f"; {numbers}" if numbers else ""
+            outcomes.append(f"{actor} hit {possessive} {side}{site} ({event.severity.value.lower()}{number_text}).")
             if data.get("structure"):
-                checks.append((60, f"Injury: {side}{site}; {data.get('damage_type', 'cutting').lower()} contact reached "
-                               f"{data.get('depth', event.severity.value.lower()).lower()} "
-                               f"{data['structure'].replace('_', ' ').lower()}; "
+                depth = data.get('depth', event.severity.value.lower()).replace('_', ' ').lower()
+                structure = data['structure'].replace('_', ' ').lower()
+                reached = f"reached {depth}" if depth == structure else f"reached {depth} tissue ({structure})"
+                checks.append((60, f"Injury: {side}{site}; {event.severity.value.lower()} "
+                               f"{data.get('damage_type', 'cutting').lower()} contact {reached}; "
                                f"function: {data.get('function', 'bleeding and pain only').replace('_', ' ')}."))
+            if "GUARD_BYPASSED" in event.cause_tags:
+                checks.append((100, f"Guard: it was active, but the resolved {event.zone.value.lower()} contact "
+                                    "was outside the covered guard line; the strike was not absorbed."))
+            elif (choices.get(event.target)
+                  and choices[event.target].deltas.get("kind") in {"GUARD", "DEFEND"}
+                  and data.get("defender_phase") not in {"GUARD_RAISE", "GUARD_HOLD"}):
+                checks.append((100, f"Guard: no active guard absorbed the strike; target was "
+                                    f"{data['defender_phase'].replace('_', ' ').lower()} at impact."))
             if data.get("drifted") and "accuracy" in data:
                 if data.get("aimed_zone") == "HAND" and not data.get("hand_exposed", True):
                     checks.append((90, f"Exposure: hand covered → {event.zone.value.lower()} instead."))
                 else:
-                    accuracy, rolled, required = data['accuracy'], data['rolled_accuracy'], data['required_accuracy']
-                    aim = (f"roll {rolled:.1f} < {required:g} needed (Accuracy {accuracy:.1f})"
-                           if abs(accuracy-rolled) > .001 else f"Accuracy {accuracy:.1f} < {required:g} needed")
-                    checks.append((90, f"Aim: {aim} → {event.zone.value.lower()}."))
+                    checks.append((90, f"Aim: seeded dispersion resolved {data.get('aimed_zone', 'target').lower()} "
+                                   f"to {event.zone.value.lower()} (clean chance "
+                                   f"{data.get('clean_probability', 0):.0%}); Accuracy "
+                                   f"{data['accuracy']:.1f} is unchanged."))
             if "LIGHT_INTERRUPTS_HEAVY" in event.cause_tags:
                 other = choices.get(event.target)
                 if other and other.deltas.get('strike_tick', event.tick) > event.tick:
-                    checks.append((85, f"Timing: light landed at t{event.tick}, before heavy at t{other.deltas['strike_tick']}."))
+                    own = choices.get(event.actor)
+                    speeds = (f" (effective Speed {own.deltas['speed']:.1f} vs "
+                              f"{other.deltas['speed']:.1f})"
+                              if own and "speed" in own.deltas and "speed" in other.deltas else "")
+                    checks.append((98, f"Timing: Light impact t{event.tick} preceded Heavy t{other.deltas['strike_tick']}"
+                                   f"{speeds}; it interrupted during windup."))
         elif kind == "GUARD_BREAK":
             guard = "your guard" if target == "You" else f"{target}'s guard"
             outcomes.append(f"{actor} broke {guard}.")
@@ -82,15 +200,13 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
             outcomes.append(f"{actor}: {data['kind'].replace('_', '+').lower()} interrupted.")
         elif kind == "INJURY_RESPONSE":
             response = data.get("response", "reacted").lower()
-            if response == "recoil":
-                outcomes.append(f"{actor} recoiled one tile from the injury.")
+            if response in {"flinch", "recoil"}:
+                outcomes.append(f"{actor} was forced back one tile by the injury reflex.")
             elif response == "braced":
                 blocker = data.get("blocker", "an obstruction").replace("_", " ").lower()
-                outcomes.append(f"{actor} braced; recoil was blocked by {blocker}.")
+                outcomes.append(f"{actor} braced; one-tile injury reflex was blocked by {blocker}.")
             elif response == "refractory":
-                outcomes.append(f"{actor} held position during recoil recovery.")
-            elif response == "flinch":
-                outcomes.append(f"{actor} flinched from the impact.")
+                outcomes.append(f"{actor} held position during the injury-reflex cooldown.")
         elif kind == "FEINT":
             if data.get("outcome") == "GUARD_DISRUPTED":
                 outcomes.append(f"{actor}'s feint disrupted {target}'s guard.")
@@ -99,13 +215,47 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
                                f"riposte consumed={bool(data.get('riposte_consumed'))}."))
             else:
                 outcomes.append(f"{actor}'s feint had no effect.")
-                checks.append((65, "Feint: no active guard was in reach at completion."))
+                if data.get("guard_active"):
+                    reason = (f"Guard was active but out of reach at completion "
+                              f"(distance {data.get('distance')}; reach {data.get('reach')}).")
+                else:
+                    phase = data.get("guard_phase") or "no guard action"
+                    reason = (f"No active Guard at completion (observed phase {phase}; "
+                              f"distance {data.get('distance')}; reach {data.get('reach')}).")
+                checks.append((65, "Feint: " + reason))
         elif kind == "SHOVE":
             outcome = data.get("outcome", "NO_EFFECT")
-            outcomes.append(f"{actor}'s shove {outcome.replace('_', ' ').lower()} against {target}.")
+            outcome_text = ("collapsed both fighters into a ground pile" if data.get("pile_up") else
+                            outcome.replace("_", " ").lower())
+            outcomes.append(f"{actor}'s shove {outcome_text} against {target}.")
+            route = (f"route blocked by {who(data['blocker'])}; moved "
+                     f"{data.get('actual_steps', 0)}/{data.get('requested_steps', 0)} steps"
+                     if data.get("blocker") else
+                     f"moved {data.get('actual_steps', 0)}/{data.get('requested_steps', 0)} steps")
+            if data.get("blocker") == "DESTINATION_CONFLICT":
+                route = ("simultaneous shove routes claimed a shared destination; neither shove won displacement; "
+                         f"moved {data.get('actual_steps', 0)}/{data.get('requested_steps', 0)} steps")
             checks.append((75, f"Shove: strength/balance {data.get('attacker_score', 0):.1f} vs "
                            f"{data.get('defender_score', 0):.1f}; destination {tuple(data.get('destination', ()))}, "
-                           f"guard braced={bool(data.get('braced'))}."))
+                           f"guard braced={bool(data.get('braced'))}; {route}."))
+            target_choice = choices.get(event.target)
+            target_hit = next((hit for hit in events if hit.type.value == "HIT"
+                               and hit.actor == event.target and hit.target == event.actor), None)
+            if target_hit and target_hit.tick <= event.tick:
+                checks.append((86, f"Ordering: target's strike hit at t{target_hit.tick} before Shove resolved at t{event.tick}; the hit came first."))
+            elif data.get("actual_steps", 0) > 0 and any(
+                    item.type.value == "INTERRUPT" and item.actor == event.target
+                    and item.tick == event.tick for item in events):
+                checks.append((150, f"Ordering: Shove displacement at t{event.tick} interrupted the target's committed action."))
+            elif data.get("committed_heavy"):
+                checks.append((150, f"Ordering: the off-balance Shove at t{event.tick} interrupted the committed Heavy before its strike."))
+            elif (data.get("actual_steps", 0) > 0 and target_choice
+                  and target_choice.deltas.get("strike_tick") is not None
+                  and target_choice.deltas["strike_tick"] > event.tick):
+                checks.append((86, f"Ordering: Shove displaced the target at t{event.tick} before its committed strike at "
+                               f"t{target_choice.deltas['strike_tick']}; displacement interrupted that action."))
+            elif data.get("outcome") == "OFF_BALANCE":
+                checks.append((70, f"{target} lost stability but held position; no committed Heavy was interrupted."))
         elif kind == "DISARM":
             outcome = data.get("outcome", "GRIP_HELD").replace("_", " ").lower()
             outcomes.append(f"{actor}'s disarm attempt {outcome} against {target}.")
@@ -140,12 +290,20 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
             outcomes.append(f"{actor} picked up {data.get('name', 'a weapon')} at {data['condition']:.0f}% condition.")
         elif kind == "SEVER":
             side = f"{data['side'].lower()} " if data.get("side") else ""
-            outcome = ("weapon hand lost; weapon use is disabled" if data.get("weapon_hand_lost")
-                       else "supporting hand lost; one-handed weapon remains usable")
-            outcomes.append(f"{target} lost the {side}hand ({outcome}).")
+            if data.get("ear_lost"):
+                outcomes.append(f"{target} lost the {side}ear; side-specific hearing is not modeled.")
+            else:
+                outcome = ("weapon hand lost; weapon use is disabled" if data.get("weapon_hand_lost")
+                           else "supporting hand lost; one-handed weapon remains usable")
+                outcomes.append(f"{target} lost the {side}hand ({outcome}).")
         elif kind == "EYE_INJURY":
             outcomes.append(f"{target} sustained a permanent eye injury ({data['eyes_damaged_after']} eye(s) impaired).")
-            checks.append((95, "Eye injury: clean qualifying contact caused a persistent vision impairment."))
+            cause = (f"clean eye contacts accumulated {data['eye_trauma_before']:.1f} + "
+                     f"{data['net_after_armor']:.1f} post-armor force to reach "
+                     f"{data['eye_trauma_threshold']:.1f}."
+                     if data.get("cumulative_contact") else
+                     "one clean contact met the post-armor eye injury threshold.")
+            checks.append((95, "Eye injury: " + cause))
         elif kind == "DECAPITATION":
             outcomes.append(f"{target} died from a clean heavy cutting head strike.")
             checks.append((100, "Decapitation: clean heavy cutting head contact met the fatal injury condition."))
@@ -154,12 +312,18 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
     if not outcomes:
         for actor, choice in choices.items():
             moved = sum(event.actor == actor and event.type.value == "MOVE" for event in events)
-            interrupted = any(event.actor == actor and "MOVEMENT_BLOCKED" in event.cause_tags for event in events)
+            interrupted = any(event.actor == actor and
+                              ({"MOVEMENT_BLOCKED", "MOVEMENT_CONFLICT"} & set(event.cause_tags))
+                              for event in events)
             if moved:
                 outcomes.append(f"{who(actor)} moved {moved} tile{'s' if moved != 1 else ''}.")
             elif interrupted:
                 outcomes.append(f"{who(actor)}'s movement was blocked.")
-                checks.append((50, "Position: the destination was occupied."))
+                if any(event.actor == actor and "MOVEMENT_CONFLICT" in event.cause_tags
+                       for event in events):
+                    checks.append((50, "Position: simultaneous movement claims collided; no fighter won the tile."))
+                else:
+                    checks.append((50, "Position: the destination was occupied when the step resolved."))
             else:
                 outcomes.append(f"{who(actor)}: {choice.deltas['kind'].replace('_', '+').lower()}.")
         moving = next((choice for choice in choices.values() if choice.deltas.get('direction') and 'speed' in choice.deltas), None)
@@ -170,7 +334,14 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
     for event in events:
         kind, data = event.type.value, event.deltas
         actor = who(event.actor)
-        if kind == "POOL_CHANGE" and data.get("bleed_loss", 0) > 0:
+        if kind == "INJURY_RESPONSE" and data.get("response", "").lower() in {"flinch", "recoil"}:
+            consequences.append(f"{actor} forced back 1 tile (injury reflex)")
+        elif kind == "INJURY_RESPONSE" and data.get("response", "").lower() == "braced":
+            blocker = data.get("blocker", "obstruction").replace("_", " ").lower()
+            consequences.append(f"{actor} braced; injury reflex blocked by {blocker}")
+        elif kind == "INJURY_RESPONSE" and data.get("response", "").lower() == "refractory":
+            consequences.append(f"{actor} held position (injury-reflex cooldown)")
+        elif kind == "POOL_CHANGE" and data.get("bleed_loss", 0) > 0:
             bleed_totals[event.actor] = bleed_totals.get(event.actor, 0) + data["bleed_loss"]
         elif kind == "HIT":
             zone = event.zone.value.lower() if event.zone else "body"
@@ -183,6 +354,9 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
             injury = structure if depth.replace("_", " ") == structure else f"{depth} {structure}"
             consequences.append(f"{who(event.target)}: {zone} ({site}) {injury} injury; "
                                 f"pain +{data.get('pain', 0):g}; {function}")
+        elif kind == "CLASH":
+            consequences.append(f"{who(event.actor)} and {who(event.target)}: weapon paths crossed on the "
+                                f"{data.get('lane', 'MID').lower()} line; neither struck the body")
         elif kind == "WOUND":
             bleed = data.get("bleed_per_turn", 0)
             if data.get("initial_blood_loss", 0) > 0:
@@ -195,7 +369,7 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
             if bleed > 0:
                 site = data.get("site", event.zone.value).replace("_", " ").lower()
                 side = f"{data['side'].lower()} " if data.get("side") else ""
-                consequences.append(f"{who(event.target)}: {side}{site} bleeding {bleed:g}/turn")
+                consequences.append(f"{who(event.target)}: {side}{site} bleeding {bleed:g} blood/turn")
         elif kind == "STATUS" and data.get("status"):
             consequences.append(f"{actor}: {data['status'].replace('_', ' ').lower()}")
         elif kind == "STABILITY" and "loss" in data:
@@ -249,29 +423,50 @@ def format_exchange(events, names, *, before=None, fighters=(), private_actor_id
         kind, data = event.type.value, event.deltas
         actor, target = who(event.actor), who(event.target)
         if kind == "WHIFF":
-            why = (f"distance {data['distance']:g} > weapon reach {data['reach']:g} at the strike"
-                   if "distance" in data else "target was outside weapon reach at the strike")
-            rows.append(f"{actor}: missed {target}. Why: {why}; this was positioning, not an accuracy roll.")
+            if "AIM_DISPERSION_MISS" in event.cause_tags:
+                why = (f"aimed at {data.get('aimed_zone', 'target').lower()}; seeded dispersion left no clean or "
+                       f"nearby-site contact (clean chance {data.get('clean_probability', 0):.0%})")
+            else:
+                why = (f"distance {data['distance']:g} > weapon reach {data['reach']:g} at the strike"
+                       if "distance" in data else "target was outside weapon reach at the strike")
+            explanation = ("this was a seeded aim-dispersion miss, not a reach failure"
+                           if "AIM_DISPERSION_MISS" in event.cause_tags
+                           else "this was positioning, not an accuracy roll")
+            rows.append(f"{actor}: missed {target}. Why: {why}; {explanation}.")
+        elif kind == "CLASH":
+            rows.append(f"{actor} and {target}: weapon paths intersected on the "
+                        f"{data.get('lane', 'MID').lower()} line within {data.get('tick_gap', 0)} tick(s); "
+                        "both body strikes were stopped.")
         elif kind == "HIT":
             zone = event.zone.value.lower()
             reason = []
             if "accuracy" in data:
-                rolled, needed = data['rolled_accuracy'], data['required_accuracy']
-                comparison = ">=" if rolled >= needed else "<"
-                if data["aimed_zone"] == "TORSO":
-                    reason.append("torso is the accuracy fallback")
-                else:
-                    reason.append(f"Accuracy {data['accuracy']:.1f} (rolled {rolled:.1f}) {comparison} target requirement {needed:g}")
+                reason.append(f"seeded aim dispersion: clean chance {data.get('clean_probability', 0):.0%}; "
+                              f"Accuracy {data['accuracy']:.1f} is unchanged")
                 if data.get("drifted"):
-                    reason.append(f"aim drifted from {data['aimed_zone'].lower()} to {zone}"
-                                  + (" because the hand was covered" if data['aimed_zone'] == "HAND" and not data['hand_exposed'] else ""))
+                    reason.append(f"aim resolved from {data['aimed_zone'].lower()} to {zone}")
             tags = event.cause_tags
             if "LIGHT_INTERRUPTS_HEAVY" in tags:
-                reason.append("light strike landed during heavy windup, interrupting it")
+                opponent_choice = choices.get(event.target)
+                own_choice = choices.get(event.actor)
+                if opponent_choice and own_choice:
+                    own_due = own_choice.deltas.get("strike_tick")
+                    other_due = opponent_choice.deltas.get("strike_tick")
+                    own_speed = own_choice.deltas.get("speed")
+                    other_speed = opponent_choice.deltas.get("speed")
+                    if own_due is not None and other_due is not None:
+                        reason.append(
+                            f"Light impact was due t{own_due} (effective Speed {own_speed:g}) "
+                            f"before the opponent's Heavy at t{other_due} "
+                            f"(effective Speed {other_speed:g}); the hit landed during Heavy windup and interrupted it")
+                    else:
+                        reason.append("light strike landed during heavy windup, interrupting it")
+                else:
+                    reason.append("light strike landed during heavy windup, interrupting it")
             if "WALK_DEFENSELESS" in tags:
                 reason.append("walking left the target defenseless")
             if "GUARD_BYPASSED" in tags:
-                reason.append("this target bypassed the guard line")
+                reason.append(f"guard was active, but the resolved {zone} contact was outside its covered line")
             if "LIGHT_CATCHES_RECOVERY" in tags:
                 reason.append("target was still recovering")
             if not reason:
@@ -285,14 +480,16 @@ def format_exchange(events, names, *, before=None, fighters=(), private_actor_id
             rows.append(f"{actor}: hit {possessive} {zone} ({site}; {event.severity.value.lower()}). Why: "
                         + "; ".join(reason)+".")
             if data.get("structure"):
-                rows.append(f"{actor}: {data.get('damage_type', 'cutting').lower()} contact reached "
-                            f"{data.get('depth', event.severity.value.lower()).lower()} "
-                            f"{data['structure'].replace('_', ' ').lower()} at {site} ({zone}); "
+                depth = data.get('depth', event.severity.value.lower()).replace('_', ' ').lower()
+                structure = data['structure'].replace('_', ' ').lower()
+                reached = f"reached {depth}" if depth == structure else f"reached {depth} tissue ({structure})"
+                rows.append(f"{actor}: {data.get('damage_type', 'cutting').lower()} contact {reached} at {site} ({zone}); "
                             f"function: {data.get('function', 'bleeding and pain only').replace('_', ' ')}; "
                             f"pain increased by {data.get('pain', 0):g}.")
             else:
                 rows.append(f"{target}: {zone} {event.severity.value.lower()} contact; "
                             "see current condition for resulting function and bleeding.")
+            rows.extend(injury_numbers(event, private_actor_ids).splitlines())
         elif kind in {"PARRY", "BLOCK", "GUARD_BREAK"}:
             if kind == "PARRY":
                 reason = (f"inside the {data['parry_window']}-tick parry window; defender Strength {data['defender_strength']:.1f} "
@@ -334,13 +531,52 @@ def format_exchange(events, names, *, before=None, fighters=(), private_actor_id
                             f"stored riposte consumed={bool(data.get('riposte_consumed'))}; "
                             f"opening until t{data.get('opening_until_tick')}.")
             else:
-                rows.append(f"{actor}: feint had no effect; no active guard was in reach at completion.")
+                if data.get("guard_active"):
+                    rows.append(f"{actor}: feint had no effect; Guard active but out of reach "
+                                f"({data.get('distance')} tiles; reach {data.get('reach')}).")
+                else:
+                    rows.append(f"{actor}: feint had no effect; no active Guard at completion "
+                                f"(phase {data.get('guard_phase') or 'none'}, distance {data.get('distance')}, "
+                                f"reach {data.get('reach')}).")
         elif kind == "SHOVE":
             outcome = data.get("outcome", "NO_EFFECT").replace("_", " ").lower()
             contest = (f"Strength/balance {data['attacker_score']:.1f} vs {data['defender_score']:.1f}; "
                        if "attacker_score" in data else "")
+            circumstance = (f"route blocked by {who(data['blocker'])}; "
+                            f"moved {data.get('actual_steps', 0)}/{data.get('requested_steps', 0)} steps."
+                            if data.get("blocker") else
+                             f"moved {data.get('actual_steps', 0)}/{data.get('requested_steps', 0)} steps.")
+            if data.get("blocker") == "DESTINATION_CONFLICT":
+                circumstance = ("simultaneous shove routes claimed a shared destination; neither shove won "
+                                f"displacement; moved {data.get('actual_steps', 0)}/"
+                                f"{data.get('requested_steps', 0)} steps.")
+            elif data.get("pile_up"):
+                circumstance += " The blocked impact collapsed both fighters into a ground pile."
+            elif outcome == "resisted":
+                circumstance = "defender's strength/balance met or exceeded the shove contest."
+            elif outcome == "off balance":
+                circumstance = "contest margin was positive but below the displacement threshold."
+            target_choice = choices.get(event.target)
+            target_hit = next((hit for hit in events if hit.type.value == "HIT"
+                               and hit.actor == event.target and hit.target == event.actor
+                               and hit.tick <= event.tick), None)
+            if target_hit:
+                circumstance += f" Target's strike hit at t{target_hit.tick}, before Shove resolved at t{event.tick}."
+            elif data.get("actual_steps", 0) > 0 and any(
+                    item.type.value == "INTERRUPT" and item.actor == event.target
+                    and item.tick == event.tick for item in events):
+                circumstance += f" Displacement at t{event.tick} interrupted the target's committed action."
+            elif data.get("committed_heavy"):
+                circumstance += (f" Off-balance Shove at t{event.tick} interrupted the committed Heavy "
+                                 "before its strike.")
+            elif (data.get("actual_steps", 0) > 0 and target_choice
+                  and target_choice.deltas.get("strike_tick") is not None
+                  and target_choice.deltas["strike_tick"] > event.tick):
+                circumstance += (f" Displacement at t{event.tick} interrupted the target's committed strike "
+                                 f"due t{target_choice.deltas['strike_tick']}.")
             rows.append(f"{actor}: shove {target} {outcome}. Why: {contest}"
-                        f"guard brace={bool(data.get('braced'))}; destination {tuple(data.get('destination', ())) }.")
+                        f"guard brace={bool(data.get('braced'))}; {circumstance} "
+                        f"destination {tuple(data.get('destination', ())) }.")
         elif kind == "DISARM":
             outcome = data.get("outcome", "GRIP_HELD").replace("_", " ").lower()
             if "attacker_strength" in data:
@@ -365,10 +601,20 @@ def format_exchange(events, names, *, before=None, fighters=(), private_actor_id
         elif kind == "STABILITY" and "source" in data:
             rows.append(f"{actor}: stability {data.get('loss', data.get('gain', 0)):+.1f} from "
                         f"{data['source'].replace('_', ' ').lower()}.")
-        elif kind == "STATUS" and "MOVEMENT_BLOCKED" in event.cause_tags:
+        elif kind == "STATUS" and ({"MOVEMENT_BLOCKED", "MOVEMENT_CONFLICT"} & set(event.cause_tags)):
             location = tuple(data.get("position", ()))
             blocker = who(event.target)
-            rows.append(f"{actor}: movement blocked at {location}; {blocker} occupied the destination when the step resolved.")
+            if data.get("reason") == "DESTINATION_CONFLICT":
+                contenders = ", ".join(
+                    f"{who(actor_id)} ({kind.replace('_', '+').lower()})"
+                    for actor_id, kind in data.get("contenders", ()))
+                rows.append(f"{actor}: movement blocked at {location}; simultaneous routes claimed the same tile "
+                            f"({contenders}). Neither action won the tile; both remained collision-safe.")
+            elif blocker:
+                rows.append(f"{actor}: movement blocked at {location}; {blocker} occupied the destination when the step resolved.")
+            else:
+                reason = data.get("reason", "OCCUPIED").replace("_", " ").lower()
+                rows.append(f"{actor}: movement blocked at {location} by {reason}; no move-through occurred.")
         elif kind == "STATUS" and "BANDAGE_COMPLETED" in event.cause_tags:
             if event.actor in private_actor_ids:
                 rows.append(f"{actor}: bandaged a {data['zone'].lower()} wound; remaining bleeding is uncertain.")

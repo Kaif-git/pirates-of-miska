@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from pirates.ship import FOOD_RECIPES, FOOD_RESOURCE_KEYS, READY_FOODS
+from pirates.ship import FOOD_RECIPES, FOOD_RESOURCE_KEYS, LABELS, LABORS, READY_FOODS
 
 FOOD_KG_PER_CREW_DAY = 0.85
 CLEAN_WATER_L_PER_CREW_DAY = 2.2
@@ -231,4 +231,120 @@ def readiness_rows(world, *, target_days=None, forecast=None):
         rows.append(f"Trade cargo: {cargo_units} unallocated unit(s), {cargo_mass_g / 1000:.1f} kg, "
                     "is not counted above.")
         rows.append("Next: allocate provisions at the hold before departure.")
+
+    rows += ["", "SHIP AND CREW PREPARATION (advisories; not departure gates)"]
+    rows.append(f"Hull: {ship.hull:.0f}/100 condition; rigging: {ship.rigging:.0f}/100. "
+                "Rigging condition scales estimated sailing drive.")
+    if ship.hull < 50:
+        rows.append("Warning: hull is below the existing 50-condition voyage caution; reduced damage margin. "
+                    "Next: patch hull with repair labor and planks before a risky passage.")
+    if ship.rigging < 100:
+        rows.append("Next: tend rigging with assigned rig labor to restore sailing drive.")
+
+    from pirates.ship_physics import calculate
+    loading = calculate(world)
+    rows.append(f"Estimated load: {loading['total_mass_kg']:.0f}/{loading['displacement_limit_kg']:.0f} kg; "
+                f"provisional margin {loading['loading_margin_kg']:.0f} kg, "
+                f"freeboard {loading['freeboard_m']:.2f} m, estimated GM {loading['estimated_gm_m']:.2f} m "
+                "(low-order model, not a seaworthiness certificate).")
+    if loading["warnings"]:
+        rows.append("Warning: " + "; ".join(loading["warnings"]) +
+                    ". Next: reduce/redistribute load or correct the contributing hull geometry; recheck the estimate.")
+
+    from pirates.ship_support import assess, world_loads
+    support = assess(world.ship_model, world_loads(world))
+    if support["unsupported"] or support["overloaded"]:
+        rows.append(f"Warning: deck support has {len(support['unsupported'])} unsupported floor(s) and "
+                    f"{len(support['overloaded'])} overloaded support(s); structural failure may detach or damage parts. "
+                    "Next: add a supported load path or reduce loads, then inspect the ship report.")
+    else:
+        rows.append("Deck support: current modeled floor loads have supported paths.")
+
+    station_labels = (("hold", "hold"), ("water", "water store"), ("galley", "galley"),
+                      ("repair", "repair station"), ("rigging", "rigging station"),
+                      ("helm", "helm"), ("bilge", "bilge station"))
+    inaccessible = []
+    living_crew = [sailor for sailor in ship.crew if sailor.health > 0]
+    for key, label in station_labels:
+        target = ship.stations.get(key)
+        fixture = world.fixtures.get(key)
+        if target is None:
+            continue
+        if fixture and fixture.carrier:
+            inaccessible.append(f"{label} is being relocated")
+        elif not living_crew or not any(ship.path(world, sailor, target) is not None
+                                        for sailor in living_crew):
+            inaccessible.append(f"no living crew route to the {label}")
+    if inaccessible:
+        rows.append("Warning: access — " + "; ".join(inaccessible) +
+                    ". Next: finish equipment moves, clear obstructions, or reconnect the deck route.")
+    else:
+        rows.append("Access: living crew can reach the listed hold, water, galley and work stations.")
+
+    rows.extend(labor_coverage_rows(world))
+
+    open_jobs = [job for job in ship.jobs if job.state not in ("done", "cancelled")]
+    if not open_jobs:
+        rows.append("Unfinished work: none; normal ship work remains simulated underway.")
+    else:
+        rows.append(f"Unfinished work: {len(open_jobs)} active order(s); sailing does not complete or refund them.")
+        blocked_jobs = sorted((job for job in open_jobs if job.state == "blocked"),
+                              key=lambda item: (item.priority, item.id))
+        other_jobs = sorted((job for job in open_jobs if job.state != "blocked"),
+                            key=lambda item: (item.priority, item.id))
+        shown_jobs = blocked_jobs[:12] + other_jobs[:max(0, 5 - min(len(blocked_jobs), 12))]
+        for job in shown_jobs:
+            if job.state == "blocked":
+                cause = job.reason or "no eligible worker or route"
+                rows.append(f"Warning: order #{job.id} {ship.job_label(job)} is blocked — {cause}. "
+                            "Next: inspect it on the Chore board and fix that cause.")
+            else:
+                rows.append(f"Info: order #{job.id} {ship.job_label(job)} remains {job.state}; "
+                            "crew may continue it underway.")
+        remaining_blocked = len(blocked_jobs) - min(len(blocked_jobs), 12)
+        remaining_other = len(other_jobs) - max(0, 5 - min(len(blocked_jobs), 12))
+        if remaining_blocked:
+            rows.append(f"Warning: {remaining_blocked} more blocked order(s) are listed on the Chore board.")
+        if remaining_other:
+            rows.append(f"Info: {remaining_other} more active order(s) remain on the Chore board.")
+
+    medical = ship.stores["medicine"], ship.stores["bandages"]
+    rows.append(f"Medical stores: {medical[0]} medicine, {medical[1]} bandages. "
+                "These support existing shipboard care only; combat wounds are not bridged into this system.")
+    if not any(medical):
+        rows.append("Next: allocate medicine or bandages at the hold if desired; this is not a sailing gate.")
+    loaded_cannons = sum(bool(value) for value in ship.ammo.values())
+    rows.append(f"Ammunition: {loaded_cannons} cannon(s) loaded; {ship.stores['shot']} reserve shot. "
+                "Unloaded guns cannot fire; ammunition is optional to departure.")
+    if not loaded_cannons and ship.stores["shot"]:
+        rows.append("Next: assign load labor to load a gun from the available shot if armed defense is wanted.")
+
+    rows.append("Departure gate policy: these are warnings/information only; existing route and scenario rules still apply.")
+    return rows
+
+
+def labor_coverage_rows(world):
+    """Read enabled work priorities, matching tools and officer posts without reserving crew."""
+    from pirates.economy import CATALOG
+
+    officers = {}
+    for role, sid in world.voyages.roles.items():
+        if sid:
+            officers.setdefault(sid, []).append(role.title())
+    rows = ["Labor coverage (enabled priority; needs, health, access and supplies still apply):"]
+    for kind in LABORS:
+        enabled = [sailor for sailor in world.ship.crew if sailor.labors.get(kind, 0) > 0]
+        if not enabled:
+            rows.append(f"{LABELS[kind]}: none enabled — assign this labor on a crew profile.")
+            continue
+        rows.append(f"{LABELS[kind]}: " + ", ".join(
+            f"{sailor.name} P{sailor.labors[kind]}" +
+            (f" ({', '.join(CATALOG[item]['name'] for slot, item in world.economy.gear.get(sailor.id, {}).items()
+                            if CATALOG[item].get('labor_bonus', {}).get(kind, 0) > 0)}; "
+             f"+{(world.economy.bonus(sailor.id, 'labor', kind) - 1) * 100:.0f}% work)"
+             if any(CATALOG[item].get("labor_bonus", {}).get(kind, 0) > 0
+                    for item in world.economy.gear.get(sailor.id, {}).values()) else "") +
+            (f" [officer: {'/'.join(officers[sailor.id])}]" if sailor.id in officers else "")
+            for sailor in enabled))
+    rows.append("Officer posts do not reserve crew from jobs; needs and routes still determine actual availability.")
     return rows

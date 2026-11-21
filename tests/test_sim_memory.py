@@ -173,9 +173,14 @@ def test_revenge_action_is_grudge_scored_and_cites_memory_provenance():
     assert expense.data["ledger_sink"] == {"silver": 10, "goods": {}}
     assert crew["treasury_silver"] == account["treasury_silver"]
     assert world.economy.ledger.silver_sinks == 10
+    assert world.economy.ledger.sink_events[-1] == {
+        "event_id": action.id, "silver": 10, "goods": {}}
     world.economy.validate_world(world)
     world.crew_ships.validate_world(world)
-    world.to_snapshot()
+    restored = WorldState.from_snapshot(world.to_snapshot())
+    assert restored.economy.ledger.snapshot() == world.economy.ledger.snapshot()
+    restored.economy.validate_world(restored)
+    restored.crew_ships.validate_world(restored)
     assert world.decisions._grudge_target_id(world, holder) is None
 
 

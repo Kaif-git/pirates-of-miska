@@ -13,7 +13,12 @@ from sim.core.names import living_name_in_use
 CHARACTERS_PATH = Path(__file__).resolve().parents[1] / "data" / "characters.json"
 _STAT_NAMES = {
     "combat", "seamanship", "navigation", "leadership", "cunning",
-    "willpower", "gunnery", "medicine", "trade",
+    "willpower", "gunnery", "medicine", "trade", "strength", "speed",
+    "endurance", "toughness",
+}
+_LEGACY_CHARACTER_DATA_DIGESTS = {
+    "ce9c335acff824d65a60e67d51e5a442dc6897ba1e6a443fb355fd137959e198",
+    "652d29bb45fd1fe4f5c1d4c346857304dfcf3a0274e48a671d3f741de32b424f",
 }
 _TRAIT_NAMES = {
     "ambition", "honor", "greed", "loyalty", "cruelty", "curiosity",
@@ -39,7 +44,7 @@ def validate_character_data(data: Any) -> None:
         "schema_version", "name_pools", "stat_names", "trait_names", "default_traits",
         "rules", "role_profiles", "archetypes", "dream_templates", "want_kinds",
         "initial_major_roles", "initial_minor_roles", "rookie_roles", "rookie_age_years",
-        "injuries",
+        "injuries", "combat_equipment",
     }
     if (not isinstance(data, dict) or set(data) != required
             or type(data["schema_version"]) is not int or data["schema_version"] != 1):
@@ -122,11 +127,74 @@ def validate_character_data(data: Any) -> None:
     if (type(data["rookie_age_years"]) is not int or data["rookie_age_years"] < 0
             or not isinstance(data["injuries"], dict) or not data["injuries"]):
         raise ValueError("Invalid character rookie or injury data")
+    equipment = data["combat_equipment"]
+    if (not isinstance(equipment, dict)
+            or set(equipment) != {"weapons", "armor", "role_loadouts", "rules"}
+            or not isinstance(equipment["weapons"], dict) or not equipment["weapons"]
+            or not isinstance(equipment["armor"], dict) or not equipment["armor"]
+            or not isinstance(equipment["role_loadouts"], dict)
+            or set(equipment["role_loadouts"]) != set(roles)):
+        raise ValueError("Invalid character combat-equipment catalog")
+    for weapon_id, weapon in equipment["weapons"].items():
+        if (not isinstance(weapon_id, str) or not weapon_id or not isinstance(weapon, dict)
+                or set(weapon) != {"force", "accuracy", "reach", "wear_permille"}
+                or type(weapon["force"]) is not int or not 0 <= weapon["force"] <= 30
+                or type(weapon["accuracy"]) is not int or not -20 <= weapon["accuracy"] <= 20
+                or type(weapon["reach"]) is not int or not 1 <= weapon["reach"] <= 3
+                or type(weapon["wear_permille"]) is not int
+                or not 0 <= weapon["wear_permille"] <= 1000):
+            raise ValueError(f"Invalid personal weapon definition: {weapon_id}")
+    for armor_id, armor in equipment["armor"].items():
+        if (not isinstance(armor_id, str) or not armor_id or not isinstance(armor, dict)
+                or set(armor) != {"protection", "handling", "wear_permille"}
+                or type(armor["protection"]) is not int or not 0 <= armor["protection"] <= 30
+                or type(armor["handling"]) is not int or not -20 <= armor["handling"] <= 20
+                or type(armor["wear_permille"]) is not int
+                or not 0 <= armor["wear_permille"] <= 1000):
+            raise ValueError(f"Invalid personal armor definition: {armor_id}")
+    for role, loadout in equipment["role_loadouts"].items():
+        if (not isinstance(loadout, dict) or set(loadout) != {"weapon_id", "armor_id"}
+                or loadout["weapon_id"] not in equipment["weapons"]
+                or loadout["armor_id"] not in equipment["armor"]):
+            raise ValueError(f"Invalid personal role loadout: {role}")
+    rules = equipment["rules"]
+    required_combat_rules = {
+        "max_exchanges", "hit_roll_min", "hit_roll_max", "attack_skill_weight",
+        "attack_speed_weight", "defense_skill_weight", "defense_speed_weight",
+        "defense_willpower_weight", "morale_composure_per_10", "guard_bonus", "strength_force_weight",
+        "toughness_protection_per_10", "armor_protection_weight",
+        "attack_stamina_cost", "guard_stamina_cost", "evade_stamina_cost",
+        "endurance_cost_reduction_per_10", "exhaustion_penalty",
+        "injury_impact_threshold", "injury_basis_points_per_impact",
+        "max_injury_basis_points", "boarding_morale_shift",
+    }
+    if (not isinstance(rules, dict) or set(rules) != required_combat_rules
+            or any(type(value) is not int for value in rules.values())
+            or not 1 <= rules["max_exchanges"] <= 8
+            or rules["hit_roll_min"] > rules["hit_roll_max"]
+            or max(abs(rules["hit_roll_min"]), abs(rules["hit_roll_max"])) > 100
+            or any(not 0 <= rules[key] <= 100 for key in required_combat_rules - {
+                "max_exchanges", "hit_roll_min", "hit_roll_max", "attack_stamina_cost",
+                "guard_stamina_cost", "evade_stamina_cost", "max_injury_basis_points"})
+            or any(not 1 <= rules[key] <= 100 for key in (
+                "attack_stamina_cost", "guard_stamina_cost", "evade_stamina_cost"))
+            or rules["injury_basis_points_per_impact"] > 10_000
+            or not 0 <= rules["max_injury_basis_points"] <= 10_000
+            or rules["boarding_morale_shift"] > 20):
+        raise ValueError("Invalid personal-combat rules")
     for injury_id, injury in data["injuries"].items():
         if (not isinstance(injury_id, str) or not injury_id or not isinstance(injury, dict)
-                or set(injury) != {"severity", "hp_loss", "stat_effects"}
+                or set(injury) != {"severity", "hp_loss", "recovery_days", "scar_on_recovery",
+                                   "fatal_basis_points",
+                                   "fatal_care_reduction_basis_points_per_point", "stat_effects"}
                 or type(injury["severity"]) is not int or not 0 <= injury["severity"] <= 100
                 or type(injury["hp_loss"]) is not int or not 0 <= injury["hp_loss"] < 100
+                or type(injury["recovery_days"]) is not int or injury["recovery_days"] < 0
+                or type(injury["scar_on_recovery"]) is not bool
+                or type(injury["fatal_basis_points"]) is not int
+                or not 0 <= injury["fatal_basis_points"] <= 10_000
+                or type(injury["fatal_care_reduction_basis_points_per_point"]) is not int
+                or injury["fatal_care_reduction_basis_points_per_point"] < 0
                 or not isinstance(injury["stat_effects"], dict)
                 or set(injury["stat_effects"]) - _STAT_NAMES
                 or any(type(value) is not int or not -100 <= value <= 100
@@ -160,11 +228,42 @@ class CharacterSystem:
         return cls(digest=digest)
 
     @classmethod
-    def restore(cls, snapshot: dict[str, Any]) -> "CharacterSystem":
+    def restore(cls, snapshot: dict[str, Any], *, allow_legacy_digest: bool = False) -> "CharacterSystem":
         if (not isinstance(snapshot, dict) or set(snapshot) != {"digest", "last_updated_day"}
                 or type(snapshot.get("last_updated_day")) is not int):
             raise ValueError("Invalid character system snapshot")
-        return cls(digest=snapshot["digest"], last_updated_day=snapshot["last_updated_day"])
+        _, current_digest = load_character_data()
+        digest = snapshot["digest"]
+        if allow_legacy_digest and digest in _LEGACY_CHARACTER_DATA_DIGESTS:
+            digest = current_digest
+        return cls(digest=digest, last_updated_day=snapshot["last_updated_day"])
+
+    @staticmethod
+    def migrate_legacy_physical_stats(seed: int | str, entity_id: str,
+                                      stats: dict[str, Any]) -> dict[str, int]:
+        """Deterministically map pre-P1 naval skills to bounded physical attributes."""
+        bases = {
+            "strength": (2 * stats["combat"] + stats["gunnery"] + stats["willpower"]) // 4,
+            "speed": (stats["seamanship"] + stats["navigation"] + stats["cunning"]) // 3,
+            "endurance": (stats["seamanship"] + stats["willpower"] + stats["combat"]) // 3,
+            "toughness": (2 * stats["willpower"] + stats["combat"] + stats["leadership"]) // 4,
+        }
+        mapped = {}
+        for attribute, base in bases.items():
+            key = f"{seed}\0{entity_id}\0{attribute}".encode("utf-8")
+            jitter = int(hashlib.sha256(key).hexdigest()[:8], 16) % 11 - 5
+            mapped[attribute] = max(0, min(100, base + jitter))
+        return mapped
+
+    @staticmethod
+    def default_combat_equipment(role: str) -> dict[str, Any]:
+        """Return deterministic catalog loadout and pristine per-character condition."""
+        data, _digest = load_character_data()
+        loadout = data["combat_equipment"]["role_loadouts"].get(role)
+        if loadout is None:
+            raise ValueError(f"No combat-equipment loadout exists for role: {role}")
+        return {"weapon_id": loadout["weapon_id"], "armor_id": loadout["armor_id"],
+                "weapon_condition_permille": 1000, "armor_condition_permille": 1000}
 
     def seed_world(self, world) -> None:
         if self.last_updated_day != 0 or any(
@@ -216,6 +315,7 @@ class CharacterSystem:
         heritage_record = self._heritage_record(world, heritage)
         archetype = rng.choice(self.data["archetypes"])
         profile = self.data["role_profiles"][role]
+        equipment = self.data["combat_equipment"]["role_loadouts"][role]
         spread = rules["generation_stat_spread"]
         stats = {stat: max(0, min(100, 40 + profile["offsets"].get(stat, 0)
                                   + rng.randint(-spread, spread)))
@@ -254,6 +354,10 @@ class CharacterSystem:
             "home_faction": None,
             "location": {"kind": "island", "id": island_id},
             "stats": stats,
+            "combat_equipment": {
+                "weapon_id": equipment["weapon_id"], "armor_id": equipment["armor_id"],
+                "weapon_condition_permille": 1000, "armor_condition_permille": 1000,
+            },
             "traits": traits,
             "values": list(profile["values"][:3]),
             "dream": dream,
@@ -282,7 +386,10 @@ class CharacterSystem:
             location=island_id,
             actors=[{"role": "character", "entity_id": character_id}],
             data={"display_name": name, "role": role, "tier": tier,
-                  "age_years": age_years, "archetype_id": archetype["id"]},
+                  "age_years": age_years, "archetype_id": archetype["id"],
+                  "physical_stats": {stat: stats[stat] for stat in
+                                     ("strength", "speed", "endurance", "toughness")},
+                  "combat_equipment": dict(character["combat_equipment"])},
             caused_by=[cause_event_id],
             causes_tags=["character_generation", f"tier:{tier.lower()}"],
             magnitude=0.15 if tier in {"LEGEND", "MAJOR"} else 0.05,
@@ -300,6 +407,35 @@ class CharacterSystem:
             for injury in character["health"]["injuries"]
         )
         return max(0, min(100, base + injury_delta))
+
+    def personal_combat_profile(self, character: dict[str, Any]) -> dict[str, Any]:
+        """Return an explainable view of combat-related stats without persisting a rating."""
+        names = ("strength", "speed", "endurance", "toughness", "combat", "willpower")
+        profile = {}
+        for stat in names:
+            base = character["stats"][stat]
+            injury_delta = sum(
+                injury.get("stat_effects", {}).get(stat, 0)
+                for injury in character["health"]["injuries"]
+            )
+            profile[stat] = {
+                "base": base,
+                "injury_delta": injury_delta,
+                "effective": max(0, min(100, base + injury_delta)),
+            }
+        gear = character["combat_equipment"]
+        catalog = self.data["combat_equipment"]
+        weapon = catalog["weapons"][gear["weapon_id"]]
+        armor = catalog["armor"][gear["armor_id"]]
+        return {
+            "age_years": character["age_years"], "stats": profile,
+            "equipment": {
+                "weapon_id": gear["weapon_id"], "weapon": dict(weapon),
+                "weapon_condition_permille": gear["weapon_condition_permille"],
+                "armor_id": gear["armor_id"], "armor": dict(armor),
+                "armor_condition_permille": gear["armor_condition_permille"],
+            },
+        }
 
     def improve_skill(self, world, character_id: str, skill: str, amount: int, *,
                       caused_by: str) -> str:
@@ -329,26 +465,47 @@ class CharacterSystem:
         injury = self.data.get("injuries", {}).get(injury_id)
         if injury is None:
             raise ValueError(f"Unknown injury: {injury_id}")
+        care = self._medical_care_for(world, character)
+        fatality_chance = max(
+            0, injury["fatal_basis_points"]
+            - care * injury["fatal_care_reduction_basis_points_per_point"])
         record = {"injury_id": injury_id, "severity": injury["severity"],
+                  "initial_severity": injury["severity"],
+                  "recovery_days_total": injury["recovery_days"],
+                  "recovery_days_elapsed": 0,
                   "tick": world.clock.tick, "stat_effects": dict(injury["stat_effects"]),
-                  "source_event": caused_by}
+                  "base_stat_effects": dict(injury["stat_effects"]),
+                  "source_event": caused_by, "last_recovery_event": None}
         event = world.event_log.append(
             tick=world.clock.tick, event_type="INJURY",
             location=character["location"]["id"],
             targets=[{"role": "injured", "entity_id": character_id}],
             data={"injury_id": injury_id, "severity": injury["severity"],
-                  "hp_loss": injury["hp_loss"]},
+                  "hp_loss": injury["hp_loss"],
+                  "stat_effects": dict(injury["stat_effects"]),
+                  "fatality_basis_points": fatality_chance,
+                  "medical_care": care},
             caused_by=[caused_by], causes_tags=["injury", f"injury:{injury_id}"], magnitude=0.35,
         )
         character["health"]["injuries"].append(record)
+        record["event_id"] = event.id
         character["health"]["hp"] = max(1, character["health"]["hp"] - injury["hp_loss"])
         character["last_event_id"] = event.id
+        fatality_roll = world.rng.stream(f"injury-fatality:{event.id}").randbelow(10_000)
+        if fatality_roll < fatality_chance:
+            self.kill_character(world, character_id, cause="injury_complication",
+                                caused_by=event.id,
+                                tags=["injury_complication", "injury_fatality"])
         return event.id
 
     def update_day(self, day: int, world) -> None:
         if type(day) is not int or day != self.last_updated_day + 1:
             raise ValueError("Character lifecycle days must be consecutive")
         days_per_year = world.config["time"]["days_per_year"]
+        for character_id in sorted(tuple(world.entities)):
+            character = world.entities.get(character_id)
+            if character and character.get("kind") == "character":
+                self._recover_injuries(world, character_id, day)
         if day % days_per_year == 0:
             deaths = []
             for character_id in sorted(tuple(world.entities)):
@@ -361,6 +518,82 @@ class CharacterSystem:
                         deaths.append(death)
             self._replace_major_rookies(world, deaths)
         self.last_updated_day = day
+
+    def _recover_injuries(self, world, character_id: str, day: int) -> None:
+        character = world.entities[character_id]
+        for injury in character["health"]["injuries"]:
+            total = injury.get("recovery_days_total", 0)
+            elapsed = injury.get("recovery_days_elapsed", 0)
+            if type(total) is not int or total <= 0 or elapsed >= total:
+                continue
+            before = injury["severity"]
+            initial = injury.get("initial_severity", before)
+            elapsed += 1
+            after = max(0, (initial * (total - elapsed) + total - 1) // total)
+            base_effects = injury.get("base_stat_effects", injury["stat_effects"])
+            effects = {stat: (value * after // initial if initial else 0)
+                       for stat, value in base_effects.items()}
+            hp_before = character["health"]["hp"]
+            hp_after = min(character["health"]["max_hp"], hp_before + 1)
+            completed = elapsed == total
+            event = world.event_log.append(
+                tick=day * self._ticks_per_day(world), event_type="INJURY_RECOVERY",
+                location=character["location"]["id"],
+                actors=[{"role": "patient", "entity_id": character_id}],
+                targets=[{"role": "injury", "entity_id": character_id}],
+                data={"injury_id": injury["injury_id"],
+                      "source_injury_event_id": injury["event_id"],
+                      "severity_before": before, "severity_after": after,
+                      "hp_before": hp_before, "hp_after": hp_after,
+                      "recovered": completed, "care": "natural_recovery"},
+                caused_by=[injury["event_id"]],
+                causes_tags=["injury_follow_up", "injury_recovery",
+                             *( ["injury_recovered"] if completed else [])],
+                magnitude=0.25 if completed else 0.05)
+            injury.update({"severity": after, "stat_effects": effects,
+                           "recovery_days_elapsed": elapsed,
+                           "last_recovery_event": event.id})
+            character["health"]["hp"] = hp_after
+            character["last_event_id"] = event.id
+            if completed:
+                injury_data = self.data["injuries"][injury["injury_id"]]
+                if injury_data["scar_on_recovery"] and not injury.get("scar_event_id"):
+                    scar_data = self.data["injuries"]["scar"]
+                    scar_event = world.event_log.append(
+                        tick=day * self._ticks_per_day(world), event_type="INJURY",
+                        location=character["location"]["id"],
+                        targets=[{"role": "injured", "entity_id": character_id}],
+                        data={"injury_id": "scar", "severity": scar_data["severity"],
+                              "hp_loss": 0, "scar_from_injury_event_id": injury["event_id"]},
+                        caused_by=[event.id, injury["event_id"]],
+                        causes_tags=["injury", "injury:scar", "healed_injury_scar"],
+                        magnitude=0.1)
+                    character["health"]["injuries"].append({
+                        "injury_id": "scar", "severity": scar_data["severity"],
+                        "initial_severity": scar_data["severity"],
+                        "recovery_days_total": 0, "recovery_days_elapsed": 0,
+                        "tick": scar_event.tick, "stat_effects": dict(scar_data["stat_effects"]),
+                        "base_stat_effects": dict(scar_data["stat_effects"]),
+                        "source_event": event.id, "event_id": scar_event.id,
+                        "last_recovery_event": None,
+                    })
+                    injury["scar_event_id"] = scar_event.id
+                    character["last_event_id"] = scar_event.id
+
+    @staticmethod
+    def _medical_care_for(world, character: dict[str, Any]) -> int:
+        crew = world.crew_ships.crews.get(character.get("crew_id"))
+        if not crew:
+            return 0
+        surgeon_id = crew.get("roles", {}).get("surgeon")
+        surgeon = world.entities.get(surgeon_id)
+        if not surgeon:
+            return 0
+        return world.characters.effective_stat(surgeon, "medicine")
+
+    @staticmethod
+    def _ticks_per_day(world) -> int:
+        return world.config["time"]["hours_per_day"] // world.config["time"]["hours_per_tick"]
 
     def _age_character(self, world, character: dict[str, Any], day: int) -> bool:
         year_ticks = self._ticks_per_year(world)
@@ -612,7 +845,7 @@ class CharacterSystem:
         for entity_id, character in sorted(world.entities.items()):
             if character.get("kind") != "character":
                 continue
-            self._validate_character_record(entity_id, character, living=True)
+            self._validate_character_record(world, entity_id, character, living=True)
             name = character["display_name"]
             if name in names:
                 raise ValueError("Living character display names must be unique")
@@ -624,7 +857,7 @@ class CharacterSystem:
         for entity_id, character in sorted(world.archive.items()):
             if character.get("kind") != "character":
                 continue
-            self._validate_character_record(entity_id, character, living=False)
+            self._validate_character_record(world, entity_id, character, living=False)
             if character["display_name"] in names:
                 raise ValueError("Living and archived character identities collide")
             terminal_events = [character["last_event_id"]]
@@ -649,7 +882,7 @@ class CharacterSystem:
             if merchant["name"] in names:
                 raise ValueError("Living merchant and character names must be unique")
 
-    def _validate_character_record(self, entity_id: str, character: dict[str, Any], *,
+    def _validate_character_record(self, world, entity_id: str, character: dict[str, Any], *,
                                    living: bool) -> None:
         if (character.get("id") != entity_id or character.get("kind") != "character"
                 or not isinstance(character.get("display_name"), str)
@@ -662,11 +895,47 @@ class CharacterSystem:
                 or type(character.get("birth_tick")) is not int
                 or type(character.get("age_years")) is not int or character["age_years"] < 0
                 or set(character.get("stats", {})) != _STAT_NAMES
+                or not self._valid_combat_equipment(character.get("combat_equipment"))
                 or set(character.get("traits", {})) != _TRAIT_NAMES
                 or any(type(value) is not int or not 0 <= value <= 100
                        for value in (*character["stats"].values(), *character["traits"].values()))
                 or not self._valid_character_location(character.get("location"))):
             raise ValueError(f"Invalid character record: {entity_id}")
+        reputation = character.get("reputation")
+        if not isinstance(reputation, dict):
+            raise ValueError(f"Invalid character reputation: {entity_id}")
+        if reputation:
+            if (set(reputation) != {"public_renown", "deed_event_ids", "paths"}
+                    or type(reputation["public_renown"]) is not int
+                    or not 0 < reputation["public_renown"] <= 1000
+                    or not isinstance(reputation["deed_event_ids"], list)
+                    or len(reputation["deed_event_ids"]) > 64
+                    or len(set(reputation["deed_event_ids"])) != len(reputation["deed_event_ids"])
+                    or not isinstance(reputation["paths"], list)
+                    or not set(reputation["paths"]) <= {"profitable_trade", "combat_victory"}):
+                raise ValueError(f"Invalid public-renown record: {entity_id}")
+            recognized = [event for event in world.event_log.by_type("PUBLIC_RENOWN_EARNED")
+                          if any(actor.get("entity_id") == entity_id for actor in event.actors)]
+            recognized.sort(key=lambda event: (event.tick, event.id))
+            if not set(reputation["deed_event_ids"]) <= {
+                    event.data.get("source_event_id") for event in recognized}:
+                raise ValueError(f"Public renown cites an unrecognized deed: {entity_id}")
+            if not set(reputation["paths"]) <= {
+                    event.data.get("deed_kind") for event in recognized}:
+                raise ValueError(f"Public-renown paths lack recognition events: {entity_id}")
+            expected_renown = 0
+            for event in recognized:
+                increment = {"profitable_trade": 20, "combat_victory": 50}.get(
+                    event.data.get("deed_kind"))
+                expected_after = min(1000, expected_renown + increment) if increment else -1
+                if (increment is None or event.data.get("renown_before") != expected_renown
+                        or event.data.get("delta") != expected_after - expected_renown
+                        or event.data.get("renown_after") != expected_after
+                        or event.caused_by != (event.data.get("source_event_id"),)):
+                    raise ValueError(f"Public-renown history is not a bounded deed chain: {entity_id}")
+                expected_renown = expected_after
+            if expected_renown != reputation["public_renown"]:
+                raise ValueError(f"Public-renown balance disagrees with its event history: {entity_id}")
         health = character.get("health")
         if (not isinstance(health, dict)
                 or set(health) != {"hp", "max_hp", "max_hp_from_age", "injuries", "chronic"}
@@ -676,6 +945,12 @@ class CharacterSystem:
                 or not 1 <= health["hp"] <= health["max_hp"]
                 or not isinstance(health["injuries"], list) or not isinstance(health["chronic"], list)):
             raise ValueError(f"Invalid character health: {entity_id}")
+        for injury in health["injuries"]:
+            if (not isinstance(injury, dict)
+                    or not isinstance(injury.get("injury_id"), str)
+                    or type(injury.get("severity")) is not int
+                    or not isinstance(injury.get("stat_effects"), dict)):
+                raise ValueError(f"Invalid character injury record: {entity_id}")
         if living:
             if (character.get("death_tick") is not None
                     or character.get("cause_of_death_event") is not None
@@ -693,6 +968,21 @@ class CharacterSystem:
                         and isinstance(character.get("departure_event_id"), str))
             if not (deceased ^ departed):
                 raise ValueError(f"Archived character lacks one valid terminal state: {entity_id}")
+
+    def _valid_combat_equipment(self, equipment: Any) -> bool:
+        if (not isinstance(equipment, dict)
+                or set(equipment) != {"weapon_id", "armor_id", "weapon_condition_permille",
+                                      "armor_condition_permille"}):
+            return False
+        catalog = self.data["combat_equipment"]
+        return (isinstance(equipment["weapon_id"], str)
+                and equipment["weapon_id"] in catalog["weapons"]
+                and isinstance(equipment["armor_id"], str)
+                and equipment["armor_id"] in catalog["armor"]
+                and type(equipment["weapon_condition_permille"]) is int
+                and 0 <= equipment["weapon_condition_permille"] <= 1000
+                and type(equipment["armor_condition_permille"]) is int
+                and 0 <= equipment["armor_condition_permille"] <= 1000)
 
     @property
     def data_island_ids(self) -> set[str]:

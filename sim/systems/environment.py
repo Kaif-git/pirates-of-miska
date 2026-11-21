@@ -29,8 +29,11 @@ def validate_environment_data(data: Any) -> None:
         "harvest_failure_threshold_permille", "disease_outbreak_basis_points_per_island_day",
         "disease_spread_basis_points_per_day", "disease_duration_days",
         "disease_productivity_loss_permille", "disease_unrest_increase_per_day",
+        "disease_person_exposure_basis_points_per_day",
+        "disease_medical_care_reduction_basis_points_per_point",
         "monster_spawn_basis_points_per_day", "monster_max_active", "monster_move_days",
         "monster_hull_damage", "storm_hull_damage", "hurricane_hull_damage",
+        "storm_supply_loss_permille", "hurricane_supply_loss_permille",
         "storm_move_days", "storm_duration_days", "storm_region_cooldown_days",
         "treasure_site_count", "rumor_spread_days",
     }
@@ -46,8 +49,11 @@ def validate_environment_data(data: Any) -> None:
             < rules["harvest_max_yield_permille"]
             or rules["disease_outbreak_basis_points_per_island_day"] > 10_000
             or rules["disease_spread_basis_points_per_day"] > 10_000
+            or rules["disease_person_exposure_basis_points_per_day"] > 10_000
             or rules["disease_duration_days"] < 1
             or rules["disease_productivity_loss_permille"] > 1000
+            or rules["storm_supply_loss_permille"] > 1000
+            or rules["hurricane_supply_loss_permille"] > 1000
             or rules["monster_spawn_basis_points_per_day"] > 10_000
             or rules["monster_max_active"] < 1
             or rules["monster_move_days"] < 1 or rules["storm_move_days"] < 1
@@ -315,6 +321,14 @@ class EnvironmentSystem:
             damage_event = world.crew_ships.damage_ship(
                 world, ship_id, "hull", amount, caused_by=storm["event_id"])
             events.append(damage_event)
+            loss_permille = (self.rules["hurricane_supply_loss_permille"]
+                             if storm["weather_state"] == "hurricane"
+                             else self.rules["storm_supply_loss_permille"])
+            supply_event = world.economy.lose_ship_supplies(
+                world, ship_id, loss_permille, caused_by=storm["event_id"],
+                weather_state=storm["weather_state"])
+            if supply_event:
+                events.append(supply_event)
 
     def _update_disease(self, world, day: int, events: list[str]) -> None:
         rules = self.rules
@@ -362,6 +376,7 @@ class EnvironmentSystem:
                     1000, rules["disease_productivity_loss_permille"])
                 state["unrest"] = min(
                     100, state["unrest"] + rules["disease_unrest_increase_per_day"])
+                self._expose_characters(world, island_id, outbreak, day, events)
                 stream = self.rng.stream(f"environment:disease-spread:{island_id}")
                 if stream.randbelow(10_000) < rules["disease_spread_basis_points_per_day"]:
                     paths = {
@@ -410,6 +425,50 @@ class EnvironmentSystem:
                             "event_id": spread.id,
                         }
                         events.append(spread.id)
+
+    def _expose_characters(self, world, island_id: str, outbreak: dict[str, Any],
+                           day: int, events: list[str]) -> None:
+        rules = self.rules
+        for character_id, character in sorted(world.entities.items()):
+            if character.get("kind") != "character" or character.get("death_tick") is not None:
+                continue
+            location = character.get("location", {})
+            ship_id = character.get("ship_id")
+            if ship_id in world.entities:
+                location = world.location_of(ship_id)
+            if location.get("kind") != "island" or location.get("id") != island_id:
+                continue
+            if any(injury.get("injury_id") == "chronic_fever" and injury.get("severity", 0) > 0
+                   for injury in character.get("health", {}).get("injuries", ())):
+                continue
+            medicine = 0
+            crew_id = character.get("crew_id")
+            crew = world.crew_ships.crews.get(crew_id)
+            if crew:
+                medic_id = crew.get("roles", {}).get("surgeon")
+                medic = world.entities.get(medic_id)
+                if medic:
+                    medicine = world.characters.effective_stat(medic, "medicine")
+            exposure = max(
+                0, rules["disease_person_exposure_basis_points_per_day"]
+                - medicine * rules["disease_medical_care_reduction_basis_points_per_point"])
+            stream = world.rng.stream(
+                f"environment:disease-exposure:{island_id}:{character_id}:{day}")
+            if stream.randbelow(10_000) >= exposure:
+                continue
+            case = world.event_log.append(
+                tick=world.clock.tick, event_type="DISEASE_CASE", location=island_id,
+                targets=[{"role": "infected_person", "entity_id": character_id}],
+                data={"character_id": character_id, "strain": "island_fever",
+                      "outbreak_event_id": outbreak["event_id"],
+                      "medical_care": medicine, "exposure_basis_points": exposure},
+                caused_by=[outbreak["event_id"]],
+                causes_tags=["disease_exposure", "person_level_case"], magnitude=0.4)
+            injury_id = world.characters.inflict_injury(
+                world, character_id, "chronic_fever", caused_by=case.id)
+            character["health"]["injuries"][-1]["disease_outbreak_event_id"] = outbreak["event_id"]
+            outbreak["cases"] += 1
+            events.extend((case.id, injury_id))
 
     def _update_monsters(self, world, day: int, events: list[str]) -> None:
         rules = self.rules
@@ -485,18 +544,30 @@ class EnvironmentSystem:
                 or character.get("death_tick") is not None
                 or world.location_of(character_id).get("id") != treasure["island_id"]):
             raise ValueError("Treasure is unknown, already found, or not at the searcher's location")
+        asset_id = f"treasure_asset:{treasure_id}"
+        wealth = character.get("wealth")
+        if (not isinstance(wealth, dict) or not isinstance(wealth.get("assets"), list)
+                or any(isinstance(asset, dict) and asset.get("id") == asset_id
+                       for person in (*world.entities.values(), *world.archive.values())
+                       if person.get("kind") == "character"
+                       for asset in person.get("wealth", {}).get("assets", []))):
+            raise ValueError("Treasure reward ownership is invalid or already transferred")
         world.event_log.get(caused_by)
         event = world.event_log.append(
             tick=world.clock.tick, event_type="TREASURE_FOUND", location=treasure["island_id"],
             actors=[{"role": "discoverer", "entity_id": character_id}],
             targets=[{"role": "treasure", "entity_id": treasure_id}],
             data={"treasure_id": treasure_id, "finite": True,
-                  "reward": "charted_relic_cache", "reward_is_monetary": False},
+                  "reward": "charted_relic_cache", "reward_is_monetary": False,
+                  "reward_asset_id": asset_id, "reward_transferred_to": character_id},
             caused_by=list(dict.fromkeys((caused_by, treasure["last_rumor_event_id"]))),
             causes_tags=["treasure_discovered", "finite_site"], magnitude=0.65,
         )
         treasure["discovered_event_id"] = event.id
         treasure["discovered_by"] = character_id
+        wealth["assets"].append({"id": asset_id, "kind": "charted_relic_cache",
+                                  "treasure_id": treasure_id,
+                                  "source_event_id": event.id})
         character["last_event_id"] = event.id
         return event.id
 
@@ -615,6 +686,16 @@ class EnvironmentSystem:
                         or treasure["last_rumor_event_id"] not in discovery.caused_by
                         or discovery.data.get("treasure_id") != treasure_id):
                     raise ValueError(f"Treasure discovery is not linked to its clue: {treasure_id}")
+                asset_id = discovery.data.get("reward_asset_id")
+                if asset_id is not None:
+                    owner_id = discovery.data.get("reward_transferred_to")
+                    owner = world.entities.get(owner_id) or world.archive.get(owner_id)
+                    asset = next((item for item in (owner or {}).get("wealth", {}).get("assets", [])
+                                  if isinstance(item, dict) and item.get("id") == asset_id), None)
+                    if (asset is None or asset.get("treasure_id") != treasure_id
+                            or asset.get("source_event_id") != discovery.id
+                            or treasure["discovered_by"] != owner_id):
+                        raise ValueError(f"Treasure reward transfer is not conserved: {treasure_id}")
 
     def snapshot(self) -> dict[str, Any]:
         return {"digest": self.digest, "last_updated_day": self.last_updated_day,

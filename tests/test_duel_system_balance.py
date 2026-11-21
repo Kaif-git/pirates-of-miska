@@ -15,6 +15,20 @@ def test_seeded_full_fight_is_reproducible_and_resolves_with_real_events():
     assert first["reason"] != "timeout"
 
 
+def test_veteran_closing_walk_does_not_stall_against_light_spam():
+    from copy import deepcopy
+
+    config = load_config()
+    config["ronin"].update(deepcopy(config["ai_profiles"]["veteran"]))
+    result = run_fight("SpamLightBot", "Ronin", seed=5200, config=config, trace=True)
+    successful_moves = [event for event in result["trace"] if event["type"] == "MOVE"]
+    assert len(successful_moves) >= 2
+    # Same-line same-tick cuts clash, while the approved minor-cut bleed rate
+    # reduces attrition; this controlled matchup may take additional exchanges.
+    assert result["ticks"] < 240
+    assert result["reason"] != "timeout"
+
+
 def test_consequence_audit_trace_includes_contact_and_blood_source_fields():
     result = run_fight("SpamHeavyBot", "Ronin", seed=8101, trace=True)
     types = {event["type"] for event in result["trace"]}

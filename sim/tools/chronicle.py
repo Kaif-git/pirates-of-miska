@@ -29,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     temporary.replace(args.output)
     print(json.dumps({"artifacts": str(args.output),
                       "chronicle_entries": len(artifacts["chronicle"]),
+                      "story_threads": len(artifacts["story_threads"]),
+                      "events": artifacts["simulation_report"]["event_counts"]["total"],
                       "rumors": len(artifacts["rumors"]),
                       "epithet_awards": len(artifacts["epithet_awards"])}))
     return 0

@@ -4,6 +4,7 @@ import pytest
 
 from sim.core.world import WorldState
 from sim.systems.encounters import load_encounter_data, validate_encounter_data
+from sim.tools.batch_test import _actor_population_census, _pending_prize_crew_audit
 from sim.tools.coherence_audit import audit_event_records
 
 
@@ -81,6 +82,12 @@ def test_encounter_resolution_records_strength_beliefs_phases_and_persistent_dam
     memory_hooks = world.event_log.by_type("COMBAT_MEMORY_HOOK")
     assert len(memory_hooks) == 2
     assert all(hook.caused_by == (resolved.id,) for hook in memory_hooks)
+    renown_events = world.event_log.by_type("PUBLIC_RENOWN_EARNED")
+    assert len(renown_events) == 1
+    renown = renown_events[0]
+    assert renown.data["deed_kind"] == "combat_victory"
+    assert renown.caused_by == (resolved.id,)
+    assert renown.data["renown_after"] > renown.data["renown_before"]
     world.event_log.validate_causality()
     world.crew_ships.validate_world(world)
 
@@ -115,6 +122,28 @@ def test_encounter_system_snapshot_resumes_with_world(tmp_path):
     assert restored.to_snapshot() == world.to_snapshot()
 
 
+def test_boarding_encounter_resolution_matches_after_snapshot_resume():
+    world = WorldState.create("pending-boarding-resume")
+    first, second = _two_crewed_ships(world)
+    world.encounters.data["rules"]["boarding_threshold_basis_points"] = 10000
+    cause = [world.crew_ships.crews[world.entities[ship]["crew_id"]]["last_event_id"]
+             for ship in (first, second)]
+    resumed = WorldState.from_snapshot(world.to_snapshot())
+    # Runtime catalog overrides are test fixtures, not serialized world state.
+    resumed.encounters.data["rules"]["boarding_threshold_basis_points"] = 10000
+
+    resolved_a = world.encounters.resolve(
+        world, first, second, caused_by=cause,
+        stances={first: "attack", second: "attack"}, force_combat=True)
+    resolved_b = resumed.encounters.resolve(
+        resumed, first, second, caused_by=cause,
+        stances={first: "attack", second: "attack"}, force_combat=True)
+
+    assert resolved_a == resolved_b
+    assert world.event_log.to_jsonl() == resumed.event_log.to_jsonl()
+    assert world.to_snapshot() == resumed.to_snapshot()
+
+
 def _combat_outcome(world, *, boarding=False, stances=None):
     first, second = _two_crewed_ships(world)
     crews = [world.crew_ships.crews[world.entities[ship]["crew_id"]]
@@ -125,6 +154,57 @@ def _combat_outcome(world, *, boarding=False, stances=None):
         world, first, second, caused_by=cause,
         stances=stances or {first: "attack", second: "attack"}, force_combat=True)
     return world, first, second, world.event_log.get(resolved_id)
+
+
+def test_boarding_uses_named_personal_combat_and_records_its_causal_outcome():
+    world = WorldState.create("boarding-personal-combat")
+    world, _first, _second, resolved = _combat_outcome(world, boarding=True)
+
+    start = world.event_log.by_type("PERSONAL_COMBAT_STARTED")[-1]
+    exchanges = [event for event in world.event_log.by_type("PERSONAL_EXCHANGE")
+                 if event.data["context_id"] == start.data["context_id"]]
+    assert start.data["context"] == "boarding"
+    assert start.caused_by
+    assert exchanges
+    assert all(event.caused_by and len(event.caused_by) == len(set(event.caused_by))
+               for event in exchanges)
+    assert resolved.data["outcome_details"]["boarding_personal_combat"][
+        "started_event_id"] == start.id
+    assert world.event_log.by_type("BOARDING_PERSONAL_EDGE")
+    world.event_log.validate_causality()
+    assert WorldState.from_snapshot(world.to_snapshot()).to_snapshot() == world.to_snapshot()
+
+
+def test_actual_captain_capture_fails_active_dream_plan():
+    world = WorldState.create("boarding-capture-dream-plan")
+    first, second = _two_crewed_ships(world)
+    captains = [world.crew_ships.crews[world.entities[ship]["crew_id"]]["captain_id"]
+                for ship in (first, second)]
+    for captain_id in captains:
+        captain = world.entities[captain_id]
+        captain["dream"]["kind"] = "find_treasure"
+        world.decisions.ensure_dream_plan(
+            world, captain_id, caused_by=captain["last_event_id"])
+    rules = world.encounters.data["rules"]
+    rules.update({"boarding_threshold_basis_points": 10000,
+                  "surrender_basis_points": 0, "defection_basis_points": 0,
+                  "captain_capture_basis_points": 10000,
+                  "gunnery_damage_min": 0, "gunnery_damage_max": 0})
+    cause = [world.crew_ships.crews[world.entities[ship]["crew_id"]]["last_event_id"]
+             for ship in (first, second)]
+
+    resolved_id = world.encounters.resolve(
+        world, first, second, caused_by=cause,
+        stances={first: "attack", second: "attack"}, force_combat=True)
+
+    resolved = world.event_log.get(resolved_id)
+    assert resolved.data["outcome"] == "captain_captured"
+    captured_id = resolved.data["outcome_details"]["captured_character_id"]
+    plan = world.decisions.agents[captured_id]["plan"]
+    assert plan["status"] == "failed"
+    failure = world.event_log.by_type("DREAM_PLAN_FAILED")[-1]
+    assert failure.data["reason"] == "captured_before_objective_completion"
+    world.event_log.validate_causality()
 
 
 def test_surrender_capture_and_defection_outcomes_are_reachable():
@@ -388,6 +468,14 @@ def test_capture_without_any_prize_candidate_stays_pending_and_noncommandable():
     first, second = _two_crewed_ships(world)
     winner_crew = world.crew_ships.crews[world.entities[first]["crew_id"]]
     losing_crew = world.crew_ships.crews[world.entities[second]["crew_id"]]
+    faction_id = losing_crew.get("faction_id")
+    faction = world.politics.factions.get(faction_id)
+    former_captain_id = losing_crew["captain_id"]
+    if faction is not None:
+        faction["leader_id"] = former_captain_id
+        if former_captain_id not in faction["council"]:
+            faction["council"].append(former_captain_id)
+            faction["council"].sort()
     winner_crew["morale"] = 100
     losing_crew["morale"] = 0
     for crew in (winner_crew, losing_crew):
@@ -425,7 +513,118 @@ def test_capture_without_any_prize_candidate_stays_pending_and_noncommandable():
                                                 if row.get("kind") == "ship"
                                                 and ship_id not in {first, second})]["id"],
             caused_by=[result_id], force_combat=True)
-    world.to_snapshot()
+
+    capture_location = world.location_of(second)
+    offsite = next(island_id for island_id in sorted(world.geography.islands)
+                   if island_id != capture_location["id"])
+    world.entities[first]["location"] = {"kind": "island", "id": offsite}
+    wrong_location_arrival = world.event_log.append(
+        tick=world.clock.tick, event_type="VOYAGE_ARRIVED", location=offsite,
+        actors=[{"role": "vessel", "entity_id": first}],
+        caused_by=[result_id], causes_tags=["no_prize_candidate_fixture"], magnitude=0.1)
+    assert world.crew_ships.on_commanded_ship_arrival(
+        world, first, wrong_location_arrival.id) == []
+    initial_audit = next(row for row in _pending_prize_crew_audit(world)
+                         if row["ship_id"] == second)
+    assert initial_audit["resolution_blocker"] == \
+        "no_same_location_arrival_observed_since_capture"
+    assert initial_audit["same_location_arrivals_since_capture"] == []
+    assert initial_audit["candidate_sources"]["captured_crew_candidate_id"] is None
+    assert initial_audit["candidate_sources"]["local_candidate_id"] is None
+
+    world.entities[first]["location"] = dict(capture_location)
+    no_candidate_arrival = world.event_log.append(
+        tick=world.clock.tick, event_type="VOYAGE_ARRIVED",
+        location=capture_location["id"],
+        actors=[{"role": "vessel", "entity_id": first}],
+        caused_by=[result_id], causes_tags=["no_prize_candidate_fixture"], magnitude=0.1)
+    assert world.crew_ships.on_commanded_ship_arrival(
+        world, first, no_candidate_arrival.id) == []
+    assert not world.ship_is_commandable(second)
+    no_candidate_audit = next(row for row in _pending_prize_crew_audit(world)
+                              if row["ship_id"] == second)
+    assert no_candidate_audit["last_real_arrival_opportunity"]["event_id"] == \
+        no_candidate_arrival.id
+    assert "no_lawful_prize_captain_candidate_at_checkpoint" in \
+        no_candidate_audit["resolution_blockers"]
+    census_audit = _actor_population_census(world, label="pending_capture")
+    assert census_audit["pending_prize_crew_hulls"]
+    census_record = next(row for row in census_audit["uncommandable_hulls"]
+                         if row["ship_id"] == second)
+    assert census_record["prize_crew_resolution"]["last_real_arrival_opportunity"][
+        "event_id"] == no_candidate_arrival.id
+
+    # A later real arrival at the captured hull's island can use an existing
+    # unattached local captain; no character or ship is generated for recovery.
+    capture_location = world.location_of(second)
+    local_candidate = next(
+        person for person in world.entities.values()
+        if person.get("kind") == "character" and person.get("death_tick") is None
+        and person.get("crew_id") is None and person.get("ship_id") is None
+        and person.get("wealth", {}).get("silver") == 0)
+    local_candidate["location"] = dict(capture_location)
+    local_candidate_id = local_candidate["id"]
+    people_before = {entity_id for entity_id, row in world.entities.items()
+                     if row.get("kind") == "character"}
+    ships_before = {entity_id for entity_id, row in world.entities.items()
+                    if row.get("kind") == "ship"}
+    world.entities[first]["location"] = {"kind": "island", "id": offsite}
+    world.start_voyage(first, capture_location["id"], caused_by=result_id)
+    arrival_tick = world.travel.transits[first]["arrival_tick"]
+    pending_snapshot = world.to_snapshot()
+    resumed = WorldState.from_snapshot(pending_snapshot)
+    replayed = WorldState.from_snapshot(pending_snapshot)
+    resumed.run_until(arrival_tick)
+    replayed.run_until(arrival_tick)
+    world = resumed
+    arrival = world.event_log.by_type("VOYAGE_ARRIVED")[-1]
+    recovery_ids = [event.id for event in world.event_log.by_type("SHIP_ACQUIRED")
+                    if event.data.get("method") == "pending_prize_crew_installed"
+                    and any(target.get("entity_id") == second for target in event.targets)]
+    local_candidate = world.entities[local_candidate_id]
+
+    assert len(recovery_ids) == 1
+    assert resumed.crew_ships.on_commanded_ship_arrival(
+        resumed, first, arrival.id) == []
+    assert world.ship_is_commandable(second)
+    assert second not in {row["ship_id"] for row in _pending_prize_crew_audit(world)}
+    assert world.entities[second]["crew_id"] == world.entities[second]["controller_crew_id"]
+    assert world.entities[second]["legal_owner"] == {"kind": "crew", "id": winner_crew["id"]}
+    assert world.entities[second]["crew_id"] != world.entities[first]["crew_id"]
+    assert local_candidate["id"] in world.crew_ships.crews[
+        world.entities[second]["crew_id"]]["roster"]
+    assert len(world.crew_ships.crews[world.entities[second]["crew_id"]]["roster"]) == len(
+        set(world.crew_ships.crews[world.entities[second]["crew_id"]]["roster"]))
+    if faction is not None:
+        assert world.politics.factions[faction_id]["leader_id"] == local_candidate_id
+    assert {entity_id for entity_id, row in world.entities.items()
+            if row.get("kind") == "character"} == people_before
+    assert {entity_id for entity_id, row in world.entities.items()
+            if row.get("kind") == "ship"} == ships_before
+    control_event = world.event_log.get(recovery_ids[0])
+    assert control_event.caused_by and arrival.id in control_event.caused_by
+    installations = [event for event in world.event_log.by_type("PRIZE_CREW_INSTALLED")
+                     if second in [target.get("entity_id") for target in event.targets]]
+    assert len(installations) == 1
+    assert arrival.id in installations[0].caused_by
+    assert installations[0].id in control_event.caused_by
+    assert world.entities[second]["ownership_event_id"] == control_event.id
+    assert control_event.data["controller_crew_id"] == world.entities[second]["crew_id"]
+    world.event_log.validate_causality()
+    if faction is not None:
+        succession = [event for event in world.event_log.by_type("FACTION_SUCCESSION")
+                      if event.data.get("faction_id") == faction_id]
+        assert len(succession) == 1 and installations[0].id in succession[0].caused_by
+    world.crew_ships.validate_world(world)
+    world.validate_ship_authority()
+    world.economy.ledger.assert_balanced(world.economy)
+    snapshot = world.to_snapshot()
+    restored = WorldState.from_snapshot(snapshot)
+    assert replayed.event_log.to_jsonl() == world.event_log.to_jsonl()
+    assert replayed.to_snapshot() == snapshot
+    assert restored.ship_is_commandable(second)
+    assert restored.entities[second]["legal_owner"] == {
+        "kind": "crew", "id": winner_crew["id"]}
 
 
 def test_captain_death_wounding_and_prisoner_fates_are_reachable():
@@ -612,6 +811,121 @@ def test_escape_can_succeed_and_prisoner_fates_cover_all_recorded_paths(tmp_path
                 world, character_id, fate, caused_by=captured.id)
         assert world.encounters.prisoners[character_id]["status"] == "held"
 
+
+def test_held_prisoner_consumes_finite_provisions_and_gets_bounded_ransom_review():
+    world = WorldState.create("prisoner-provision-review", director_enabled=False)
+    world.encounters.data["rules"].update({
+        "boarding_threshold_basis_points": 10000,
+        "surrender_morale_threshold": 0,
+        "defection_morale_threshold": 0,
+        "captain_capture_basis_points": 10000,
+        "captain_wound_basis_points": 0,
+        "captain_death_basis_points": 0,
+        "base_detection_basis_points": 0,
+        "island_detection_bonus_basis_points": 0,
+        "route_signal_range_permille": 0,
+    })
+    _, _, _, captured = _combat_outcome(world, boarding=True)
+    character_id = captured.data["outcome_details"]["captured_character_id"]
+    prisoner = world.encounters.prisoners[character_id]
+    ship_id = prisoner["captor_ship_id"]
+    initial = dict(world.economy.ship_supplies[ship_id])
+    pending_before = dict(world.economy.pending_ship_consumption)
+    event_count_before = len(world.event_log)
+    with pytest.raises(ValueError, match="Invalid prisoner provision demand"):
+        world.economy.consume_prisoner_supplies(
+            world, ship_id, world.entities[ship_id]["crew_id"], [character_id],
+            {"grain": 100, "unknown": 1}, caused_by=captured.id, day=1)
+    assert world.economy.ship_supplies[ship_id] == initial
+    assert world.economy.pending_ship_consumption == pending_before
+    assert len(world.event_log) == event_count_before
+
+    world.run_until(8 * 24)
+
+    prisoner = world.encounters.prisoners[character_id]
+    provisions = [event for event in world.event_log.by_type("PRISONER_PROVISIONS_CONSUMED")
+                  if character_id in event.data["prisoner_ids"]]
+    demand = [event for event in world.event_log.by_type("RANSOM_DEMANDED")
+              if event.data["character_id"] == character_id]
+    review = [event for event in world.event_log.by_type("PRISONER_REVIEWED")
+              if event.data["character_id"] == character_id]
+    assert provisions
+    assert provisions[0].caused_by == (prisoner["capture_event_id"],)
+    assert world.economy.ship_supplies[ship_id]["grain"] < initial["grain"]
+    assert len(demand) == 1 and demand[0].data["silver"] == \
+        world.encounters.data["rules"]["ransom_base_silver"]
+    assert len(review) == 1
+    assert prisoner["next_review_day"] == 37
+    assert prisoner["status"] == "held"
+    world.economy.ledger.assert_balanced(world.economy)
+    snapshot = world.to_snapshot()
+    assert WorldState.from_snapshot(snapshot).to_snapshot() == snapshot
+    _assert_snapshot_continuation_is_deterministic(world)
+
+
+def test_underfunded_ransom_rejects_atomically_before_creating_fate_events():
+    world = WorldState.create("prisoner-ransom-underfunded")
+    world.encounters.data["rules"].update({
+        "boarding_threshold_basis_points": 10000,
+        "surrender_morale_threshold": 0,
+        "defection_morale_threshold": 0,
+        "captain_capture_basis_points": 10000,
+        "captain_wound_basis_points": 0,
+        "captain_death_basis_points": 0,
+    })
+    _, _, _, captured = _combat_outcome(world, boarding=True)
+    character_id = captured.data["outcome_details"]["captured_character_id"]
+    payer_crew_id = world.encounters.prisoners[character_id]["former_crew_id"]
+    payer = world.economy.crew_accounts[payer_crew_id]
+    payer["treasury_silver"] = 0
+    world.crew_ships.crews[payer_crew_id]["treasury_silver"] = 0
+    event_count = len(world.event_log)
+
+    with pytest.raises(ValueError, match="cannot meet the demanded ransom"):
+        world.encounters.resolve_prisoner_fate(
+            world, character_id, "ransom", caused_by=captured.id)
+
+    assert len(world.event_log) == event_count
+    assert world.encounters.prisoners[character_id]["status"] == "held"
+    assert world.entities[character_id]["ship_id"] == \
+        world.encounters.prisoners[character_id]["captor_ship_id"]
+
+
+def test_explicit_prisoner_escape_attempt_changes_actual_custody_on_success():
+    world = WorldState.create("prisoner-escape-action")
+    world.encounters.data["rules"]["boarding_threshold_basis_points"] = 10000
+    world.encounters.data["rules"]["surrender_morale_threshold"] = 0
+    world.encounters.data["rules"]["defection_morale_threshold"] = 0
+    world.encounters.data["rules"]["captain_capture_basis_points"] = 10000
+    world.encounters.data["rules"]["captain_wound_basis_points"] = 0
+    world.encounters.data["rules"]["captain_death_basis_points"] = 0
+    _, _, _, captured = _combat_outcome(world, boarding=True)
+    character_id = captured.data["outcome_details"]["captured_character_id"]
+    ship_id = world.encounters.prisoners[character_id]["captor_ship_id"]
+    location = world.location_of(ship_id)
+
+    world.encounters.data["rules"]["escape_base_basis_points"] = 0
+    failed_id = world.encounters.attempt_prisoner_escape(
+        world, character_id, caused_by=captured.id)
+    assert world.event_log.get(failed_id).data["escaped"] is False
+    assert world.encounters.prisoners[character_id]["status"] == "held"
+    assert world.encounters.prisoners[character_id]["fate_event_id"] is None
+
+    world.encounters.data["rules"]["escape_base_basis_points"] = 10000
+
+    event_id = world.encounters.attempt_prisoner_escape(
+        world, character_id, caused_by=captured.id)
+
+    attempt = world.event_log.get(event_id)
+    prisoner = world.encounters.prisoners[character_id]
+    assert attempt.data["escaped"] is True
+    assert attempt.event_class == "narrative"
+    assert prisoner["status"] == "escaped"
+    assert prisoner["fate_event_id"] == event_id
+    assert world.entities[character_id]["ship_id"] is None
+    assert world.entities[character_id]["location"] == location
+    snapshot = world.to_snapshot()
+    assert WorldState.from_snapshot(snapshot).to_snapshot() == snapshot
 
 def test_ship_capture_preserves_merchant_and_sinking_archives_asset_with_conservation():
     captured_world = WorldState.create("consequence-capture")
@@ -868,6 +1182,8 @@ def test_stranded_crew_employment_transfers_people_wallets_assets_and_dissolves_
     source_treasury = source_account["treasury_silver"]
     retained_hull_id, retained_hull_created = world.create_vessel(
         "Unassigned Prize Hull", island_id)
+    onboard_crew_id = world.crew_ships.provision_recruited_vessel(
+        world, retained_hull_id, "pirate", caused_by=retained_hull_created)
     title_event = world.event_log.append(
         tick=world.clock.tick, event_type="SHIP_ACQUIRED", location=island_id,
         actors=[{"role": "acquiring_crew", "entity_id": source_id}],
@@ -921,11 +1237,15 @@ def test_stranded_crew_employment_transfers_people_wallets_assets_and_dissolves_
     assert asset_transfer.data["ship_ids"] == (retained_hull_id,)
     assert world.entities[retained_hull_id]["legal_owner"] == {
         "kind": "crew", "id": employer_id}
-    assert world.entities[retained_hull_id]["controller_crew_id"] is None
+    assert world.entities[retained_hull_id]["controller_crew_id"] == onboard_crew_id
+    assert world.entities[retained_hull_id]["captured_by_crew_id"] is None
+    assert world.ship_is_commandable(retained_hull_id)
     transfer_event = world.event_log.get(
         world.entities[retained_hull_id]["ownership_event_id"])
     assert transfer_event.type == "SHIP_ACQUIRED"
     assert asset_transfer.id in transfer_event.caused_by
+    assert transfer_event.data["controller_assignment"] == "existing_onboard_crew"
+    assert transfer_event.data["controller_crew_id"] == onboard_crew_id
     assert employer["treasury_silver"] == target_account["treasury_silver"]
     assert employer["arrears_silver"] == 13
     assert asset_transfer.data["arrears_silver"] == 13
@@ -1009,7 +1329,7 @@ def test_stranded_employment_search_reports_ineligible_sources_without_raising(
     assert member_id in source["roster"]
 
 
-def test_sunk_merchant_replaces_vessel_without_losing_finite_trade_account():
+def test_sunk_merchant_closes_account_without_minting_unfunded_replacement():
     world = WorldState.create("merchant-vessel-recovery")
     island_id = sorted(world.economy.islands)[0]
     merchant_id, created_id = world.create_merchant(
@@ -1020,44 +1340,38 @@ def test_sunk_merchant_replaces_vessel_without_losing_finite_trade_account():
     sunk_ship_id = merchant["ship_id"]
     before_silver = world.economy._total_silver()
     before_goods = world.economy._total_goods()
+    active_ships_before = sum(entity.get("kind") == "ship"
+                              for entity in world.entities.values())
 
     sink_id = world.encounters._sink_ship(world, sunk_ship_id, created_id)
 
-    replacement_id = merchant["ship_id"]
-    assert replacement_id != sunk_ship_id
+    assert merchant["ship_id"] == sunk_ship_id
+    assert merchant["status"] == "closed"
     assert sunk_ship_id in world.archive and sunk_ship_id not in world.entities
-    assert world.entities[replacement_id]["cargo"] == merchant["cargo_milli"]
     assert merchant["silver"] == 317
     assert merchant["cargo_milli"]["fish"] == 2400
     assert world.economy._total_silver() == before_silver
     assert world.economy._total_goods() == before_goods
-    replaced = world.event_log.get(merchant["last_event_id"])
-    assert replaced.type == "MERCHANT_VESSEL_REPLACED"
-    acquired = next(event for event in world.event_log.by_type("SHIP_ACQUIRED")
-                    if event.data.get("successor_of") == sunk_ship_id)
-    assert acquired.data["method"] == "replacement"
-    assert acquired.targets[0]["entity_id"] == replacement_id
-    assert acquired.caused_by == (sink_id, world.entities[replacement_id]["created_event_id"])
-    assert acquired.id in replaced.caused_by
-    assert world.entities[replacement_id]["created_event_id"]
-    assert world.entities[replacement_id]["legal_owner"] == {
-        "kind": "merchant", "id": merchant_id}
-    assert world.entities[replacement_id]["controller_crew_id"] is None
-    with pytest.raises(ValueError, match="no longer owns or commands"):
+    assert sum(entity.get("kind") == "ship" for entity in world.entities.values()) == \
+        active_ships_before - 1
+    assert not world.event_log.by_type("MERCHANT_VESSEL_REPLACED")
+    closed = world.event_log.get(merchant["closed_event_id"])
+    assert closed.type == "MERCHANT_CLOSED"
+    assert closed.data["reason"] == "vessel_sunk"
+    assert closed.caused_by == (sink_id,)
+    with pytest.raises(ValueError, match="Closed merchant accounts"):
         world.trade(merchant_id, island_id, "fish", "sell", 100,
-                    caused_by=replaced.id)
-    replacement_name = world.entities[replacement_id]["name"]
-    world.entities[replacement_id]["name"] = "Continuity Test Vessel"
+                    caused_by=closed.id)
+    sunk_name = world.archive[sunk_ship_id]["name"]
     with pytest.raises(ValueError, match="name requires successor_of"):
-        world.create_vessel(world.archive[sunk_ship_id]["name"], island_id)
+        world.create_vessel(sunk_name, island_id)
     successor_id, successor_created = world.create_vessel(
-        world.archive[sunk_ship_id]["name"], island_id, successor_of=sunk_ship_id)
+        sunk_name, island_id, successor_of=sunk_ship_id)
     assert world.entities[successor_id]["created_event_id"]
     world.assign_ship_title(
         successor_id, owner_kind="crew", owner_id=next(iter(world.crew_ships.crews)),
         controller_crew_id=None, event_id=successor_created)
     world.entities[successor_id]["name"] = "Explicit Successor Vessel"
-    world.entities[replacement_id]["name"] = replacement_name
     world.economy.ledger.assert_balanced(world.economy)
     world.to_snapshot()
 

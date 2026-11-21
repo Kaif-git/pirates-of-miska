@@ -10,7 +10,9 @@ import math
 
 from .engine import Choice, adrenaline_trigger_reasons, legality, movement_path
 from .model import ActionKind, EffStats, EventType, Zone
-from .stats import clamp, effective_stats, fear, max_stamina, phase_ticks, weapon_reach
+from .stats import clamp, effective_stats, legacy_fear_pressure, max_stamina, phase_ticks, weapon_reach
+
+TACTICAL_CATEGORIES = ("FEINT", "SHOVE", "DISENGAGE", "THRUST", "DISARM", "ADRENALINE")
 
 
 @dataclass(frozen=True)
@@ -125,7 +127,7 @@ def observe(state, fighter_id):
         hand_exposed = phase in {"WINDUP", "ACTIVE", "RECOVERY", "STAGGERED", "GUARD_RAISE", "GUARD_HOLD"}
     public = PublicKey(gap_band, anger_band, vigor, last, opp_state)
     blood_band = "OK" if fighter.blood > rule["blood_bands"][1] else "HURT" if fighter.blood >= rule["blood_bands"][0] else "CRITICAL"
-    own_fear = fear(fighter, cfg)
+    own_fear = legacy_fear_pressure(fighter, cfg)
     fear_band = "BOLD" if own_fear < rule["fear_bands"][0] else "WARY" if own_fear <= rule["fear_bands"][1] else "SCARED"
     pain_band = "LOW" if fighter.pain < rule["pain_bands"][0] else "MID" if fighter.pain <= rule["pain_bands"][1] else "HIGH"
     full = FullKey(public, blood_band, fear_band, pain_band)
@@ -208,7 +210,24 @@ def movement_choice(state, fighter, kind, *, toward, aim=None):
                 if (toward and dist < before) or (not toward and dist > before):
                     # Prefer a direct lane rather than sideways zigzags; tuple breaks ties.
                     deviation = abs(dx * (other_pos[1]-fighter.pos[1]) - dy * (other_pos[0]-fighter.pos[0]))
-                    options.append(((dist if toward else -dist, deviation, tiles, dx, dy), choice))
+                    # Two fighters closing from opposite ends of a one-tile gap
+                    # otherwise select the same middle tile and repeatedly block
+                    # each other. Prefer distinct, deterministic flanks only when
+                    # the direct endpoint is that shared center tile.
+                    fighter_order = next(i for i, item in enumerate(state.fighters) if item.id == fighter.id)
+                    target_order = next((i for i, item in enumerate(state.fighters)
+                                         if item.id == contact[0]), fighter_order)
+                    yields_center = toward and fighter_order > target_order and before == 2
+                    shared_center = (yields_center and dist == 1
+                                     and abs(other_pos[0] - fighter.pos[0])
+                                     + abs(other_pos[1] - fighter.pos[1]) == 2
+                                     and end == ((fighter.pos[0] + other_pos[0]) // 2,
+                                                 (fighter.pos[1] + other_pos[1]) // 2))
+                    cross = dx * (other_pos[1] - fighter.pos[1]) - dy * (other_pos[0] - fighter.pos[0])
+                    flank_penalty = 0 if not yields_center or cross > 0 else 1
+                    options.append(((dist if toward else -dist, int(shared_center),
+                                     flank_penalty if before == 2 and toward else 0,
+                                     deviation, tiles, dx, dy), choice))
     return min(options, key=lambda item: item[0])[1] if options else None
 
 
@@ -229,11 +248,7 @@ def attack_zone(state, fighter, view, kind):
         zone = Zone(name)
         if zone == Zone.HAND and not view.opponent_hand_exposed:
             continue
-        difficulty = cfg["zones"]["difficulty"][name]
-        if zone == Zone.HAND and view.opponent_phase == "GUARD_HOLD":
-            difficulty += cfg["zones"]["guard_hand_extra"]
-        if zone == Zone.TORSO or view.stats.accuracy >= difficulty:
-            return zone
+        return zone
     return Zone.TORSO
 
 
@@ -242,14 +257,16 @@ def candidates(state, fighter, view):
     if fighter.grounded:
         options = [("RISE", Choice(ActionKind.RISE)),
                    ("GUARD", Choice(ActionKind.GUARD))]
+        if view.gap <= 1:
+            options.append(("LIGHT", Choice(ActionKind.LIGHT,
+                                             attack_zone(state, fighter, view, ActionKind.LIGHT))))
         crawl = movement_choice(state, fighter, ActionKind.CRAWL, toward=False)
         if crawl is not None:
             options.append(("CRAWL", crawl))
         return [(category, choice) for category, choice in options
                 if not legality(state, fighter.id, choice)]
     categories = list(state.config["ai"]["tie_order"])
-    categories.extend(kind for kind in ("FEINT", "SHOVE", "DISENGAGE", "THRUST", "DISARM", "ADRENALINE")
-                      if kind not in categories)
+    categories.extend(kind for kind in TACTICAL_CATEGORIES if kind not in categories)
     for category in categories:
         choice = None
         if category in {"LIGHT", "HEAVY"} and view.gap <= 0:
@@ -297,7 +314,7 @@ def decision_control(state, fighter_id):
     traits = profile.traits if hasattr(profile, "traits") else profile["traits"]
     weights = state.config["personality"]["pressure_weights"]
     pool = state.config["defaults"]["pool_max"]
-    pressure = (weights["fear"] * fear(fighter, state.config) / pool
+    pressure = (weights["fear"] * legacy_fear_pressure(fighter, state.config) / pool
                 + weights["pain"] * fighter.pain / pool
                 + weights["nervousness"] * fighter.nervousness)
     composure = profile.composure if hasattr(profile, "composure") else profile["composure"]
@@ -386,7 +403,7 @@ def score_actions(state, fighter_id):
     p2 = state.config["personality"]
     control = decision_control(state, fighter_id)
     pressure_weights = p2["pressure_weights"]
-    pressure = (pressure_weights["fear"] * view.fear / state.config["defaults"]["pool_max"]
+    pressure = (pressure_weights["fear"] * legacy_fear_pressure(fighter, state.config) / state.config["defaults"]["pool_max"]
                 + pressure_weights["pain"] * view.pain / state.config["defaults"]["pool_max"]
                 + pressure_weights["nervousness"] * fighter.nervousness)
     attacks = {"LIGHT", "HEAVY", "DASH_LIGHT", "THRUST", "DISARM"}
@@ -463,7 +480,9 @@ def score_actions(state, fighter_id):
             if category == "CRAWL" and view.gap <= state.config["stability"]["grounded_crawl_gap"]:
                 add("P4_CRAWL_FROM_PRESSURE", state.config["stability"]["grounded_crawl_bonus"])
         if category in {"DASH_OUT", "WALK_OUT", "RUN_OUT"} and pressure > 0 and control < 1:
-            add("P2_PANIC", (1 - control) * pressure * p2["panic_score"])
+            courage = personality.courage if personality else state.config["ronin"].get("courage", 0)
+            panic_scale = max(0.25, 1 - courage / 40)
+            add("P2_PANIC", (1 - control) * pressure * p2["panic_score"] * panic_scale)
         if (fighter.ai_stagnant_decisions >= p2["anti_deadlock"]["after_decisions"]
                 and category in aggressive_categories):
             add("P2_ANTI_DEADLOCK", p2["anti_deadlock"]["bias"])
@@ -488,6 +507,11 @@ def score_actions(state, fighter_id):
         if view.public_key.opp_state == "WINDUP_L":
             if category == "GUARD":
                 add("R4_COUNTER_LIGHT", rule["counter_light_guard"], "reading")
+                # Disciplined profiles should take a visible Light threat
+                # seriously; less disciplined profiles retain their stronger
+                # impulse to trade. This changes preference only, not legality.
+                add("P2_DISCIPLINED_LIGHT_RESPONSE",
+                    rule["counter_light_guard"] * traits["discipline"], "reading")
             if category == "HEAVY" and view.opponent_strike_delay is not None and strike_delay(state, view, choice) > view.opponent_strike_delay:
                 add("R4_HEAVY_TOO_SLOW", rule["counter_light_heavy"], "reading")
         if view.public_key.opp_state == "GUARDING" and category in {"HEAVY", "LIGHT"}:

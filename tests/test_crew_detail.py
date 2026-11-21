@@ -249,6 +249,29 @@ def test_compliance_audit_detects_a_broken_claim_instead_of_blind_pass():
     assert "FAIL" in work_rows(world)[0]
 
 
+def test_work_report_shows_enabled_coverage_tools_and_officer_without_reserving_them():
+    world = controlled_world()
+    sailor = world.ship.crew[0]
+    world.voyages.roles = {role: None for role in world.voyages.roles}
+    world.voyages.assign_role(world, "navigator", sailor.id)
+    hold_x, hold_y = world.ship.stations["hold"]
+    world.player.x, world.player.y = hold_x - 1, hold_y
+    world.economy.cargo = {"carpenter_tools": 1}
+    world.economy.equip(world, sailor.id, "carpenter_tools")
+    world.ship.set_labor(sailor.id, "repair", 1)
+
+    rows = work_rows(world)
+    report = "\n".join(rows)
+    assert f"Patch hull: {sailor.name} P1 (Carpenter's tool roll; +20% work) [officer: Navigator]" in report
+    assert "Bail bilge: none enabled — assign this labor on a crew profile." in report
+
+    job = world.ship.add_job("test:officer-repair", "repair", world.ship.stations["repair"], work=100)
+    world.ship.assign(job.id, sailor.id)
+    world.advance(100)
+    assert job.worker == sailor.id
+    assert world.voyages.roles["navigator"] == sailor.id
+
+
 def test_compliance_detects_double_reserved_and_orphan_cargo():
     world = controlled_world()
     c = world.ship.crew[0]

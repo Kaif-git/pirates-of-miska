@@ -413,6 +413,26 @@ class PoliticsSystem:
         faction_id = crew.get("faction_id") if crew else None
         faction = self.factions.get(faction_id)
         if faction is None or faction["kind"] == "marine":
+            former_heat = self.crew_heat.pop(crew_id, 0)
+            bounty = self.crew_bounties.pop(crew_id, None)
+            response = self.response_assignments.pop(crew_id, None)
+            if former_heat or bounty is not None or response is not None:
+                closed = world.event_log.append(
+                    tick=world.clock.tick, event_type="GOVERNMENT_TARGET_CLOSED",
+                    actors=[{"role": "government", "entity_id": self.marine_command["faction_id"]}],
+                    targets=[{"role": "former_crew_target", "entity_id": crew_id}],
+                    data={"crew_id": crew_id, "faction_id": faction_id,
+                          "heat": former_heat,
+                          "bounty_amount_silver": bounty["amount"] if bounty else 0,
+                          "bounty_event_id": bounty["event_id"] if bounty else None,
+                          "response_event_id": response["event_id"] if response else None,
+                          "reason": reason},
+                    caused_by=[caused_by],
+                    causes_tags=["government_response", "crew_identity_closed", reason],
+                    magnitude=0.2)
+                self.global_tension = min(10000, sum(self.crew_heat.values()))
+                return closed.id
+            self.global_tension = min(10000, sum(self.crew_heat.values()))
             return None
         remaining_ids = [member_id for member_id in faction["member_crew_ids"]
                          if member_id != crew_id and member_id in world.crew_ships.crews]
@@ -1171,6 +1191,226 @@ class PoliticsSystem:
         )
         return event.id
 
+    def record_public_deed(self, world, character_id: str, source_event_id: str, *,
+                           deed_kind: str) -> str | None:
+        """Award capped, individual public renown for an attributable achieved deed."""
+        character = world.entities.get(character_id)
+        if (not character or character.get("kind") != "character"
+                or character.get("death_tick") is not None):
+            raise ValueError("Public deed recognition requires a living named character")
+        source = world.event_log.get(source_event_id)
+        increment = {"profitable_trade": 20, "combat_victory": 50}.get(deed_kind)
+        if increment is None:
+            raise ValueError("Unknown public deed kind")
+        if deed_kind == "profitable_trade":
+            merchant = world.economy.merchants.get(source.data.get("merchant_id"))
+            ship = world.entities.get(merchant.get("ship_id")) if merchant else None
+            crew = world.crew_ships.crews.get(ship.get("controller_crew_id")) if ship else None
+            trade = source.data
+            actors_by_role = {actor.get("role"): actor.get("entity_id") for actor in source.actors}
+            transaction_shape = (
+                source.type == "MARKET_TRADE"
+                and trade.get("island_id") == source.location
+                and isinstance(trade.get("goods_id"), str)
+                and type(trade.get("quantity_milli")) is int
+                and trade["quantity_milli"] > 0
+                and type(trade.get("silver_transferred")) is int
+                and trade["silver_transferred"] > 0
+                and type(trade.get("stock_before_milli")) is int
+                and type(trade.get("stock_after_milli")) is int
+                and type(trade.get("merchant_cash_before")) is int
+                and type(trade.get("merchant_cash_after")) is int
+                and type(trade.get("merchant_cargo_before_milli")) is int
+                and type(trade.get("merchant_cargo_after_milli")) is int
+                and ((trade.get("side") == "sell"
+                      and trade["stock_after_milli"] - trade["stock_before_milli"]
+                      == trade["quantity_milli"]
+                      and trade["merchant_cash_after"] - trade["merchant_cash_before"]
+                      == trade["silver_transferred"]
+                      and trade["merchant_cargo_before_milli"]
+                      - trade["merchant_cargo_after_milli"] == trade["quantity_milli"]
+                      and actors_by_role.get("seller") == trade.get("merchant_id")
+                      and actors_by_role.get("buyer") == trade.get("island_id"))))
+            qualifies = (source.type == "MARKET_TRADE"
+                         and transaction_shape
+                         and trade.get("side") == "sell"
+                         and type(trade.get("profit_silver")) is int
+                         and trade["profit_silver"] > 0
+                         and crew is not None and crew.get("captain_id") == character_id
+                         and character_id in crew.get("roster", ()))
+            recognition_scope = "market_participants"
+        else:
+            details = source.data.get("outcome_details", {})
+            winner_ship_id = (details.get("winner_ship_id")
+                              or details.get("captor_ship_id"))
+            ships = source.data.get("ships", ())
+            captains = source.data.get("captain_ids_before", ())
+            if winner_ship_id is None and source.type == "ENCOUNTER_RESOLVED" \
+                    and source.data.get("outcome") in {
+                        "captain_captured", "captain_killed", "captain_wounded",
+                        "crew_defects", "combat_resolved"}:
+                strengths = source.data.get("strengths_after", ())
+                if (isinstance(strengths, (list, tuple)) and strengths
+                        and len(strengths) == len(ships)
+                        and all(isinstance(row, dict) and type(row.get("total")) is int
+                                for row in strengths)):
+                    winner_index = max(range(len(strengths)),
+                                       key=lambda index: (strengths[index]["total"], -index))
+                    winner_ship_id = ships[winner_index]
+            winner_index = next((index for index, ship_id in enumerate(ships)
+                                 if ship_id == winner_ship_id), None)
+            qualifies = (source.type == "ENCOUNTER_RESOLVED"
+                         and source.data.get("outcome") not in {
+                             "mutual_withdrawal", "one_side_flees", "parley_ended_fight"}
+                         and winner_ship_id is not None
+                         and winner_index is not None and winner_index < len(captains)
+                         and captains[winner_index] == character_id)
+            recognition_scope = "encounter_participants"
+        if not qualifies:
+            return None
+        reputation = character.setdefault("reputation", {})
+        if reputation == {}:
+            reputation.update({"public_renown": 0, "deed_event_ids": [], "paths": []})
+        if (not isinstance(reputation, dict)
+                or set(reputation) != {"public_renown", "deed_event_ids", "paths"}
+                or type(reputation["public_renown"]) is not int
+                or not isinstance(reputation["deed_event_ids"], list)
+                or not isinstance(reputation["paths"], list)):
+            raise ValueError("Character reputation state has an invalid public-renown shape")
+        if source_event_id in reputation["deed_event_ids"]:
+            return None
+        before = reputation["public_renown"]
+        after = min(1000, before + increment)
+        if after == before:
+            return None
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="PUBLIC_RENOWN_EARNED",
+            location=world.location_of(character_id)["id"],
+            actors=[{"role": "recognized_deed_owner", "entity_id": character_id}],
+            targets=[{"role": "deed_source", "entity_id": source_event_id}],
+            data={"source_event_id": source_event_id, "deed_kind": deed_kind,
+                  "recognition_scope": recognition_scope, "delta": after - before,
+                  "renown_before": before, "renown_after": after},
+            caused_by=[source_event_id],
+            causes_tags=["public_recognition", f"deed:{deed_kind}"], magnitude=0.25,
+        )
+        reputation["public_renown"] = after
+        reputation["deed_event_ids"] = [*reputation["deed_event_ids"], source_event_id][-64:]
+        reputation["paths"] = sorted(set((*reputation["paths"], deed_kind)))
+        return event.id
+
+    def record_contraband_enforcement(self, world, authority_faction: str,
+                                      seller_crew_id: str, *, caused_by: str) -> str | None:
+        """Record a bounded political consequence of an evidenced port seizure."""
+        enforcement = world.event_log.get(caused_by)
+        if enforcement.type != "CONTRABAND_SEIZED":
+            raise ValueError("Political enforcement consequences require a contraband seizure")
+        authority = self._faction(world, authority_faction)
+        crew = world.crew_ships.crews.get(seller_crew_id)
+        seller_faction = crew.get("faction_id") if crew else None
+        if seller_faction not in self.factions or seller_faction == authority_faction:
+            return None
+        key = self._pair_key(authority_faction, seller_faction)
+        relation = self.institutional.setdefault(
+            key, {"trust": 50, "fear": 50, "grievance": 50})
+        before = dict(relation)
+        relation["trust"] = max(0, relation["trust"] - 5)
+        relation["grievance"] = min(100, relation["grievance"] + 8)
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="TRADE_ENFORCEMENT_RELATION_CHANGED",
+            location=enforcement.location,
+            actors=[{"role": "enforcing_faction", "entity_id": authority_faction}],
+            targets=[{"role": "seller_faction", "entity_id": seller_faction}],
+            data={"enforcement_event_id": enforcement.id, "factions": [
+                authority_faction, seller_faction], "before": before,
+                  "after": dict(relation)},
+            caused_by=[enforcement.id],
+            causes_tags=["contraband_enforcement", "institutional_grievance"], magnitude=0.18,
+        )
+        for faction_id, target_faction_id in ((authority_faction, seller_faction),
+                                               (seller_faction, authority_faction)):
+            holder = self.factions[faction_id].get("leader_id")
+            target = self.factions[target_faction_id].get("leader_id")
+            if holder in world.entities and target in world.entities:
+                world.memories.add_memory(
+                    world, holder, target, "betrayed", event_id=event.id,
+                    intensity_permille=180, valence_permille=-180)
+        return event.id
+
+    def record_trade_rivalry(self, world, rivalry_event_id: str,
+                             first_faction: str, second_faction: str) -> str:
+        rivalry = world.event_log.get(rivalry_event_id)
+        if (rivalry.type != "PROFITABLE_TRADE_RIVALRY"
+                or first_faction == second_faction
+                or set(rivalry.data.get("faction_ids", ())) != {first_faction, second_faction}):
+            raise ValueError("Trade rivalry requires two evidenced competing factions")
+        self._faction(world, first_faction)
+        self._faction(world, second_faction)
+        key = self._pair_key(first_faction, second_faction)
+        relation = self.institutional.setdefault(
+            key, {"trust": 50, "fear": 50, "grievance": 50})
+        before = dict(relation)
+        relation["trust"] = max(0, relation["trust"] - 2)
+        relation["grievance"] = min(100, relation["grievance"] + 3)
+        consequence = world.event_log.append(
+            tick=world.clock.tick, event_type="TRADE_RIVALRY_RELATION_CHANGED",
+            location=rivalry.location,
+            actors=[{"role": "trading_faction", "entity_id": first_faction}],
+            targets=[{"role": "rival_faction", "entity_id": second_faction}],
+            data={"rivalry_event_id": rivalry_event_id,
+                  "factions": [first_faction, second_faction],
+                  "before": before, "after": dict(relation)},
+            caused_by=[rivalry_event_id],
+            causes_tags=["trade_rivalry", "institutional_grievance"], magnitude=0.08,
+        )
+        return consequence.id
+
+    def record_shortage_relief(self, world, pressure_event_id: str,
+                               relief_event_id: str, merchant_id: str,
+                               island_id: str) -> str | None:
+        pressure = world.event_log.get(pressure_event_id)
+        relief = world.event_log.get(relief_event_id)
+        if (pressure.type != "ISLAND_ECONOMY_UPDATED"
+                or pressure.location != island_id
+                or relief.type != "SHORTAGE_RELIEF_NEGOTIATED"
+                or relief.data.get("pressure_event_id") != pressure_event_id
+                or relief.data.get("merchant_id") != merchant_id):
+            raise ValueError("Political shortage-relief credit requires verified pressure and settlement")
+        merchant = world.economy.merchants.get(merchant_id)
+        ship = world.entities.get(merchant.get("ship_id")) if merchant else None
+        crew = world.crew_ships.crews.get(ship.get("controller_crew_id")) if ship else None
+        seller_faction = crew.get("faction_id") if crew else None
+        market_faction = self.island_rulers.get(island_id)
+        if (seller_faction not in self.factions or market_faction not in self.factions
+                or seller_faction == market_faction):
+            return None
+        key = self._pair_key(seller_faction, market_faction)
+        relation = self.institutional.setdefault(
+            key, {"trust": 50, "fear": 50, "grievance": 50})
+        before = dict(relation)
+        relation["trust"] = min(100, relation["trust"] + 4)
+        relation["grievance"] = max(0, relation["grievance"] - 5)
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="SHORTAGE_RELIEF_RELATION_CHANGED",
+            location=island_id,
+            actors=[{"role": "relief_faction", "entity_id": seller_faction}],
+            targets=[{"role": "relieved_faction", "entity_id": market_faction}],
+            data={"pressure_event_id": pressure_event_id,
+                  "relief_event_id": relief_event_id,
+                  "before": before, "after": dict(relation)},
+            caused_by=list(dict.fromkeys((pressure_event_id, relief_event_id))),
+            causes_tags=["shortage_relief", "institutional_goodwill"], magnitude=0.15,
+        )
+        for holder_faction, target_faction in ((seller_faction, market_faction),
+                                               (market_faction, seller_faction)):
+            holder = self.factions[holder_faction].get("leader_id")
+            target = self.factions[target_faction].get("leader_id")
+            if holder in world.entities and target in world.entities:
+                world.memories.add_memory(
+                    world, holder, target, "traded_fairly", event_id=event.id,
+                    intensity_permille=150, valence_permille=150)
+        return event.id
+
     def propose_treaty(self, world, proposer: str, target: str, state: str, *,
                        caused_by: str, terms: list[str] | None = None) -> str:
         self._faction(world, proposer); self._faction(world, target)
@@ -1215,6 +1455,9 @@ class PoliticsSystem:
         treaty = self.treaties.get(key)
         if not treaty or "mutual_defense" not in treaty["terms"]:
             raise ValueError("No mutual-defense obligation exists")
+        if any(item["kind"] == "mutual_defense" and item["status"] == "open"
+               for item in treaty["obligations"]):
+            raise ValueError("A mutual-defense obligation is already open for this treaty")
         event = world.event_log.append(
             tick=world.clock.tick, event_type="TREATY_AID_REQUESTED", location=None,
             actors=[{"role": "requester", "entity_id": requester}],
@@ -1543,3 +1786,49 @@ class PoliticsSystem:
                 event = world.event_log.get(obligation["event_id"])
                 if event.type != "TREATY_AID_REQUESTED":
                     raise ValueError("Treaty obligation references wrong event type")
+                if obligation["status"] == "open":
+                    if any(candidate.type in {"TREATY_OBLIGATION_FULFILLED", "TREATY_BREACHED"}
+                           and candidate.data.get("obligation_event_id") == event.id
+                           for candidate in world.event_log):
+                        raise ValueError("Open treaty obligation already has a resolution event")
+                else:
+                    expected_type = ("TREATY_OBLIGATION_FULFILLED"
+                                     if obligation["status"] == "fulfilled" else "TREATY_BREACHED")
+                    resolutions = [candidate for candidate in world.event_log
+                                   if candidate.type == expected_type
+                                   and candidate.data.get("obligation_event_id") == event.id]
+                    if len(resolutions) != 1:
+                        raise ValueError("Treaty obligation status lacks exactly one resolution")
+
+        relation_event_specs = {
+            "TRADE_ENFORCEMENT_RELATION_CHANGED": (
+                "CONTRABAND_SEIZED", "enforcement_event_id"),
+            "TRADE_RIVALRY_RELATION_CHANGED": (
+                "PROFITABLE_TRADE_RIVALRY", "rivalry_event_id"),
+            "SHORTAGE_RELIEF_RELATION_CHANGED": (
+                "SHORTAGE_RELIEF_NEGOTIATED", "relief_event_id"),
+        }
+        for consequence_type, (cause_type, cause_key) in relation_event_specs.items():
+            seen_causes = set()
+            for event in world.event_log.by_type(consequence_type):
+                cause_id = event.data.get(cause_key)
+                if cause_id in seen_causes:
+                    raise ValueError(f"Duplicate political consequence for {cause_type}")
+                seen_causes.add(cause_id)
+                try:
+                    cause = world.event_log.get(cause_id)
+                except (KeyError, TypeError) as exc:
+                    raise ValueError("Trade-conflict consequence references an unknown cause") from exc
+                if (cause.type != cause_type or cause_id not in event.caused_by
+                        or set(event.data.get("before", {})) != {"trust", "fear", "grievance"}
+                        or set(event.data.get("after", {})) != {"trust", "fear", "grievance"}
+                        or any(type(value) is not int or not 0 <= value <= 100
+                               for value in (*event.data["before"].values(),
+                                             *event.data["after"].values()))):
+                    raise ValueError("Trade-conflict consequence lacks valid bounded relation evidence")
+                pair = event.data.get("factions")
+                if (not isinstance(pair, (list, tuple)) or len(pair) != 2
+                        or pair[0] == pair[1]
+                        or any(faction_id not in self.factions
+                               and faction_id not in self.archived_factions for faction_id in pair)):
+                    raise ValueError("Trade-conflict relation consequence has invalid factions")

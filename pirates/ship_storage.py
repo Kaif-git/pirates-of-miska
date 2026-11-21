@@ -4,7 +4,7 @@ Available totals are a mapping view, never a second authoritative inventory.
 Reservations leave a pile's available contents but retain their source identity.
 """
 from collections.abc import MutableMapping
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 from pirates.ship_map import ORIGIN, WIDTH, HEIGHT
 
@@ -25,6 +25,32 @@ UNIT_MASS.update({
              "lanterns": 1.2, "candles": 0.1, "lamp_oil_ml": 0.001}
 )
 HAUL_CAPACITY_KG = 50
+STOCK_FILTER_PROFILES = {
+    "All resources": RESOURCES,
+    "Provisions": ("grain_g", "beans_g", "rice_g", "oats_g", "potatoes_g", "onions_g",
+                   "salted_pork_g", "hard_cheese_g", "dried_fish_g", "fruit_g", "salted_fruit_g",
+                   "salt_g", "biscuit_g", "clean_water_ml", "questionable_water_ml", "firewood_g"),
+    "Construction materials": ("planks",),
+    "Ammunition": ("shot",),
+    "Medical and hygiene": ("medicine", "bandages", "soap"),
+    "Lighting": ("lanterns", "lamp_oil_ml", "candles"),
+    "Waste": ("food_waste_g",),
+}
+
+
+def normalize_filters(filters):
+    if (not isinstance(filters, (list, tuple, set, frozenset))
+            or any(not isinstance(key, str) or key not in RESOURCES for key in filters)
+            or len(filters) != len(set(filters))):
+        raise ValueError("Invalid stockpile resource filter")
+    selected = set(filters)
+    return [key for key in RESOURCES if key in selected]
+
+
+def filter_profile_name(filters):
+    normalized = tuple(normalize_filters(filters))
+    return next((name for name, profile in STOCK_FILTER_PROFILES.items()
+                 if tuple(profile) == normalized), "Custom")
 
 
 def migrate_bundle(bundle):
@@ -88,6 +114,11 @@ class Stockpile:
     fixture_id: str | None
     capacity_kg: int
     contents: dict
+    filters: list = field(default_factory=lambda: list(RESOURCES))
+    priority: int = 3
+
+    def accepts(self, resource):
+        return resource in self.filters
 
 
 class Totals(MutableMapping):
@@ -170,17 +201,44 @@ class SpatialStorage:
                    for row in job.supply_plan
                    if row["pile"] == pile_id and not row["collected"] and not row["returned"])
 
-    def reserve_capacity(self, pile_id, bundle, reservations=()):
-        pile = self.piles[pile_id]
-        reserved = sum(bundle_mass(row["bundle"]) for row in reservations
-                       if row.get("destination") == pile_id and not row.get("delivered", False))
-        return bundle_mass(pile.contents) + reserved + bundle_mass(bundle) <= pile.capacity_kg
+    def inbound_reserved_mass(self, pile_id, jobs):
+        reserved = 0.0
+        for job in jobs:
+            if job.state in ("done", "cancelled"):
+                continue
+            if job.transfer and job.transfer["destination"] == pile_id:
+                reserved += bundle_mass(job.transfer["bundle"])
+            reserved += sum(bundle_mass(row["bundle"]) for row in job.supply_plan
+                            if row["pile"] == pile_id and not row["returned"])
+        return reserved
 
-    def designate(self, model, fixture_overlay, wx, wy, capacity_kg=1000, z=0):
+    @staticmethod
+    def transfer_source_reserved(pile_id, resource, jobs):
+        return sum(job.transfer["bundle"].get(resource, 0) for job in jobs
+                   if job.transfer and job.state not in ("done", "cancelled")
+                   and job.transfer["source"] == pile_id)
+
+    def available_quantity(self, pile_id, resource, jobs):
+        """Physical pile quantity not already promised to an active transfer."""
+        pile = self.piles.get(pile_id)
+        if pile is None or resource not in RESOURCES:
+            return 0
+        return max(0, pile.contents.get(resource, 0)
+                   - self.transfer_source_reserved(pile_id, resource, jobs))
+
+    def reserve_capacity(self, pile_id, bundle, jobs):
+        pile = self.piles[pile_id]
+        return (bundle_mass(pile.contents) + self.inbound_reserved_mass(pile_id, jobs)
+                + bundle_mass(bundle) <= pile.capacity_kg)
+
+    def designate(self, model, fixture_overlay, wx, wy, capacity_kg=1000, z=0,
+                  filters=None, priority=3):
         if (type(wx) is not int or type(wy) is not int or type(capacity_kg) is not int
                 or type(z) is not int
+                or type(priority) is not int or not 1 <= priority <= 5
                 or not 1 <= capacity_kg <= 100000):
             raise ValueError("Invalid stockpile designation")
+        filters = list(RESOURCES) if filters is None else normalize_filters(filters)
         x, y = wx - ORIGIN[0], wy - ORIGIN[1]
         if not (0 <= x < WIDTH and 0 <= y < HEIGHT and 0 <= z <= 8):
             raise ValueError("Stockpiles must be aboard a supported deck")
@@ -196,8 +254,30 @@ class SpatialStorage:
         pid = f"pile:{x},{y}" if z == 0 else f"pile:{x},{y},{z}"
         if pid in self.piles:
             raise ValueError("Stockpile identity already exists")
-        self.piles[pid] = Stockpile(pid, x, y, z, None, capacity_kg, {})
+        self.piles[pid] = Stockpile(pid, x, y, z, None, capacity_kg, {}, filters, priority)
         return self.piles[pid]
+
+    def configure(self, pile_id, *, capacity_kg=None, filters=None, priority=None, jobs):
+        pile = self.piles.get(pile_id)
+        if pile is None:
+            raise ValueError("Choose an existing stockpile")
+        capacity = pile.capacity_kg if capacity_kg is None else capacity_kg
+        priority = pile.priority if priority is None else priority
+        accepted = list(pile.filters) if filters is None else normalize_filters(filters)
+        if (type(capacity) is not int or not 1 <= capacity <= 100000
+                or type(priority) is not int or not 1 <= priority <= 5):
+            raise ValueError("Stockpile capacity must be 1–100,000 kg and priority 1–5")
+        if pile.fixture_id is not None and accepted != list(RESOURCES):
+            raise ValueError("The hold and water fixtures accept all resources; filter floor piles instead")
+        if any(job.transfer and job.transfer["destination"] == pile_id
+               and job.state not in ("done", "cancelled")
+               and any(not (key in accepted) for key in job.transfer["bundle"])
+               for job in jobs):
+            raise ValueError("An active transfer reserves goods rejected by that filter")
+        if bundle_mass(pile.contents) + self.inbound_reserved_mass(pile_id, jobs) > capacity:
+            raise ValueError("Capacity is below current contents and reserved incoming stock")
+        pile.capacity_kg, pile.filters, pile.priority = capacity, accepted, priority
+        return pile
 
     def und_designate(self, pile_id, jobs=()):
         pile = self.piles.get(pile_id)
@@ -221,15 +301,12 @@ class SpatialStorage:
             raise ValueError(f"A single crew load is limited to {HAUL_CAPACITY_KG} kg")
         if not self.available(source, world.fixtures) or not self.available(destination, world.fixtures):
             raise ValueError("A stockpile container is being relocated")
-        active_transfers = [j.transfer for j in world.ship.jobs if j.transfer
-                            and j.state not in ("done", "cancelled")]
-        if not self.reserve_capacity(destination, bundle, active_transfers):
+        if any(not self.piles[destination].accepts(key) for key in bundle):
+            raise ValueError("Destination stockpile filter rejects that resource")
+        if not self.reserve_capacity(destination, bundle, world.ship.jobs):
             raise ValueError("Destination stockpile lacks capacity")
         for key, amount in bundle.items():
-            reserved_source = sum(j.transfer["bundle"].get(key, 0) for j in world.ship.jobs
-                                  if j.transfer and j.state not in ("done", "cancelled")
-                                  and j.transfer["source"] == source)
-            if amount + reserved_source > self.piles[source].contents.get(key, 0):
+            if amount > self.available_quantity(source, key, world.ship.jobs):
                 raise ValueError("Source stockpile does not contain that unreserved amount")
         job = world.ship.add_job(f"transfer:{world.ship.next_id}", "repair",
                                  self.position(destination, world.fixtures), priority=3, work=1)
@@ -247,9 +324,9 @@ class SpatialStorage:
                 continue
             route = world.ship.path(world, sailor, self.position(pile.id, world.fixtures))
             if route is not None:
-                candidates.append((len(route), pile.id))
+                candidates.append((pile.priority, len(route), pile.id))
         allocations = []
-        for _, pid in sorted(candidates):
+        for _, _, pid in sorted(candidates):
             pile = self.piles[pid]
             bundle = {k: min(n, pile.contents.get(k, 0)) for k, n in remaining.items()
                       if n and pile.contents.get(k, 0)}
@@ -279,21 +356,30 @@ class SpatialStorage:
             raise ValueError("Invalid stockpile list")
         result, occupied = cls(), set()
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {"id", "x", "y", "z", "fixture_id", "capacity_kg", "contents"}:
+            legacy_fields = {"id", "x", "y", "z", "fixture_id", "capacity_kg", "contents"}
+            current_fields = legacy_fields | {"filters", "priority"}
+            if not isinstance(row, dict) or set(row) not in (legacy_fields, current_fields):
                 raise ValueError("Invalid stockpile record")
             row = dict(row)
+            row.setdefault("filters", list(RESOURCES))
+            row.setdefault("priority", 3)
             row["contents"] = migrate_bundle(row["contents"])
             pile = Stockpile(**row)
             if (not isinstance(pile.id, str) or not pile.id or pile.id in result.piles
                     or any(type(v) is not int for v in (pile.x, pile.y, pile.z, pile.capacity_kg))
+                    or type(pile.priority) is not int or not 1 <= pile.priority <= 5
                     or not 0 <= pile.z <= 8 or not 1 <= pile.capacity_kg <= 100000
                     or not isinstance(pile.contents, dict)
+                    or not isinstance(pile.filters, list)
+                    or pile.filters != normalize_filters(pile.filters)
                     or any(k not in RESOURCES or type(n) is not int or n <= 0 for k, n in pile.contents.items())
                     or bundle_mass(pile.contents) > pile.capacity_kg):
                 raise ValueError("Invalid stockpile identity, contents or capacity")
             if pile.fixture_id is not None:
                 if pile.fixture_id not in ("hold", "water") or pile.id != pile.fixture_id:
                     raise ValueError("Invalid stockpile fixture binding")
+                if pile.filters != list(RESOURCES):
+                    raise ValueError("Starter hold and water fixtures cannot have filtered contents")
                 fixture = layout.get(pile.fixture_id)
                 if fixture.z != pile.z:
                     raise ValueError("Stockpile fixture position disagrees with equipment registry")
@@ -345,11 +431,14 @@ def collect(world, sailor, job):
 def transfer_capacity_errors(ship):
     errors = []
     for pile in ship.storage.piles.values():
-        reserved = sum(bundle_mass(j.transfer["bundle"]) for j in ship.jobs
-                       if j.transfer and j.state not in ("done", "cancelled")
-                       and j.transfer["destination"] == pile.id)
+        incoming = [job for job in ship.jobs
+                    if job.transfer and job.state not in ("done", "cancelled")
+                    and job.transfer["destination"] == pile.id]
+        reserved = sum(bundle_mass(job.transfer["bundle"]) for job in incoming)
         if bundle_mass(pile.contents) + reserved > pile.capacity_kg:
             errors.append(f"Stockpile {pile.id}: destination capacity over-reserved")
+        if any(not pile.accepts(key) for job in incoming for key in job.transfer["bundle"]):
+            errors.append(f"Stockpile {pile.id}: incoming transfer violates its resource filter")
     return errors
 
 
@@ -360,6 +449,10 @@ def return_cargo(world, sailor, job):
         sailor.activity = "Returning supplies to " + row["pile"]
         if not storage.available(row["pile"], world.fixtures):
             job.reason = "Waiting for returning-supply container installation"
+            return
+        other_jobs = [active for active in ship.jobs if active is not job]
+        if not storage.reserve_capacity(row["pile"], row["bundle"], other_jobs):
+            job.reason = f"Waiting for return capacity at {row['pile']}"
             return
         if ship.walk(world, sailor, storage.position(row["pile"], world.fixtures)):
             add_bundle(storage.piles[row["pile"]].contents, row["bundle"])
@@ -420,6 +513,9 @@ def validate_transfer(job, storage):
             or not job.key.startswith("transfer:")):
         raise ValueError("Invalid stockpile transfer job")
     if job.state not in ("done", "cancelled"):
+        if any(not storage.piles[plan["destination"]].accepts(key)
+               for key in plan["bundle"]):
+            raise ValueError("Transfer destination filter rejects its reserved resource")
         if job.target != storage.position(plan["destination"], None) and storage.piles[plan["destination"]].fixture_id is None:
             raise ValueError("Transfer destination no longer matches stockpile position")
 

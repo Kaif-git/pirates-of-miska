@@ -1,7 +1,31 @@
 # Pirates of Miska — Master Design Plan
 
-Date: 2026-11-18
-Status: agreed direction and design backlog, not implementation authorization.
+Date: 2026-11-20
+Status: agreed direction and design backlog. The authored foundation status below is scoped implementation evidence, not blanket authorization or completion of the full MVP.
+
+### Current scope override — 2026-11-19
+
+The next playable release is governed by `LAWFUL-TRADER-MVP-PLAN.md`: a lawful free-trading captain in an authored pirate-filled archipelago, with substantial shipbuilding/preparation, crew work/growth, information, sea encounters, connected combat, lawful prisoners/bounties/prize ships, reputation unlocks and ship-accessible treasure.
+
+Other expansions in this master plan are **paused/deferred for this MVP**, not deleted: generated/off-camera world development, simulation integration, strategic factions/affinities/lore, magic, land adventures/swimming/diving, fleet missions/delegation, unrestricted autonomy, production chains and extra daily chores. Use saved hardcoded sample NPCs/factions instead. Existing systems and separately developed combat/simulation work must be preserved; this is not an instruction to stop other sessions or processes.
+
+For this release, self-directed buying/travel/selling replaces a delivery-contract progression funnel. Travel is ordinary activity, not a formally accepted/completed voyage with mandatory profit/loss settlement. Optional quests and explicit commitments remain voluntary motives with disclosed consequences. The older sequencing below is background guidance; consult the MVP plan's audit, phased gates and deferred-scope table before starting more features. Planning here does not authorize gameplay implementation.
+
+### Authored foundation implementation status — 2026-11-19
+
+`AUTHORED-ARCHIPELAGO-IMPLEMENTATION-PLAN.md` records the verified foundation: explicit protected authored launch/save, isolated world-simulation policy, three functioning local markets, connected selectable free-sailing routes, and legacy/generated save compatibility. Its scoped regression run passed 177 tests; native evidence is 36 SDL frames across 1280×800, 960×700 and 640×600. This is a foundation slice only: the new sea-encounter combat consumer/result bridge is not integrated, so the combat-inclusive MVP and the lawful custody/bounty/prize/reputation/treasure loops above are **not complete**. Do not infer full release readiness from this work.
+
+### M2 ship-preparation status — 2026-11-19
+
+`SHIP-PREPARATION-IMPLEMENTATION-PLAN.md` records the scoped-verified construction, physical stock/hauling, crew/equipment, readiness and authored integration loop. Its focused regression set passed 457 tests; the scripted authored walkthrough passed with 33 native captures across 1280×800, 960×700 and 640×600, including mid-carry save/reload and conserved stock. This does not complete the combat-inclusive MVP or M3–M8; campaign combat/results, lawful rewards/prizes, reputation, salvage/treasure and unaided release acceptance remain open. Scripted evidence is not human playtest evidence.
+
+### M3 free-trade status — 2026-11-20
+
+`FREE-TRADE-IMPLEMENTATION-PLAN.md` records scoped-verified M3 P0–P4. Its latest combined economy/trade/harbor/authored/voyage/save/encounter/foundation/provisioning/employment run passed **253 tests in 147.86s**. Three distinct two-leg authored circuits, each repeated twice under an explicit quiet-passage control, were cash-positive after opening-quote resource-replacement proxies (+682/+803/+145 Marks for the two-loop runs); the evidence is small, scripted and not a universal or long-run solvency claim. Native UI evidence is 60 scripted states / 180 screenshots at 1280×800, 960×700 and 640×600 in `C:/Users/Warp/AppData/Local/Temp/opencode/free-trade-m3-ui-verified/`; the capture shortens voyage duration for presentation and is not human acceptance. M3 is scoped-complete only. Human acceptance, combat integration and the combat-inclusive MVP remain separate unfinished gates.
+
+### M4 sea-traffic status — 2026-11-20
+
+`M4-SEA-TRAFFIC-IMPLEMENTATION-PLAN.md` records completed P0–P6 implementation and scripted evidence: legal-lane interpolation and repeat contact IDs; signals/parley with observed-fact pirate risk and neutral-marine safeguards; a versioned local conduct ledger with unsupported hostility blocked; consented six-person physical transfer over a connected NPC deck; and explicit finite at-sea trade with fixed disclosed terms and exactly-once receipts. The expanded M4/NPC/authored/save/economy/harbor and M1–M2 guard regression passed **367 tests in 143.52s**. `tools/preview_m4_interactions.py` passed 8 authored native screens × 3 audited sizes; it acquires the merchant through the lookout authority and saves/reloads an active deck visit before returning and resuming the voyage. Representative compact, medium and wide frames were inspected. This scripted evidence is not unaided human acceptance; keep the parent §16 player-run gate open. M1–M3 are preserved, while M5 combat outcomes and the combat-inclusive MVP are unfinished.
 
 This document consolidates the captain/crew/world/voyage discussion. Later plans will break it into implementable, verified tasks. It does not replace existing subsystem plans or declare their unfinished work complete.
 

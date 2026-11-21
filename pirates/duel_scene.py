@@ -12,6 +12,21 @@ import numpy as np
 from PIL import Image
 
 
+def pile_visible_actor_indices(actors, positions, now, *, blink_seconds=0.35):
+    """Alternate overlapping grounded fighters so each sprite remains identifiable."""
+    groups = {}
+    for index, (actor, position) in enumerate(zip(actors, positions)):
+        groups.setdefault(tuple(position), []).append((index, actor))
+    visible = set(range(min(len(actors), len(positions))))
+    for occupants in groups.values():
+        if len(occupants) < 2 or not any(actor.grounded for _, actor in occupants):
+            continue
+        active = int(max(0.0, now) / max(0.05, blink_seconds)) % len(occupants)
+        active_index = occupants[active][0]
+        visible.difference_update(index for index, _ in occupants if index != active_index)
+    return frozenset(visible)
+
+
 class ExchangePlayback:
     def __init__(self, frames, *, started=None, movement_seconds=.095, reduced_motion=False):
         self.frames = tuple(frames)
@@ -191,9 +206,14 @@ def render_scene(display, host, model, arena, positions, transition=None):
         display.actor_texture = sdl.upload_texture(np.asarray(scene.world._tileset[codepoint], dtype=np.uint8))
         display.actor_texture.blend_mode = BlendMode.BLEND
     screens = []
+    now = getattr(display, "pile_blink_now", None)
+    visible_pile_indices = pile_visible_actor_indices(
+        model.actors, positions, time.monotonic() if now is None else now)
     for index, (actor, pos) in enumerate(zip(model.actors, positions)):
         x, y = left+(pos[0]-camera[0]+ox)*tw, top+(pos[1]-camera[1]+oy)*th
         screens.append((x, y))
+        if index not in visible_pile_indices:
+            continue
         grounded = actor.grounded
         # Strong identity rings survive the shared captain sprite.
         sdl.draw_color = ((232, 184, 80, 255) if grounded else

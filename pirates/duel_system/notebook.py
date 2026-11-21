@@ -3,7 +3,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-from .ai import FullKey, PublicKey
+from .ai import FullKey, PublicKey, TACTICAL_CATEGORIES
 
 
 class PatternState(str, Enum):
@@ -125,7 +125,8 @@ class Notebook:
             return
         if not isinstance(key, PublicKey) or not isinstance(full_key, FullKey) or full_key.public != key:
             raise ValueError("Notebook public/full key mismatch")
-        if action not in self.config["ai"]["tie_order"] and action not in GROUNDED_ACTIONS:
+        if (action not in self.config["ai"]["tie_order"]
+                and action not in TACTICAL_CATEGORIES and action not in GROUNDED_ACTIONS):
             raise ValueError("Unknown notebook action")
         if not isinstance(tick, int) or tick < 0:
             raise ValueError("Invalid notebook tick")
@@ -179,7 +180,7 @@ class Notebook:
     @classmethod
     def from_data(cls, data, config):
         data = deepcopy(data)
-        if data.get("version") in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+        if data.get("version") in set(range(1, 27)):
             data["version"] = config["schema_version"]
         if data.get("version") != config["schema_version"]:
             raise ValueError("Unsupported notebook snapshot version")
@@ -198,7 +199,8 @@ class Notebook:
                     entry = NotebookEntry(**values)
                     if (sum(entry.counts.values()) != entry.total
                             or any(not isinstance(count, int) or count <= 0 for count in entry.counts.values())
-                            or any(action not in config["ai"]["tie_order"] and action not in GROUNDED_ACTIONS
+                            or any(action not in config["ai"]["tie_order"]
+                                   and action not in TACTICAL_CATEGORIES and action not in GROUNDED_ACTIONS
                                    for action in entry.counts)
                             or len(entry.full_keys) > config["notebook"]["fullkey_history"]
                             or any(key.public != entry.key for key in entry.full_keys)):

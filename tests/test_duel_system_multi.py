@@ -14,6 +14,7 @@ from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
 from pirates.duel_system.render_model import build_render_model, format_ascii
 from pirates.duel_system.exchange_log import format_exchange
+from pirates.duel_system.notebook import Notebook
 from test_duel_system_foundation import bare_fighter
 
 
@@ -71,6 +72,49 @@ def test_hidden_target_eye_state_does_not_leak_through_target_legality():
         outcomes.append(legality(state, player.id,
                                  Choice(ActionKind.LIGHT, Zone.EYE, target_id=target.id)))
     assert outcomes == ["Target is not currently visible"] * 2
+
+
+def test_unwitnessed_organ_outcome_does_not_enter_group_player_readout():
+    from pirates.duel_system.wounds import apply_wound
+
+    config = load_config()
+    config["group"]["vision_range"] = 2
+    player = bare_fighter("player", pos=(1, 1), team_id="player")
+    attacker = bare_fighter("attacker", pos=(6, 1), team_id="raiders")
+    target = bare_fighter("target", pos=(7, 1), team_id="raiders")
+    state = CombatState([player, attacker, target], config=config)
+    apply_wound(state, attacker, target, Zone.TORSO, Severity.DEEP, 50, 30,
+                damage_type="PIERCING", site="LUNG", side="LEFT")
+    wound = next(event for event in state.event_log if event.type == EventType.WOUND)
+    assert player.id not in wound.witnesses
+    model = DuelSession.from_state(state, guide_mode="off").render_model()
+    assert not any("lung" in line.lower() or "internal bleeding" in line.lower()
+                   for line in (*model.log, *model.full_log, *model.why))
+
+
+def test_group_action_advice_does_not_reveal_unobserved_exact_commitment_or_stagger():
+    from pirates.duel_system.engine import Choice, commit_action
+
+    projections = []
+    for committed in (False, True):
+        config = load_config()
+        config["group"]["vision_range"] = 1
+        player = bare_fighter("player", pos=(1, 1), team_id="player")
+        ally = bare_fighter("ally", pos=(1, 2), team_id="player")
+        enemy = bare_fighter("enemy", pos=(2, 1), team_id="raiders")
+        state = CombatState([player, ally, enemy], config=config)
+        if committed:
+            commit_action(state, enemy.id,
+                          Choice(ActionKind.HEAVY, Zone.TORSO, target_id=player.id))
+            enemy.stagger_until = state.tick + 12
+        enemy.pos = (7, 1)  # any exact choice/control is outside the player's sight
+        session = DuelSession.from_state(state, guide_mode="off")
+        model = session.render_model()
+        projections.append((tuple((option.label, option.assessment, option.details)
+                                  for option in model.actions),
+                            model.enemy_opportunity, model.enemy_response_summary))
+
+    assert projections[0] == projections[1]
 
 
 def test_simultaneous_contested_move_blocks_all_claimants_without_id_priority():
@@ -162,7 +206,7 @@ def test_v6_snapshot_migration_adds_team_and_target_defaults_without_changing_de
     old["config"].pop("group", None)
 
     restored = CombatState.from_data(old)
-    assert restored.config["schema_version"] == 18
+    assert restored.config["schema_version"] == 27
     assert restored.fighters[0].action.end_tick == deadline
     assert restored.fighters[0].team_id != restored.fighters[1].team_id
     assert restored.fighters[0].action.target_id is None
@@ -193,7 +237,7 @@ def test_v6_session_migration_preserves_active_path_deadlines_and_replay():
     expected_path = deepcopy(session.player.action.path)
 
     restored, replay = DuelSession.from_data(old), DuelSession.from_data(old)
-    assert restored.state.config["schema_version"] == 18
+    assert restored.state.config["schema_version"] == 27
     assert restored.player.action.end_tick == deadline
     assert restored.player.action.path == expected_path
     assert restored.exchange is not None and set(restored.exchange["participants"]) == {
@@ -536,6 +580,19 @@ def test_hearing_only_contact_is_coarse_and_expires_without_revealing_location()
     assert state.perceived_hostile_position(player.id) is None
     restored = CombatState.from_data(state.to_data())
     assert restored.fighter(player.id).contact_memory == {}
+
+
+def test_group_target_zone_forecasts_withhold_exact_enemy_armor_and_function_data():
+    state = encounter(
+        bare_fighter("player", pos=(1, 1), team_id="player"),
+        bare_fighter("near", pos=(2, 1), team_id="raiders"),
+        bare_fighter("far", pos=(5, 1), team_id="raiders"))
+
+    model = build_render_model(state, Notebook(load_config()).public_view(),
+                               zone_kind=ActionKind.LIGHT)
+
+    assert model.group_combat
+    assert all(not option.forecast for option in model.zones)
 
     no_contact = encounter(
         bare_fighter("player", pos=(1, 1), team_id="players"),

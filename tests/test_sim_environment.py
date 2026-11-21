@@ -51,6 +51,11 @@ def test_disease_spreads_causally_and_reduces_productivity():
     infected.environment.rules["disease_outbreak_basis_points_per_island_day"] = 10000
     infected.environment.rules["disease_spread_basis_points_per_day"] = 10000
     infected.environment.rules["disease_productivity_loss_permille"] = 500
+    infected.environment.rules["disease_person_exposure_basis_points_per_day"] = 10000
+    person_id = infected.characters.create_character(
+        infected, tier="BACKGROUND",
+        cause_event_id=infected.event_log.by_type("WORLD_GENERATED")[0].id,
+        role="civilian", island_id="isle_001")
     infected.run_until(24)
     source_island = "isle_001"
     source = infected.environment.outbreaks[source_island]
@@ -68,7 +73,53 @@ def test_disease_spreads_causally_and_reduces_productivity():
     healthy_day = next(event for event in control.event_log.by_type("ISLAND_ECONOMY_UPDATED")
                        if event.data["day"] == 2 and event.location == island_id)
     assert sick_day.data["production_milli"]["fish"] < healthy_day.data["production_milli"]["fish"]
+    cases = [event for event in infected.event_log.by_type("DISEASE_CASE")
+             if event.data["character_id"] == person_id]
+    assert cases
+    illness = next(event for event in infected.event_log.by_type("INJURY")
+                   if event.targets[0]["entity_id"] == person_id)
+    assert illness.caused_by == (cases[0].id,)
+    assert cases[0].caused_by == (source["event_id"],)
+    assert cases[0].event_class == "narrative"
     infected.event_log.validate_causality()
+    snapshot = infected.to_snapshot()
+    first = WorldState.from_snapshot(snapshot)
+    second = WorldState.from_snapshot(snapshot)
+    first.run_until(first.clock.tick + 24)
+    second.run_until(second.clock.tick + 24)
+    assert first.event_log.to_jsonl() == second.event_log.to_jsonl()
+    assert first.to_snapshot() == second.to_snapshot()
+
+
+def test_medicine_care_reduces_person_exposure_instead_of_forcing_a_case():
+    world = WorldState.create("disease-care-threshold", director_enabled=False)
+    generated = world.event_log.by_type("WORLD_GENERATED")[0].id
+    patient_id = world.characters.create_character(
+        world, tier="BACKGROUND", cause_event_id=generated,
+        role="civilian", island_id="isle_001")
+    medic_id = world.characters.create_character(
+        world, tier="BACKGROUND", cause_event_id=generated,
+        role="surgeon", island_id="isle_001")
+    crew = world.crew_ships.crews[sorted(world.crew_ships.crews)[0]]
+    crew["roles"]["surgeon"] = medic_id
+    world.entities[patient_id]["crew_id"] = crew["id"]
+    world.entities[medic_id]["stats"]["medicine"] = 10
+    world.environment.rules["disease_person_exposure_basis_points_per_day"] = 10000
+    world.environment.rules["disease_medical_care_reduction_basis_points_per_point"] = 1000
+    outbreak = {"event_id": generated, "cases": 1}
+
+    events = []
+    world.environment._expose_characters(world, "isle_001", outbreak, 1, events)
+    assert not any(event.data.get("character_id") == patient_id
+                   for event in world.event_log.by_type("DISEASE_CASE"))
+
+    world.environment.rules["disease_medical_care_reduction_basis_points_per_point"] = 0
+    world.environment._expose_characters(world, "isle_001", outbreak, 1, events)
+    case = next(event for event in world.event_log.by_type("DISEASE_CASE")
+                if event.data["character_id"] == patient_id)
+    assert case.data["medical_care"] == 10
+    assert case.data["exposure_basis_points"] == 10000
+    assert world.event_log.get(case.caused_by[0]).id == generated
 
 
 def test_storm_transition_damages_a_ship_and_is_logged():
@@ -87,11 +138,26 @@ def test_storm_transition_damages_a_ship_and_is_logged():
     storms = world.event_log.by_type("HURRICANE")
     damage = [event for event in world.event_log.by_type("SHIP_DAMAGED")
               if event.targets[0]["entity_id"] == ship_id]
+    supply_losses = [event for event in world.event_log.by_type("SHIP_SUPPLIES_LOST")
+                     if event.data["ship_id"] == ship_id]
     assert storms
     assert world.event_log.by_type("STORM_PATH_UPDATED")
     assert damage
+    assert supply_losses
+    assert world.event_log.get(supply_losses[0].caused_by[0]).type == "HURRICANE"
+    assert world.economy.ledger.sink_events
+    assert any(row["event_id"] == supply_losses[0].id
+               for row in world.economy.ledger.sink_events)
     assert world.entities[ship_id]["hull"]["current"] < before
-    world.to_snapshot()
+    world.economy.ledger.assert_balanced(world.economy)
+    snapshot = world.to_snapshot()
+    assert WorldState.from_snapshot(snapshot).to_snapshot() == snapshot
+    first = WorldState.from_snapshot(snapshot)
+    second = WorldState.from_snapshot(snapshot)
+    first.run_until(first.clock.tick + 24)
+    second.run_until(second.clock.tick + 24)
+    assert first.event_log.to_jsonl() == second.event_log.to_jsonl()
+    assert first.to_snapshot() == second.to_snapshot()
 
 
 def test_monsters_move_and_treasure_is_finite_and_snapshot_safe():
@@ -115,6 +181,11 @@ def test_monsters_move_and_treasure_is_finite_and_snapshot_safe():
     world.entities[character_id]["location"] = {"kind": "island", "id": treasure["island_id"]}
     event_id = world.environment.discover_treasure(
         world, treasure_id, character_id, caused_by=treasure["last_rumor_event_id"])
+    reward = world.entities[character_id]["wealth"]["assets"][-1]
+    assert reward == {"id": f"treasure_asset:{treasure_id}",
+                      "kind": "charted_relic_cache", "treasure_id": treasure_id,
+                      "source_event_id": event_id}
+    assert world.event_log.get(event_id).data["reward_transferred_to"] == character_id
     with pytest.raises(ValueError, match="already found"):
         world.environment.discover_treasure(
             world, treasure_id, character_id, caused_by=event_id)

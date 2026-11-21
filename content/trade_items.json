@@ -28,12 +28,13 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 210
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
       "dara",
-      "petra"
+      "petra",
+      "nella"
     ]
   },
   "beans": {
@@ -70,7 +71,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 210
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -107,7 +108,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 210
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -144,7 +145,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 210
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -187,7 +188,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 210
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -229,7 +230,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 200
-    },
+    , "freeport": 100},
     "market_buyers": [
       "bo",
       "dara"
@@ -264,7 +265,7 @@
     "regional_factors": {
       "verdant": 65,
       "cinder": 200
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "dara",
@@ -300,7 +301,7 @@
     "regional_factors": {
       "verdant": 65,
       "cinder": 200
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "dara",
@@ -334,7 +335,7 @@
     "regional_factors": {
       "verdant": 230,
       "cinder": 60
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "brann"
@@ -367,7 +368,7 @@
     "regional_factors": {
       "verdant": 230,
       "cinder": 60
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "brann"
@@ -386,7 +387,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 230
-    },
+    , "freeport": 55},
     "description": "Hardy blue kernels from Verdant's terrace farms. Cinder's furnace families buy it by the sack; islanders say the color comes from the first rain.",
     "market_stock": {
       "ada": 24
@@ -432,7 +433,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 230
-    },
+    , "freeport": 55},
     "description": "Orchard pears cured in spring salt. They keep through a long passage and are a welcome taste of land in Cinder's smoke-dark streets.",
     "market_stock": {
       "ada": 18
@@ -478,7 +479,7 @@
     "regional_factors": {
       "cinder": 55,
       "verdant": 230
-    },
+    , "freeport": 55},
     "description": "A little volcanic pepper goes a long way. Cinder cooks swear it warms the blood; Verdant's taverns prize the smoky red spice.",
     "market_stock": {
       "dara": 12
@@ -524,7 +525,7 @@
     "regional_factors": {
       "cinder": 55,
       "verdant": 230
-    },
+    , "freeport": 55},
     "description": "Dark ore crossed by a silver seam, dug from Cinder's old caldera tunnels. Smiths call it moon-touched; no unusual property is known.",
     "market_stock": {
       "brann": 16
@@ -568,7 +569,7 @@
     "regional_factors": {
       "cinder": 55,
       "verdant": 230
-    },
+    , "freeport": 55},
     "description": "Blue-green glass fused in lightning-struck rock. Verdant jewelers set it in pendants, while sailors quietly avoid keeping it near the compass.",
     "market_stock": {
       "brann": 12
@@ -612,7 +613,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 230
-    },
+    , "freeport": 55},
     "description": "Fine luminous thread gathered from forest lantern-moth cocoons. Cinder's clothiers weave it into festival trim; Verdant gatherers never take the last cocoon from a tree.",
     "market_stock": {
       "lina": 10
@@ -657,7 +658,7 @@
     "regional_factors": {
       "cinder": 55,
       "verdant": 230
-    },
+    , "freeport": 55},
     "description": "Pale ceramics pressed with branching reef patterns in Cinder's hot kilns. Verdant houses display the cups at weddings; breakage is not simulated.",
     "market_stock": {
       "petra": 10
@@ -702,7 +703,7 @@
     "regional_factors": {
       "verdant": 55,
       "cinder": 230
-    },
+    , "freeport": 55},
     "description": "Dense ink made from deep-water kelp and soot. Cinder's clerks favor its waterproof strokes, and Verdant fishers mark each bottle with the tide it was gathered under.",
     "market_stock": {
       "lina": 16
@@ -765,7 +766,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "bo",
       "brann"
@@ -798,7 +799,7 @@
     "regional_factors": {
       "verdant": 90,
       "cinder": 180
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "dara",
@@ -841,7 +842,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -881,7 +882,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -921,7 +922,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -961,7 +962,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -1001,7 +1002,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "ada",
       "bo",
@@ -1039,7 +1040,7 @@
     "regional_factors": {
       "verdant": 100,
       "cinder": 90
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "petra"
@@ -1074,7 +1075,7 @@
     "regional_factors": {
       "verdant": 100,
       "cinder": 90
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "petra"
@@ -1109,7 +1110,7 @@
     "regional_factors": {
       "verdant": 100,
       "cinder": 90
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "petra"
@@ -1125,7 +1126,7 @@
     "market_stock": {"lina": 6, "petra": 4},
     "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
     "production": {"method": "Assembled by a sailmaker for shipboard canvas and clothing repairs", "inputs": ["steel needles", "shears", "small wooden case"], "simulated": false},
-    "regional_factors": {"verdant": 100, "cinder": 110},
+    "regional_factors": {"verdant": 100, "cinder": 110, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "spring_water_refill": {
@@ -1147,7 +1148,7 @@
       "inputs": ["spring water", "porter delivery"],
       "simulated": false
     },
-    "regional_factors": {"verdant": 60, "cinder": 185},
+    "regional_factors": {"verdant": 60, "cinder": 185, "freeport": 100},
     "market_buyers": ["bo", "dara", "petra"]
   },
   "firewood": {
@@ -1165,7 +1166,7 @@
       {"port": "cinder", "merchant": "brann"}
     ],
     "production": {"method": "Seasoned split timber bundled for shipboard cooking", "inputs": ["dry timber", "woodcutter labor"], "simulated": false},
-    "regional_factors": {"verdant": 65, "cinder": 150},
+    "regional_factors": {"verdant": 65, "cinder": 150, "freeport": 100},
     "market_buyers": ["ada", "bo", "lina", "brann", "petra"]
   },
   "salt": {
@@ -1180,7 +1181,7 @@
     "market_stock": {"bo": 18, "dara": 10},
     "found_at": [{"port": "verdant", "merchant": "bo"}, {"port": "cinder", "merchant": "dara"}],
     "production": {"method": "Evaporated from island seawater and screened for coarse curing", "inputs": ["salt pans", "sun and wind", "labor"], "simulated": false},
-    "regional_factors": {"verdant": 60, "cinder": 145},
+    "regional_factors": {"verdant": 60, "cinder": 145, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "canvas_trousers": {
@@ -1206,7 +1207,7 @@
       "inputs": ["canvas cloth", "tailor labor"],
       "simulated": false
     },
-    "regional_factors": {"verdant": 100, "cinder": 110},
+    "regional_factors": {"verdant": 100, "cinder": 110, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "wool_cap": {
@@ -1232,7 +1233,7 @@
       "inputs": ["washed wool", "knitting labor"],
       "simulated": false
     },
-    "regional_factors": {"verdant": 100, "cinder": 110},
+    "regional_factors": {"verdant": 100, "cinder": 110, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "cutlass": {
@@ -1264,7 +1265,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "brann"
@@ -1301,7 +1302,7 @@
     "regional_factors": {
       "verdant": 200,
       "cinder": 65
-    },
+    , "freeport": 100},
     "market_buyers": [
       "lina",
       "brann"
@@ -1337,7 +1338,7 @@
     "regional_factors": {
       "verdant": 115,
       "cinder": 90
-    },
+    , "freeport": 100},
     "market_buyers": [
       "petra",
       "brann"
@@ -1355,7 +1356,7 @@
     "market_stock": {"petra": 20},
     "found_at": [{"port": "cinder", "merchant": "petra"}],
     "production": {"method": "Cut and sterilize linen dressing strips", "inputs": ["clean linen", "sterilization labor"], "simulated": false},
-    "regional_factors": {"verdant": 115, "cinder": 90},
+    "regional_factors": {"verdant": 115, "cinder": 90, "freeport": 100},
     "market_buyers": ["petra", "brann"]
   },
   "soap_bar": {
@@ -1370,7 +1371,7 @@
     "market_stock": {"lina": 18, "petra": 12},
     "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
     "production": {"method": "Boiled from rendered fat and island lye", "inputs": ["fat", "lye", "soap-boiler labor"], "simulated": false},
-    "regional_factors": {"verdant": 100, "cinder": 110},
+    "regional_factors": {"verdant": 100, "cinder": 110, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "ship_lantern": {
@@ -1385,7 +1386,7 @@
     "market_stock": {"petra": 8, "brann": 6},
     "found_at": [{"port": "cinder", "merchant": "petra"}, {"port": "cinder", "merchant": "brann"}],
     "production": {"method": "Sheet brass and glass assembled into an enclosed ship lantern", "inputs": ["brass", "glass", "lamp wick", "glazier labor"], "simulated": false},
-    "regional_factors": {"verdant": 120, "cinder": 90},
+    "regional_factors": {"verdant": 120, "cinder": 90, "freeport": 100},
     "market_buyers": ["petra", "brann"]
   },
   "lamp_oil": {
@@ -1400,7 +1401,7 @@
     "market_stock": {"petra": 16, "lina": 12},
     "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
     "production": {"method": "Filtered rendered oil prepared for enclosed lamps", "inputs": ["rendered oil", "filter cloth", "bottling labor"], "simulated": false},
-    "regional_factors": {"verdant": 100, "cinder": 105},
+    "regional_factors": {"verdant": 100, "cinder": 105, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "candles": {
@@ -1415,7 +1416,7 @@
     "market_stock": {"lina": 16, "petra": 10},
     "found_at": [{"port": "verdant", "merchant": "lina"}, {"port": "cinder", "merchant": "petra"}],
     "production": {"method": "Beeswax poured around braided wicks", "inputs": ["beeswax", "cotton wick", "candle-maker labor"], "simulated": false},
-    "regional_factors": {"verdant": 100, "cinder": 110},
+    "regional_factors": {"verdant": 100, "cinder": 110, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "rice": {
@@ -1430,7 +1431,7 @@
     "market_stock": {"ada": 18},
     "found_at": [{"port": "verdant", "merchant": "ada"}],
     "production": {"method": "Harvested, dried and milled on the lowland farms", "inputs": ["rice paddy", "field labor", "milling"], "simulated": false},
-    "regional_factors": {"verdant": 60, "cinder": 190},
+    "regional_factors": {"verdant": 60, "cinder": 190, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "oats": {
@@ -1445,7 +1446,7 @@
     "market_stock": {"ada": 20},
     "found_at": [{"port": "verdant", "merchant": "ada"}],
     "production": {"method": "Cut, rolled and dried from hardy island oats", "inputs": ["oat grain", "field labor", "mill work"], "simulated": false},
-    "regional_factors": {"verdant": 65, "cinder": 175},
+    "regional_factors": {"verdant": 65, "cinder": 175, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "potatoes": {
@@ -1460,7 +1461,7 @@
     "market_stock": {"ada": 24},
     "found_at": [{"port": "verdant", "merchant": "ada"}],
     "production": {"method": "Dug and sorted from the island's cool soil", "inputs": ["seed potatoes", "field labor"], "simulated": false},
-    "regional_factors": {"verdant": 55, "cinder": 205},
+    "regional_factors": {"verdant": 55, "cinder": 205, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "onions": {
@@ -1475,7 +1476,7 @@
     "market_stock": {"ada": 15},
     "found_at": [{"port": "verdant", "merchant": "ada"}],
     "production": {"method": "Cured and braided for storage", "inputs": ["onion bulbs", "field labor"], "simulated": false},
-    "regional_factors": {"verdant": 60, "cinder": 180},
+    "regional_factors": {"verdant": 60, "cinder": 180, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "salted_pork": {
@@ -1490,7 +1491,7 @@
     "market_stock": {"bo": 12},
     "found_at": [{"port": "verdant", "merchant": "bo"}],
     "production": {"method": "Pork rubbed with salt and air-cured in a cool shed", "inputs": ["pork", "salt", "curing labor"], "simulated": false},
-    "regional_factors": {"verdant": 70, "cinder": 165},
+    "regional_factors": {"verdant": 70, "cinder": 165, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "hard_cheese": {
@@ -1505,7 +1506,7 @@
     "market_stock": {"bo": 10},
     "found_at": [{"port": "verdant", "merchant": "bo"}],
     "production": {"method": "Pressed, salted and aged from island milk", "inputs": ["milk", "salt", "dairy labor"], "simulated": false},
-    "regional_factors": {"verdant": 75, "cinder": 150},
+    "regional_factors": {"verdant": 75, "cinder": 150, "freeport": 100},
     "market_buyers": ["ada", "bo", "dara", "petra"]
   },
   "waterskin": {
@@ -1519,7 +1520,7 @@
     "market_stock": {"lina": 12},
     "found_at": [{"port": "verdant", "merchant": "lina"}],
     "production": {"method": "Cut, waxed and stitched from treated hide", "inputs": ["leather", "wax", "leatherworker labor"], "simulated": false},
-    "regional_factors": {"verdant": 100, "cinder": 120},
+    "regional_factors": {"verdant": 100, "cinder": 120, "freeport": 100},
     "market_buyers": ["lina", "petra"]
   },
   "water_barrel": {
@@ -1533,7 +1534,54 @@
     "market_stock": {"bo": 6},
     "found_at": [{"port": "verdant", "merchant": "bo"}],
     "production": {"method": "Coopered from fitted staves and sealed with pitch", "inputs": ["oak staves", "iron hoops", "cooper labor"], "simulated": false},
-    "regional_factors": {"verdant": 100, "cinder": 135},
+    "regional_factors": {"verdant": 100, "cinder": 135, "freeport": 100},
     "market_buyers": ["bo", "lina", "petra"]
+  },
+  "sea_glass_beads": {
+    "name": "Polished sea-glass beads",
+    "category": "craft",
+    "base_price": 32,
+    "weight_g": 1200,
+    "bulk_ml": 2500,
+    "description": "A small lot of polished sea glass; a sale good, not a ship fitting.",
+    "market_stock": {"nella": 12},
+    "found_at": [{"port": "freeport", "merchant": "nella"}],
+    "production": {"method": "Collected from the outer shoals and polished by local lapidaries", "inputs": ["shore glass", "polishing labor"], "simulated": false},
+    "regional_factors": {"verdant": 190, "cinder": 175, "freeport": 55},
+    "origin": "freeport",
+    "demand_ports": ["verdant", "cinder"],
+    "market_buyers": ["lina", "petra", "nella"]
+  },
+  "chart_ink": {
+    "name": "Deepwater chart ink",
+    "category": "tools",
+    "base_price": 27,
+    "weight_g": 500,
+    "bulk_ml": 700,
+    "description": "A sealed bottle of durable chartmaker's ink; a regional sale good, not a navigation bonus by itself.",
+    "market_stock": {"nella": 10},
+    "found_at": [{"port": "freeport", "merchant": "nella"}],
+    "production": {"method": "Mixed and bottled by Freeport chartmakers", "inputs": ["lampblack", "binding gum", "bottling labor"], "simulated": false},
+    "regional_factors": {"verdant": 180, "cinder": 165, "freeport": 55},
+    "origin": "freeport",
+    "demand_ports": ["verdant", "cinder"],
+    "market_buyers": ["ada", "bo", "lina", "brann", "petra", "nella"]
+  },
+  "salted_fruit": {
+    "name": "Jar of salted fruit",
+    "category": "food",
+    "base_price": 19,
+    "weight_g": 2000,
+    "bulk_ml": 3000,
+    "supply": "salted_fruit_g",
+    "yield": 2000,
+    "description": "Two kilograms of ready-to-eat salted fruit; a useful ship ration and a Freeport export.",
+    "market_stock": {"nella": 14},
+    "found_at": [{"port": "freeport", "merchant": "nella"}],
+    "production": {"method": "Preserved by small Freeport provisioners", "inputs": ["fruit", "salt", "preserving labor"], "simulated": false},
+    "regional_factors": {"verdant": 175, "cinder": 190, "freeport": 55},
+    "origin": "freeport",
+    "demand_ports": ["verdant", "cinder"],
+    "market_buyers": ["ada", "bo", "dara", "petra", "nella"]
   }
 }

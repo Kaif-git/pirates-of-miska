@@ -1,6 +1,6 @@
 """Single-deck physical construction for connected floor and interior barriers.
 
-Orders use carpentry labor and the existing exclusive hauling/job lifecycle.
+Orders use the existing repair labor and exclusive hauling/job lifecycle.
 Exterior-hull openings and moving installed stations are deliberately gated.
 """
 from collections import deque
@@ -208,6 +208,24 @@ def validate_work_access(world, target, reachable):
         raise ValueError("No reachable adjacent work site for this construction order")
 
 
+def _site_key(wx, wy, z):
+    return f"construction:{wx},{wy}:{z}"
+
+
+def _active_order_at(world, wx, wy, z):
+    return any(job.construction and job.state not in ("done", "cancelled")
+               and tuple(job.target[:2]) == (wx, wy)
+               and job.construction.get("z", 0) == z
+               for job in world.ship.jobs)
+
+
+def _site_cooldown_keys(wx, wy, z, kind):
+    # Older blueprint saves keyed cooldowns by component kind. Honor those
+    # alongside the shared site key so a migration does not bypass the delay.
+    prefix = f"construction:{wx},{wy}"
+    return {prefix, f"{prefix}:{z}", f"{prefix}:{kind}", f"{prefix}:{kind}:{z}"}
+
+
 def queue(world, target, action, kind="wall", z=None):
     target = tuple(target)
     deck = target[2] if len(target) == 3 else (world.active_deck if z is None else z)
@@ -235,15 +253,19 @@ def queue(world, target, action, kind="wall", z=None):
                             for start in starts)
         if not reachable:
             raise ValueError("No stair-connected work route to this deck")
-    key = f"construction:{target[0]},{target[1]}:{deck}"
-    if any(j.key == key and j.state not in ("done", "cancelled") for j in world.ship.jobs):
+    wx, wy = target[0], target[1]
+    key = _site_key(wx, wy, deck)
+    if _active_order_at(world, wx, wy, deck):
         raise ValueError("A construction order already exists here")
+    if any(world.ship.cooldowns.get(old_key, 0) > world.ship.seconds
+           for old_key in _site_cooldown_keys(wx, wy, deck, actual_kind)):
+        raise ValueError("This site is on construction cancellation cooldown")
     job = world.ship.add_job(key, "repair", target, priority=2, work=25 if actual_kind == "floor" else 30)
     if job is None:
         raise ValueError("This site is on cancellation cooldown")
     job.construction = plan
     job.construction["z"] = deck
-    world.message(f"Queued {action} {plan['kind']} at {target}; carpentry labor required.")
+    world.message(f"Queued {action} {plan['kind']} at {target}; Patch hull (repair) labor required.")
     return job
 
 
@@ -367,13 +389,17 @@ def queue_blueprint(world):
                  + [row for row in effective if id(row) in beam_ids]
                  + [row for row in effective if id(row) not in floor_ids | beam_ids])
     jobs = []
-    keys = [f"construction:{row['x'] + ORIGIN[0]},{row['y'] + ORIGIN[1]}:{row['kind']}:{row['z']}"
+    keys = [_site_key(row["x"] + ORIGIN[0], row["y"] + ORIGIN[1], row["z"])
             for row in effective]
-    for key in keys:
-        if world.ship.cooldowns.get(key, 0) > world.ship.seconds:
+    if len(keys) != len(set(keys)):
+        raise ValueError("Blueprint contains multiple construction orders for one site")
+    for row in effective:
+        wx, wy = row["x"] + ORIGIN[0], row["y"] + ORIGIN[1]
+        if any(world.ship.cooldowns.get(old_key, 0) > world.ship.seconds
+               for old_key in _site_cooldown_keys(wx, wy, row["z"], row["kind"])):
             raise ValueError("A blueprint site is on cancellation cooldown")
-        if any(j.key == key and j.state not in ("done", "cancelled") for j in world.ship.jobs):
-            raise ValueError("A blueprint site already has an active order")
+        if _active_order_at(world, wx, wy, row["z"]):
+            raise ValueError("A construction order already exists here")
     for row in effective:
         target = row["x"] + ORIGIN[0], row["y"] + ORIGIN[1]
         plan = {"action": row["action"], "kind": row["kind"], "component_id": None,
@@ -382,7 +408,7 @@ def queue_blueprint(world):
             component = next((c for c in world.ship_model.at(row["x"], row["y"], row["z"])
                               if c.kind == row["kind"]), None)
             plan["component_id"] = component.id
-        job = world.ship.add_job(f"construction:{target[0]},{target[1]}:{row['kind']}:{row['z']}", "repair", target,
+        job = world.ship.add_job(_site_key(target[0], target[1], row["z"]), "repair", target,
                                  priority=2, work=25 if row["kind"] == "floor" else 30)
         if job is None:
             raise ValueError("A blueprint site is on cancellation cooldown")

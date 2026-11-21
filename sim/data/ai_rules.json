@@ -24,6 +24,10 @@
     "protect_entity": ["locate_protected_target", "reach_target", "defend_target"],
     "reach_legend_tier": ["build_reputation", "survive_major_trial", "earn_recognition"]
   },
+  "plan_rules": {
+    "treasure_min_cunning": 20,
+    "treasure_min_hp": 25
+  },
   "wake_event_types": [
     "VOYAGE_ARRIVED", "ROUTE_HAZARD", "SHIP_DAMAGED", "ENCOUNTER_DETECTED",
     "ENCOUNTER_RESOLVED", "COMBAT_MEMORY_HOOK", "PRISONER_FATE",

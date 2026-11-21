@@ -1,4 +1,4 @@
-"""Two regional economies, real merchants, finite goods and useful crew kit.
+"""Three regional economies, real merchants, finite goods and useful crew kit.
 
 Market porters deliver purchases to trade cargo for a disclosed fee/time cost.
 Coastal passage is an explicit travel abstraction, not a naval handling model.
@@ -28,7 +28,9 @@ PORTS = {
     "verdant": {"name": "Verdant Cay", "tagline": "Orchards, bean fields, fresh springs and timber yards.",
                 "description": "Rich soil feeds the archipelago, but every axe and nail arrives by sea."},
     "cinder": {"name": "Cinder Quay", "tagline": "Foundries, smoke-black stone and crowded workshops.",
-               "description": "Iron and tools leave the furnaces daily. Thin volcanic soil cannot feed the workers."},
+                "description": "Iron and tools leave the furnaces daily. Thin volcanic soil cannot feed the workers."},
+    "freeport": {"name": "Freeport Exchange", "tagline": "Independent chandlers, chartmakers and island factors meet at an open anchorage.",
+                 "description": "Small firms trade across the archipelago. Merchants quote finite local stock; distant prices and private ship cargo remain unknown."},
 }
 MERCHANTS = {
     "ada": {"name": "Ada Reed", "title": "Growers' cooperative", "port": "verdant", "at": (30, 21),
@@ -42,7 +44,9 @@ MERCHANTS = {
     "brann": {"name": "Brann Ash", "title": "Smith and arms maker", "port": "cinder", "at": (35, 27),
                "dialogue": ["Iron, sharp steel and sound tools. The farms need all three.", "My tool rolls help carpenters finish sooner. Don't mistake a loaded pistol for a trained sailor."]},
     "petra": {"name": "Petra Bell", "title": "Outfitter and tinsmith", "port": "cinder", "at": (25, 28),
-              "dialogue": ["Work kit, not ornaments: buckets, cook pots, boots and coats.", "I need imported cloth. My customers need the food that arrives on your deck."]},
+               "dialogue": ["Work kit, not ornaments: buckets, cook pots, boots and coats.", "I need imported cloth. My customers need the food that arrives on your deck."]},
+    "nella": {"name": "Nella Vale", "title": "Freeport exchange factor", "port": "freeport", "at": (30, 21),
+               "dialogue": ["A chart is only as useful as the ink and the lookout who trusts it.", "We buy and sell small lots from the islands. Ask here; no distant market price is a promise."]},
 }
 for _merchant in MERCHANTS.values():
     _merchant["stock"] = {}
@@ -53,6 +57,8 @@ for _item_id, _item in CATALOG.items():
     for _merchant_id in _item.get("market_buyers", []):
         MERCHANTS[_merchant_id]["accepts"].add(_item["category"])
 SLOTS = ("tool", "clothing", "coat", "trousers", "headwear", "feet", "weapon")
+LEGACY_MERCHANT_IDS = frozenset(("ada", "bo", "lina", "dara", "brann", "petra"))
+LEGACY_PORT_IDS = frozenset(("verdant", "cinder"))
 DELIVERY_FEE = RULES["fees"]["delivery_order"]
 PASSAGE_FEE = RULES["fees"]["coastal_passage"]
 TRADE_MASS_G = 250000
@@ -189,7 +195,7 @@ class Merchant:
 
 def harbor_tiles(port):
     tiles = np.full((64, 45), T.WATER, dtype=np.int8)
-    tiles[8:56, 8:45] = T.GRASS if port == "verdant" else T.FLOOR
+    tiles[8:56, 8:45] = T.GRASS if port in ("verdant", "freeport") else T.FLOOR
     tiles[10:54, 40:45] = T.ROAD
     tiles[22:26, 12:45] = T.ROAD
     tiles[24:34, 24:38] = T.ROAD
@@ -202,10 +208,15 @@ def harbor_tiles(port):
         tiles[31:38, 12:19] = T.FARM
         for x, y in ((12, 12), (15, 30), (21, 40), (36, 15), (35, 47)):
             tiles[y, x] = T.TREE
-    else:
+    elif port == "cinder":
         for x, y in ((14, 33), (17, 33), (14, 36), (17, 36)):
             tiles[y, x] = T.HEARTH
         tiles[12:18, 35:38] = T.WALL_STONE
+    else:
+        # A paved exchange plaza distinguishes this harbor from both the farms
+        # and the foundry yards without adding a land-exploration subsystem.
+        tiles[27:36, 12:39] = T.FLOOR
+        tiles[29:32, 12:39] = T.ROAD
     # Market fronts are stable, approachable landmarks on both islands.
     for merchant in MERCHANTS.values():
         if merchant["port"] == port:
@@ -225,7 +236,9 @@ def build_port(world):
     for merchant in world.economy.merchants():
         world.objects_at.setdefault((merchant.x, merchant.y), []).append({
             "name": f"{merchant.name} — {MERCHANTS[merchant.id]['title']}", "port_object": True})
-    world.objects_at.setdefault((42, 23), []).append({"name": "Harbor office: coastal passage and island guide", "port_object": True})
+    office_name = ("Harbor guide: routes and local merchants" if getattr(world, "scenario_id", None) == "lawful-trader-mvp"
+                   else "Harbor office: coastal passage and island guide")
+    world.objects_at.setdefault((42, 23), []).append({"name": office_name, "port_object": True})
 
 
 class Economy:
@@ -243,6 +256,7 @@ class Economy:
         self.markets = {key: {"stock": dict(m["stock"]), "money": RULES["markets"]["initial_merchant_funds"]}
                         for key, m in MERCHANTS.items()}
         self.history = []
+        self.market_observations = {}
         self.trader_reputation = 0
         self.contracts = []
         self.drilling = None  # Synchronous drill session; never background simulation.
@@ -253,6 +267,28 @@ class Economy:
 
     def merchants(self):
         return [Merchant(key, m["name"], *m["at"]) for key, m in MERCHANTS.items() if m["port"] == self.port]
+
+    def observe_market(self, world, mid):
+        """Remember the quote sheet the captain explicitly inspected in person."""
+        self.require_merchant(world, mid)
+        market = self.markets[mid]
+        goods = {
+            item_id: {
+                "stock": stock,
+                "ask": self.price(mid, item_id, True, stock=stock),
+                "bid": self.price(mid, item_id, False, stock=stock),
+            }
+            for item_id, stock in sorted(market["stock"].items())
+        }
+        observation = {
+            "source": mid,
+            "port": MERCHANTS[mid]["port"],
+            "observed_at_ticks": world.clock.total_ticks,
+            "merchant_funds": market["money"],
+            "goods": goods,
+        }
+        self.market_observations[mid] = observation
+        return deepcopy(observation)
 
     def record(self, text):
         self.history = (self.history + [text])[-40:]
@@ -530,24 +566,13 @@ class Economy:
         amount = item["yield"] * quantity
         # Respect physical pile capacity and space needed by outstanding
         # transfers / returned reservations from the spatial-storage model.
-        from pirates.ship_storage import bundle_mass
         storage = world.ship.storage
         resource = item["supply"]
         pid = "water" if resource == "clean_water_ml" else "hold"
         if not storage.available(pid, world.fixtures):
             raise ValueError("Destination supply fixture is being relocated")
         incoming = {resource: amount}
-        pending = [j.transfer | {"delivered": j.state in ("done", "cancelled")}
-                   for j in world.ship.jobs if j.transfer]
-        return_mass = sum(bundle_mass(row["bundle"]) for j in world.ship.jobs
-                          if j.state not in ("done", "cancelled") for row in j.supply_plan
-                          if row["pile"] == pid and not row["returned"])
-        transfer_mass = sum(bundle_mass(j.transfer["bundle"]) for j in world.ship.jobs
-                            if j.transfer and j.state not in ("done", "cancelled")
-                            and j.transfer["destination"] == pid)
-        pile = storage.piles[pid]
-        if (not storage.reserve_capacity(pid, incoming, pending)
-                or bundle_mass(pile.contents) + bundle_mass(incoming) + return_mass + transfer_mass > pile.capacity_kg):
+        if not storage.reserve_capacity(pid, incoming, world.ship.jobs):
             raise ValueError("Destination stockpile lacks unreserved capacity")
         world.ship.stores[resource] += amount
         if resource == "fruit_g":
@@ -714,6 +739,8 @@ class Economy:
                            if len(at) == 2 and at[0] < 45}}
 
     def travel(self, world, destination):
+        if getattr(world, "scenario_id", None) == "lawful-trader-mvp":
+            raise ValueError("Use the sea chart to sail; instant coastal passage is unavailable in this scenario")
         if destination not in PORTS or destination == self.port:
             raise ValueError("Choose the other island")
         if not self.near_passage(world):
@@ -751,7 +778,8 @@ class Economy:
                 "cargo": deepcopy(self.cargo), "gear": deepcopy(self.gear),
                 "gear_condition": deepcopy(self.gear_condition), "gear_ids": deepcopy(self.gear_ids),
                 "next_gear_id": self.next_gear_id, "weapon_xp": dict(self.weapon_xp),
-                "last_day": self.last_day, "markets": deepcopy(self.markets), "history": list(self.history), "harbors": harbors,
+                "last_day": self.last_day, "markets": deepcopy(self.markets), "history": list(self.history),
+                "market_observations": deepcopy(self.market_observations), "harbors": harbors,
                 "recruitment": self.recruitment.snapshot(), "employment": self.employment.snapshot(),
                 "trader_reputation": self.trader_reputation, "contracts": deepcopy(self.contracts)}
 
@@ -768,7 +796,9 @@ class Economy:
             if not isinstance(value, dict) or any(k not in CATALOG for k in value):
                 raise ValueError("Invalid item catalogue reference")
             return {k: integer(v, 0, 100000) for k, v in value.items()}
-        if data["port"] not in PORTS or set(data["markets"]) != set(MERCHANTS):
+        saved_markets = data.get("markets")
+        if (data["port"] not in PORTS or not isinstance(saved_markets, dict)
+                or set(saved_markets) not in (set(MERCHANTS), LEGACY_MERCHANT_IDS)):
             raise ValueError("Invalid island / merchant roster")
         economy.port = data["port"]
         economy.money = integer(data["money"])
@@ -819,7 +849,7 @@ class Economy:
         economy.weapon_xp = {sid: integer(value) for sid, value in data["weapon_xp"].items()}
         if any(sid not in identities for sid in economy.weapon_xp):
             raise ValueError("Invalid weapon practice owner")
-        for mid, market in data["markets"].items():
+        for mid, market in saved_markets.items():
             stock = dict(MERCHANTS[mid]["stock"])
             stock.update(goods(market["stock"]))
             if any(mid not in CATALOG[k]["market_buyers"] for k in stock):
@@ -828,6 +858,35 @@ class Economy:
         economy.history = data["history"]
         if not isinstance(economy.history, list) or len(economy.history) > 40 or any(not isinstance(v, str) for v in economy.history):
             raise ValueError("Invalid trade history")
+        observations = data.get("market_observations", {})
+        if not isinstance(observations, dict) or len(observations) > len(MERCHANTS):
+            raise ValueError("Invalid commercial observation ledger")
+        economy.market_observations = {}
+        for mid, observation in observations.items():
+            if (mid not in MERCHANTS or not isinstance(observation, dict)
+                    or set(observation) != {"source", "port", "observed_at_ticks", "merchant_funds", "goods"}
+                    or observation["source"] != mid or observation["port"] != MERCHANTS[mid]["port"]):
+                raise ValueError("Invalid commercial observation source")
+            observed_at = integer(observation["observed_at_ticks"], 0, world.clock.total_ticks)
+            funds = integer(observation["merchant_funds"])
+            goods_rows = observation["goods"]
+            if not isinstance(goods_rows, dict) or len(goods_rows) > len(CATALOG):
+                raise ValueError("Invalid commercial observation goods")
+            clean_goods = {}
+            for item_id, quote in goods_rows.items():
+                if (item_id not in CATALOG or mid not in CATALOG[item_id]["market_buyers"]
+                        or not isinstance(quote, dict) or set(quote) != {"stock", "ask", "bid"}):
+                    raise ValueError("Invalid commercial observation quote")
+                clean_goods[item_id] = {
+                    "stock": integer(quote["stock"], 0, 100000),
+                    "ask": integer(quote["ask"], 1, 10**9),
+                    "bid": integer(quote["bid"], 1, 10**9),
+                }
+            economy.market_observations[mid] = {
+                "source": mid, "port": MERCHANTS[mid]["port"],
+                "observed_at_ticks": observed_at, "merchant_funds": funds,
+                "goods": clean_goods,
+            }
         economy.trader_reputation = integer(data.get("trader_reputation", 0), 0, RULES["contracts"]["max_reputation"])
         rows = data.get("contracts", [])
         if not isinstance(rows, list) or len(rows) > RULES["contracts"]["ledger_limit"]:
@@ -867,7 +926,11 @@ class Economy:
             economy.contracts.append(deepcopy(row))
         if sum(row["status"] == "active" for row in economy.contracts) > MAX_ACTIVE_CONTRACTS:
             raise ValueError("Too many active merchant contracts")
-        economy.harbors = data["harbors"]
+        saved_harbors = data.get("harbors")
+        if (not isinstance(saved_harbors, dict)
+                or set(saved_harbors) not in (set(PORTS), LEGACY_PORT_IDS)):
+            raise ValueError("Invalid harbor memories")
+        economy.harbors.update(deepcopy(saved_harbors))
         economy.recruitment = RecruitmentPool.restore(data.get("recruitment"))
         recruited = {f"hire:{candidate_id}" for candidate_id, status in economy.recruitment.statuses.items()
                      if status == "recruited"}
@@ -883,8 +946,6 @@ class Economy:
                 raise ValueError("Active employment agreement is not on the roster")
             if agreement["status"] == "closed" and sailor_id not in former:
                 raise ValueError("Closed employment agreement is still on the roster")
-        if not isinstance(economy.harbors, dict) or set(economy.harbors) != set(PORTS):
-            raise ValueError("Invalid harbor memories")
         for port, harbor in economy.harbors.items():
             terrain = harbor_tiles(port)
             for field in ("explored", "doors"):

@@ -88,7 +88,7 @@ Ordinary routes therefore produce roughly one contact, all inside the first eigh
 
 ### Range and movement
 
-The overworld is strategic: `map_coordinate` interpolates a chart leg (`pirates/voyage.py:191-203`) and there is no relative bearing, speed or separation against a sighted vessel. `step_second` moves the player's ship, not the contact. Therefore approach/evasion cannot reuse physics as if it existed. Release one adds an explicitly encounter-local two-stage range (`distant` → `close`) with time costs and deterministic outcomes; it makes no continuous-range or tactical-sailing claim. Shared range/position with the separate naval work remains an open integration item.
+At release-one audit time, the overworld was strategic: `map_coordinate` interpolated a chart leg and no relative bearing/speed/separation was shared with a sighted vessel. The M4 follow-up now interpolates NPCs on chart lanes and can attach a sampled lookout bearing/range/course observation; this is chart-scale evidence only, not tactical geometry or a replacement for the encounter-local `distant` → `close` approach/evasion checks. See `M4-SEA-TRAFFIC-IMPLEMENTATION-PLAN.md` for the active integration, repeat-contact and interaction work; no combat geometry is implied.
 
 ### Faction and relationship authority
 

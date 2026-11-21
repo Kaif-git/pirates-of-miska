@@ -185,6 +185,7 @@ def test_generated_sea_chart_hides_unconfirmed_rival_positions():
         "crew": ship["crew"], "condition": ship["condition"],
     }
     ship["node"] = "deepwater" if known_node != "deepwater" else "shoals"
+    ship["motion"] = None
     rows = sea_map_rows(world)
     assert world.npcs.ships[0]["name"] in "\n".join(rows)
     assert f"last seen at {SEA_NODES[known_node]['name']}" in "\n".join(rows)

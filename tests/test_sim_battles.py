@@ -3,7 +3,7 @@ import copy
 import pytest
 
 from sim.chronicler import Chronicler
-from sim.core.world import WorldState
+from sim.core.world import SNAPSHOT_SCHEMA_VERSION, WorldState
 from sim.systems.battles import BattleSystem, _validate_data
 
 
@@ -56,6 +56,26 @@ def _hostile_encounter(world):
     )
 
 
+def test_set_piece_candidate_blockers_are_reported_without_changing_snapshot_state():
+    world = WorldState.create("set-piece-opportunity-report")
+    cause = world.event_log.by_type("WORLD_GENERATED")[0]
+    encounter = world.event_log.append(
+        tick=world.clock.tick, event_type="ENCOUNTER_RESOLVED",
+        location=next(iter(world.geography.islands)),
+        data={"outcome": "combat_resolved", "ships": ["missing-a", "missing-b"]},
+        caused_by=[cause.id], causes_tags=["set_piece_blocker_fixture"], magnitude=0.1)
+    before = copy.deepcopy(world.battles.snapshot())
+
+    assert world.battles._maybe_resolve_set_piece(world, encounter, day=1) is None
+
+    assert world.battles.opportunity_observations == [{
+        "tick": encounter.tick, "day": 1, "encounter_event_id": encounter.id,
+        "reason": "encounter_missing_two_active_ships",
+        "ships": ["missing-a", "missing-b"],
+    }]
+    assert world.battles.snapshot() == before
+
+
 def test_battle_catalog_is_data_driven_and_strictly_validated():
     data = BattleSystem.create().data
     _validate_data(data)
@@ -63,6 +83,14 @@ def test_battle_catalog_is_data_driven_and_strictly_validated():
     invalid["rules"]["rounds"] = 0
     with pytest.raises(ValueError, match="battle rules"):
         _validate_data(invalid)
+    invalid_doctrine = copy.deepcopy(data)
+    invalid_doctrine["doctrines"]["balanced"]["power_permille"] = 10000
+    with pytest.raises(ValueError, match="fleet doctrine"):
+        _validate_data(invalid_doctrine)
+    invalid_trait = copy.deepcopy(data)
+    invalid_trait["legend_traits"][0]["duel_bonus"] = 21
+    with pytest.raises(ValueError, match="legend trait"):
+        _validate_data(invalid_trait)
 
 
 def test_world_seeds_named_legend_commanders_and_persistent_fleet_doctrine():
@@ -71,14 +99,17 @@ def test_world_seeds_named_legend_commanders_and_persistent_fleet_doctrine():
     legends = [row for row in world.entities.values()
                if row.get("kind") == "character" and row.get("tier") == "LEGEND"]
 
-    assert len(legends) == min(len(world.crew_ships.crews),
+    opening_major_captains = sum(
+        crew["founded_tick"] == 0 and crew["ideology_tags"] == ["merchant", "trade"]
+        for crew in world.crew_ships.crews.values())
+    assert len(legends) == min(opening_major_captains,
                                world.battles.data["rules"]["starting_legend_captain_count"])
     assert all(len(row["legend_traits"]) == 1 for row in legends)
     assert len(world.battles.fleet_commands) == len(world.politics.factions)
     assert all(command["doctrine"] in world.battles.data["doctrines"]
                for command in world.battles.fleet_commands.values())
     assert not world.event_log.by_type("LEGEND_RECOGNIZED")
-    assert world.to_snapshot()["snapshot_schema_version"] == 19
+    assert world.to_snapshot()["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
 
 
 def test_hostile_legend_encounter_resolves_a_causal_multiround_battle_and_duel():
@@ -88,6 +119,8 @@ def test_hostile_legend_encounter_resolves_a_causal_multiround_battle_and_duel()
     battle_id = world.battles._maybe_resolve_set_piece(world, trigger, day=1)
 
     assert battle_id is not None
+    assert world.battles.opportunity_observations[-1]["reason"] == \
+        "eligible_set_piece_converted"
     battle = world.event_log.get(battle_id)
     rounds = [event for event in world.event_log.by_type("BATTLE_ROUND")
               if event.data["battle_event_id"] == battle_id]
@@ -108,6 +141,119 @@ def test_hostile_legend_encounter_resolves_a_causal_multiround_battle_and_duel()
     assert duels[0].caused_by[0] == battle_id
     assert result.caused_by[0] == battle_id
     assert world.event_log.consequences(battle_id)
+    world.event_log.validate_causality()
+
+
+def test_personal_legend_combat_is_seeded_causal_and_snapshot_stable():
+    first = WorldState.create("personal-combat-event-chain")
+    second = WorldState.create("personal-combat-event-chain")
+    trigger_a = _hostile_encounter(first)
+    trigger_b = _hostile_encounter(second)
+    captains_a = [first.crew_ships.crews[first.entities[ship_id]["crew_id"]]["captain_id"]
+                  for ship_id in trigger_a.data["ships"]]
+    captains_b = [second.crew_ships.crews[second.entities[ship_id]["crew_id"]]["captain_id"]
+                  for ship_id in trigger_b.data["ships"]]
+    economy_before = copy.deepcopy(first.economy.snapshot())
+    ships_before = {ship_id: copy.deepcopy(first.entities[ship_id])
+                    for ship_id in trigger_a.data["ships"]}
+
+    result_a = first.battles.resolve_personal_combat(
+        first, captains_a, caused_by=[trigger_a.id], location=trigger_a.location,
+        context="legend_duel", context_id="seeded-test-duel")
+    result_b = second.battles.resolve_personal_combat(
+        second, captains_b, caused_by=[trigger_b.id], location=trigger_b.location,
+        context="legend_duel", context_id="seeded-test-duel")
+
+    assert result_a == result_b
+    assert first.event_log.to_jsonl() == second.event_log.to_jsonl()
+    assert first.economy.snapshot() == economy_before
+    assert {ship_id: first.entities[ship_id] for ship_id in ships_before} == ships_before
+    start = first.event_log.get(result_a["started_event_id"])
+    exchanges = [first.event_log.get(event_id) for event_id in result_a["exchange_event_ids"]
+                 if first.event_log.get(event_id).type == "PERSONAL_EXCHANGE"]
+    assert start.caused_by == (trigger_a.id,)
+    assert exchanges
+    wear_events = [event for event in first.event_log.by_type("COMBAT_EQUIPMENT_WORN")
+                   if event.data["character_id"] in captains_a]
+    assert wear_events
+    wear_by_item = {}
+    for event in wear_events:
+        key = (event.data["character_id"], event.data["equipment_kind"])
+        previous = wear_by_item.get(key)
+        if previous:
+            assert event.data["condition_before_permille"] == \
+                previous.data["condition_after_permille"]
+        wear_by_item[key] = event
+    for (character_id, equipment_kind), event in wear_by_item.items():
+        gear = first.entities[character_id]["combat_equipment"]
+        assert gear[f"{equipment_kind}_condition_permille"] == event.data["condition_after_permille"]
+    assert all(len(event.caused_by) == len(set(event.caused_by)) for event in exchanges)
+    assert all(first.event_log.get(parent).tick <= event.tick
+               for event in exchanges for parent in event.caused_by)
+    first.event_log.validate_causality()
+    restored = WorldState.from_snapshot(first.to_snapshot())
+    assert restored.to_snapshot() == first.to_snapshot()
+
+
+def test_personal_combat_speed_sets_first_action_without_ship_power_input():
+    world = WorldState.create("personal-combat-initiative")
+    trigger = _hostile_encounter(world)
+    captains = [world.crew_ships.crews[world.entities[ship_id]["crew_id"]]["captain_id"]
+                for ship_id in trigger.data["ships"]]
+    world.entities[captains[0]]["stats"]["speed"] = 100
+    world.entities[captains[1]]["stats"]["speed"] = 0
+
+    result = world.battles.resolve_personal_combat(
+        world, captains, caused_by=[trigger.id], location=trigger.location,
+        context="legend_duel", context_id="speed-initiative")
+
+    initiative = world.event_log.get(result["initiative_event_id"])
+    assert initiative.data["scores"][0] - initiative.data["scores"][1] >= 80
+    assert initiative.data["first_actor_index"] == 0
+    first_exchange = world.event_log.get(result["exchange_event_ids"][0])
+    assert first_exchange.actors[0]["entity_id"] == captains[0]
+
+
+def test_personal_physical_strength_does_not_change_ship_combat_power():
+    world = WorldState.create("personal-strength-not-cannon-power")
+    crew = next(iter(world.crew_ships.crews.values()))
+    ship_id = crew["ship_ids"][0]
+    captain = world.entities[crew["captain_id"]]
+    before = world.crew_ships.combat_power(world, ship_id)
+
+    captain["stats"]["strength"] = 0
+    weak = world.crew_ships.combat_power(world, ship_id)
+    captain["stats"]["strength"] = 100
+    strong = world.crew_ships.combat_power(world, ship_id)
+
+    assert before == weak == strong
+
+
+def test_personal_exchange_can_causally_injure_but_not_guarantee_casualties():
+    world = WorldState.create("personal-combat-causal-injury")
+    trigger = _hostile_encounter(world)
+    captains = [world.crew_ships.crews[world.entities[ship_id]["crew_id"]]["captain_id"]
+                for ship_id in trigger.data["ships"]]
+    for name in ("combat", "speed", "strength", "endurance", "toughness", "willpower"):
+        world.entities[captains[0]]["stats"][name] = 100
+        world.entities[captains[1]]["stats"][name] = 0
+    rules = world.characters.data["combat_equipment"]["rules"]
+    rules.update({"max_exchanges": 1, "injury_impact_threshold": 0,
+                  "injury_basis_points_per_impact": 10000,
+                  "max_injury_basis_points": 10000})
+
+    result = world.battles.resolve_personal_combat(
+        world, captains, caused_by=[trigger.id], location=trigger.location,
+        context="legend_duel", context_id="causal-injury")
+
+    exchange = world.event_log.get(result["exchange_event_ids"][0])
+    injury = next(event for event in world.event_log.by_type("INJURY")
+                  if event.caused_by == (exchange.id,))
+    assert exchange.data["hit"] and exchange.data["impact"] > 0
+    assert injury.targets[0]["entity_id"] == captains[1]
+    assert world.entities[captains[1]]["health"]["injuries"][-1]["source_event"] == exchange.id
+    assert world.entities[captains[1]]["health"]["hp"] < 100
+    assert not world.event_log.by_type("CHARACTER_DIED")
     world.event_log.validate_causality()
 
 
@@ -240,6 +386,7 @@ def test_battle_cooldown_blocks_duplicate_pair_and_snapshot_roundtrips():
     assert first
     second = world.battles._maybe_resolve_set_piece(world, trigger, day=2)
     assert second is None
+    assert world.battles.opportunity_observations[-1]["reason"] == "pair_cooldown_active"
 
     snapshot = world.to_snapshot()
     restored = WorldState.from_snapshot(snapshot)

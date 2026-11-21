@@ -113,17 +113,87 @@ def test_chronicler_artifact_bundle_has_expected_forms_and_is_pure():
 
     artifacts = chronicler.generate_all(world)
 
-    assert {"chronicle", "rumors", "bounty_posters", "biographies", "faction_histories",
+    assert {"chronicle", "story_threads", "simulation_report", "rumors", "bounty_posters", "biographies", "faction_histories",
             "epithet_awards", "legends", "almanac", "obituaries", "weekly_digest"} \
         <= artifacts.keys()
     assert artifacts["epithet_awards"]
     assert artifacts["biographies"]
+    assert artifacts["simulation_report"]["event_counts"]["by_type"]["TREATY_BREACHED"] == 1
+    assert artifacts["simulation_report"]["event_counts"]["total"] == len(world.event_log)
+    assert artifacts["simulation_report"]["treasure"]["discovery_events"] == 0
+    assert artifacts["simulation_report"]["open_obligations"] == []
+    assert artifacts["simulation_report"]["combat"]["encounter_outcomes"] == {}
     biography_names = {row["name"] for row in artifacts["biographies"]}
     assert any(name.startswith(NameRegistry(world).entity(people[0])) for name in biography_names)
     assert world.to_snapshot() == snapshot
     for entry in artifacts["chronicle"]:
         assert "event_" not in entry["text"]
         assert "{" not in entry["text"] and "}" not in entry["text"]
+
+
+def test_simulation_report_counts_relative_combat_stats_gear_and_morale_as_observed():
+    world = WorldState.create("chronicle-combat-report", director_enabled=False)
+    people = sorted(entity_id for entity_id, row in world.entities.items()
+                    if row.get("kind") == "character")[:2]
+    profiles = [world.characters.personal_combat_profile(world.entities[person_id])
+                for person_id in people]
+    root = world.event_log.by_type("WORLD_GENERATED")[0].id
+    started = world.event_log.append(
+        tick=world.clock.tick, event_type="PERSONAL_COMBAT_STARTED", location=None,
+        actors=[{"role": "first_combatant", "entity_id": people[0]},
+                {"role": "second_combatant", "entity_id": people[1]}],
+        data={"profiles_before": profiles}, caused_by=[root], causes_tags=["test"], magnitude=0.2)
+    speeds = [profile["stats"]["speed"]["effective"] for profile in profiles]
+    world.event_log.append(
+        tick=world.clock.tick, event_type="PERSONAL_INITIATIVE", location=None,
+        data={"speed": speeds}, caused_by=[started.id], causes_tags=["test"], magnitude=0.1)
+    exchange = world.event_log.append(
+        tick=world.clock.tick, event_type="PERSONAL_EXCHANGE", location=None,
+        data={"weapon_id": profiles[0]["equipment"]["weapon_id"],
+              "armor_id": profiles[1]["equipment"]["armor_id"], "attacker_morale": 80},
+        caused_by=[started.id], causes_tags=["test"], magnitude=0.1)
+    world.event_log.append(
+        tick=world.clock.tick, event_type="LEGEND_DUEL", location=None,
+        data={"personal_combat_started_event_id": started.id,
+              "personal_exchange_event_ids": [exchange.id],
+              "outcome": "side_a_edge", "winner_side": 0},
+        caused_by=[started.id, exchange.id], causes_tags=["test"], magnitude=0.3)
+
+    report = Chronicler().simulation_report(world)
+
+    assert report["combat"]["relative_attribute_bands"]
+    assert report["combat"]["personal_exchange_bands"] == [{
+        "weapon_id": profiles[0]["equipment"]["weapon_id"],
+        "armor_id": profiles[1]["equipment"]["armor_id"],
+        "attacker_morale_band": "high", "exchange_count": 1,
+    }]
+    assert report["combat"]["personal_duels"][0]["outcome"] == "side_a_edge"
+    assert report["combat"]["personal_duels"][0]["relative_attributes"]
+def test_story_threads_follow_causal_event_ids_and_label_rumor_as_uncertain():
+    world = WorldState.create("chronicle-causal-thread", director_enabled=False)
+    person_id = sorted(entity_id for entity_id, row in world.entities.items()
+                       if row.get("kind") == "character")[0]
+    clue = _event(world, "TREASURE_CLUE_SPREAD", person_id,
+                  data={"treasure_id": "treasure_fixture"})
+    found = world.event_log.append(
+        tick=world.clock.tick, event_type="TREASURE_FOUND", location=clue.location,
+        actors=[{"role": "discoverer", "entity_id": person_id}],
+        data={"treasure_id": "treasure_fixture", "finite": True},
+        caused_by=[clue.id], causes_tags=["fixture"], magnitude=0.7)
+    snapshot = copy.deepcopy(world.to_snapshot())
+
+    threads = Chronicler().story_threads(world)
+    thread = next(row for row in threads if row["terminal_event_id"] == found.id)
+
+    assert [row["event_type"] for row in thread["steps"]] == [
+        "TREASURE_CLUE_SPREAD", "TREASURE_FOUND"]
+    assert thread["steps"][0]["certainty"] == "rumor"
+    assert thread["steps"][1]["caused_by_event_ids"] == [clue.id]
+    assert set(thread["evidence_event_ids"]) == {clue.id, found.id}
+    assert all(event_id in {event.id for event in world.event_log}
+               for event_id in thread["evidence_event_ids"])
+    assert world.to_snapshot() == snapshot
+    assert Chronicler().simulation_report(world)["treasure"]["clue_events"] >= 1
 
 
 def test_rumor_generation_is_repeatable_and_marked_as_distorted():

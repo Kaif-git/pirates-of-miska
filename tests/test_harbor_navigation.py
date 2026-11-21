@@ -1,4 +1,4 @@
-from pirates.economy import MERCHANTS, PORTS
+from pirates.economy import MERCHANTS, PORTS, build_port
 from pirates.game import World
 from omnisim.world import tile as T
 
@@ -17,20 +17,17 @@ def walk_to(world, target, max_steps=1200):
     raise AssertionError(f"Movement did not reach interaction range of {target}")
 
 
-def test_every_merchant_is_reachable_through_normal_movement_in_both_ports():
-    world = World()
+def test_every_merchant_is_reachable_through_normal_movement_in_all_three_ports():
     for port in PORTS:
-        assert world.economy.port == port
+        world = World()
+        world.economy.port = port
+        build_port(world)
         for merchant_id, merchant in MERCHANTS.items():
             if merchant["port"] != port:
                 continue
             walk_to(world, merchant["at"])
             assert abs(world.player.x - merchant["at"][0]) + abs(world.player.y - merchant["at"][1]) == 1
         walk_to(world, (42, 23))
-        if port == "verdant":
-            world.economy.travel(world, "cinder")
-        else:
-            world.economy.travel(world, "verdant")
 
 
 def test_harbor_route_never_crosses_water_or_occupied_tiles():

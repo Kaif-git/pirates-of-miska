@@ -20,6 +20,8 @@ from sim.core.world import WorldState
 def _census(world, sample_day: int) -> dict[str, Any]:
     ships = {entity_id: row for entity_id, row in world.entities.items()
              if row.get("kind") == "ship"}
+    merchant_ship_ids = {merchant.get("ship_id")
+                         for merchant in world.economy.merchants.values()}
     crew_memberships: dict[str, list[str]] = {}
     roster_references = []
     for crew_id, crew in world.crew_ships.crews.items():
@@ -115,6 +117,9 @@ def _census(world, sample_day: int) -> dict[str, Any]:
         location = ship.get("location")
         merchants.append({
             "merchant_id": merchant_id,
+            "status": merchant.get("status", "active"),
+            "closed_event_id": merchant.get("closed_event_id"),
+            "closure_reason": merchant.get("closure_reason"),
             "ship_id": ship_id,
             "ship_exists": bool(ship),
             "ship_state": ship.get("state", "active" if ship else "missing"),
@@ -123,6 +128,8 @@ def _census(world, sample_day: int) -> dict[str, Any]:
             "in_transit": ship_id in world.travel.transits,
             "location_kind": location.get("kind") if isinstance(location, dict) else None,
             "location_id": location.get("id") if isinstance(location, dict) else None,
+            "blocker_reason": merchant.get("activity_blocker_reason"),
+            "blocker_since_day": merchant.get("activity_blocker_since_day"),
         })
 
     living_named = [row for row in world.entities.values()
@@ -306,9 +313,14 @@ def _census(world, sample_day: int) -> dict[str, Any]:
         "ships": {
             "active_total": len(ships),
             "by_owner_type": {
-                owner_type: sum(ship.get("owner_type") == owner_type for ship in ships.values())
-                for owner_type in sorted({str(ship.get("owner_type", "unknown"))
-                                          for ship in ships.values()})
+                owner_type: sum(
+                    ("merchant" if ship_id in merchant_ship_ids else
+                     str(ship.get("owner_type") or "unknown")) == owner_type
+                    for ship_id, ship in ships.items())
+                for owner_type in sorted({
+                    "merchant" if ship_id in merchant_ship_ids else
+                    str(ship.get("owner_type") or "unknown")
+                    for ship_id, ship in ships.items()})
             },
             "captured_markers_with_crew_id_disagreement": ownership_disagreements,
             "ships_without_valid_crew": ships_without_crew,
@@ -431,6 +443,8 @@ def _census(world, sample_day: int) -> dict[str, Any]:
         },
         "merchants": {
             "registered": len(merchants),
+            "active": sum(row["status"] == "active" for row in merchants),
+            "closed": sum(row["status"] == "closed" for row in merchants),
             "valid_ship_links": sum(row["ship_exists"] for row in merchants),
             "underway": sum(row["in_transit"] for row in merchants),
             "at_island": sum(row["location_kind"] == "island" for row in merchants),
@@ -450,8 +464,10 @@ def _census(world, sample_day: int) -> dict[str, Any]:
 
 
 def _sampled_merchant_utilization(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
-    """Estimate occupancy from interval-start snapshots; this is not event-exact time."""
-    weights = {"underway": 0, "at_island": 0, "other_or_unknown": 0}
+    """Estimate operating states from interval-start snapshots, not event-exact time."""
+    weights = {"underway": 0, "blocked": 0, "at_island_unblocked": 0,
+               "closed": 0, "other_or_unknown": 0}
+    blocker_days: dict[str, int] = {}
     observed_merchant_days = 0
     for earlier, later in zip(snapshots, snapshots[1:]):
         interval_days = later["sample_day"] - earlier["sample_day"]
@@ -459,22 +475,90 @@ def _sampled_merchant_utilization(snapshots: list[dict[str, Any]]) -> dict[str, 
             continue
         for merchant in earlier["merchants"]["ship_links"]:
             observed_merchant_days += interval_days
+            if merchant.get("status", "active") == "closed":
+                weights["closed"] += interval_days
+                continue
             if merchant["in_transit"]:
                 weights["underway"] += interval_days
+            elif merchant.get("blocker_reason"):
+                weights["blocked"] += interval_days
+                blocker = merchant["blocker_reason"]
+                blocker_days[blocker] = blocker_days.get(blocker, 0) + interval_days
             elif merchant["location_kind"] == "island":
-                weights["at_island"] += interval_days
+                weights["at_island_unblocked"] += interval_days
             else:
                 weights["other_or_unknown"] += interval_days
     return {
-        "method": "30-day census interval-start occupancy estimate; not event-exact time",
+        "method": "30-day census interval-start state estimate plus unique merchant/calendar-day activity; not event-exact time",
         "observed_merchant_days": observed_merchant_days,
         "merchant_days_by_state": weights,
+        "merchant_days_by_blocker_reason": dict(sorted(blocker_days.items())),
         "share_by_state": {
             state: round(days / observed_merchant_days, 4) if observed_merchant_days else None
             for state, days in weights.items()
         },
-        "utilization_blocker_reasons": "not available from the current state/events; pending R7 telemetry",
+        "merchant_activity_event_counts": {
+            key: sum(snapshot.get("merchant_activity_events_since_previous_sample", {}).get(key, 0)
+                     for snapshot in snapshots[1:])
+            for key in ("trade", "travel", "provisioning", "repair", "weather_loss",
+                        "blocked_review", "route_review")
+        },
+        "merchant_activity_days": {
+            key: sum(snapshot.get("merchant_activity_days_since_previous_sample", {}).get(key, 0)
+                     for snapshot in snapshots[1:])
+            for key in ("trade", "travel", "provisioning", "repair", "weather_loss",
+                        "blocked_review", "route_review")
+        },
+        "limitations": [
+            "30-day census interval-start states estimate merchant-days; event transitions are not time-exact",
+            "activity days count unique merchant/calendar days with a matching event, not duration within a day",
+            "repair activity is reported only if a repair event exists; no merchant repair event is currently defined",
+            "at-island unblocked means no recorded route blocker, not proof of trading or provisioning",
+        ],
     }
+
+
+def _merchant_activity_for_window(events, merchants: dict[str, dict[str, Any]],
+                                 ticks_per_day: int) -> tuple[dict[str, int], dict[str, int]]:
+    """Attribute event counts/days to the firm that owned the vessel at that event."""
+    categories = ("trade", "travel", "provisioning", "repair", "weather_loss",
+                  "blocked_review", "route_review")
+    counts = {key: 0 for key in categories}
+    activity_days: dict[str, set[tuple[str, int]]] = {key: set() for key in categories}
+    merchant_by_ship = {row["ship_id"]: (merchant_id, row)
+                        for merchant_id, row in merchants.items()}
+    event_groups = {
+        "MARKET_TRADE": "trade",
+        "VOYAGE_STARTED": "travel", "VOYAGE_ARRIVED": "travel",
+        "SHIP_SUPPLIED": "provisioning", "SHIP_SUPPLIES_CONSUMED": "provisioning",
+        "PRISONER_PROVISIONS_CONSUMED": "provisioning",
+        "SHIP_REPAIRED": "repair",
+        "SHIP_SUPPLIES_LOST": "weather_loss",
+        "MERCHANT_ACTIVITY_BLOCKED": "blocked_review",
+        "MERCHANT_ROUTE_DECISION": "route_review",
+    }
+    for event in events:
+        group = event_groups.get(event.type)
+        if group is None:
+            continue
+        relevant_ids = {row.get("entity_id") for row in (*event.actors, *event.targets)}
+        event_merchants = relevant_ids.intersection(merchants)
+        event_merchants.update(
+            merchant_id for ship_id, (merchant_id, _) in merchant_by_ship.items()
+            if ship_id in relevant_ids)
+        # A firm remains attributable for activity before its terminal event,
+        # but post-closure use of its former hull belongs to the new controller.
+        event_merchants = {
+            merchant_id for merchant_id in event_merchants
+            if (merchants[merchant_id].get("status", "active") != "closed"
+                or event.id < merchants[merchant_id].get("closed_event_id", ""))
+        }
+        if not event_merchants:
+            continue
+        counts[group] += 1
+        event_day = event.tick // ticks_per_day
+        activity_days[group].update((merchant_id, event_day) for merchant_id in event_merchants)
+    return counts, {key: len(days) for key, days in activity_days.items()}
 
 
 def run_coherence_baseline(seed: int, years: int, director_enabled: bool,
@@ -501,7 +585,11 @@ def run_coherence_baseline(seed: int, years: int, director_enabled: bool,
     with gzip.open(events_path, "wt", encoding="utf-8", newline="\n") as event_stream:
         for day in sample_days:
             world.run_until(day * ticks_per_day)
-            for event in islice(iter(world.event_log), cursor, None):
+            window_events = list(islice(iter(world.event_log), cursor, None))
+            known_merchants = world.economy.merchants
+            activity_counts, activity_days_by_category = _merchant_activity_for_window(
+                window_events, known_merchants, ticks_per_day)
+            for event in window_events:
                 encoded = json.dumps(event.to_record(), sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":"), allow_nan=False)
                 event_stream.write(encoded + "\n")
@@ -509,7 +597,10 @@ def run_coherence_baseline(seed: int, years: int, director_enabled: bool,
                 digest.update(b"\n")
             cursor = len(world.event_log)
             event_stream.flush()
-            snapshots.append(_census(world, day))
+            census = _census(world, day)
+            census["merchant_activity_events_since_previous_sample"] = activity_counts
+            census["merchant_activity_days_since_previous_sample"] = activity_days_by_category
+            snapshots.append(census)
             census_path.write_text(
                 json.dumps({"seed": seed, "director_enabled": director_enabled,
                             "requested_years": years, "samples": snapshots},

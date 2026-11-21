@@ -32,7 +32,7 @@ from sim.systems.battles import BattleSystem
 from sim.systems.lod import LODSystem
 
 
-SNAPSHOT_SCHEMA_VERSION = 19
+SNAPSHOT_SCHEMA_VERSION = 21
 
 
 class WorldState:
@@ -151,6 +151,8 @@ class WorldState:
         world.crew_ships.seed_world(world)
         world.politics.seed_world(world)
         world.battles.seed_world(world)
+        world.crew_ships.seed_opening_actor_bands(world)
+        world.battles.refresh_fleet_commands(world)
         world.environment.seed_world(world)
         world.decisions.set_event_cursor(len(world.event_log))
         world.lod.seed_world(world)
@@ -240,8 +242,13 @@ class WorldState:
         expected_controller = event.data.get("controller_crew_id")
         if (expected_controller is not None and expected_controller != controller_crew_id):
             raise ValueError("Ship controller does not match its acquisition event")
+        previous_owner = (dict(ship["legal_owner"])
+                          if isinstance(ship.get("legal_owner"), dict) else None)
         assign_ship_title(ship, owner_kind=owner_kind, owner_id=owner_id,
                           controller_crew_id=controller_crew_id, event_id=event_id)
+        self.economy.close_merchant_for_title_transfer(
+            self, ship_id, previous_owner,
+            {"kind": owner_kind, "id": owner_id}, event_id)
 
     def ship_is_commandable(self, ship_id: str) -> bool:
         return ship_is_commandable(self, ship_id)
@@ -322,6 +329,29 @@ class WorldState:
             ship["captured_by_crew_id"] = (
                 controller if controller is not None
                 and controller != ship.get("crew_id") else None)
+        # Older snapshots can contain a live merchant account whose vessel was
+        # captured before merchant closure became an explicit lifecycle event.
+        # Reconcile once from its persisted ownership event; new transfers are
+        # closed atomically by assign_ship_title above.
+        for merchant_id, merchant in sorted(self.economy.merchants.items()):
+            if merchant.get("status", "active") != "active":
+                continue
+            ship = self.entities.get(merchant.get("ship_id"))
+            owner = ship.get("legal_owner") if ship else None
+            if owner == {"kind": "merchant", "id": merchant_id}:
+                continue
+            if ship is None or not isinstance(owner, dict):
+                continue
+            ownership_event_id = ship.get("ownership_event_id")
+            try:
+                ownership_event = self.event_log.get(ownership_event_id)
+            except (KeyError, TypeError):
+                continue
+            if ownership_event.type not in {"SHIP_ACQUIRED", "SHIP_CAPTURED"}:
+                continue
+            self.economy.close_merchant_for_title_transfer(
+                self, merchant["ship_id"], {"kind": "merchant", "id": merchant_id},
+                owner, ownership_event.id)
 
     def validate_ship_authority(self) -> None:
         for ship_id, ship in self.entities.items():
@@ -458,6 +488,7 @@ class WorldState:
                 self._record_system_call("weather_environment", due_tick)
                 self.crew_ships.update_day(day, self)
                 self._record_system_call("crew_ships", due_tick)
+                self.encounters.update_prisoner_provisions(day, self)
                 self.economy.update_day(day, self)
                 self._record_system_call("economy", due_tick)
                 self.characters.update_day(day, self)
@@ -560,9 +591,9 @@ class WorldState:
         if not isinstance(snapshot, dict) or set(snapshot) != required:
             raise ValueError("Invalid world snapshot fields")
         schema_version = snapshot["snapshot_schema_version"]
-        if schema_version not in {16, 17, 18, SNAPSHOT_SCHEMA_VERSION}:
+        if schema_version not in {16, 17, 18, 19, 20, SNAPSHOT_SCHEMA_VERSION}:
             raise ValueError("Unsupported world snapshot schema version")
-        if schema_version in {16, 17, 18}:
+        if schema_version in {16, 17, 18, 19, 20}:
             snapshot = dict(snapshot)
             snapshot["snapshot_schema_version"] = SNAPSHOT_SCHEMA_VERSION
             snapshot["config"] = json.loads(json.dumps(snapshot["config"]))
@@ -621,6 +652,23 @@ class WorldState:
             for entity in snapshot["entities"].values():
                 if isinstance(entity, dict) and entity.get("kind") == "ship":
                     entity.pop("owner_faction", None)
+            # Schema 20 adds raw physical attributes. Old named people receive
+            # a stable mapping from their existing skills, seed, and entity ID;
+            # no RNG stream, event history, or identity is changed.
+            for table in (snapshot["entities"], snapshot["archive"],
+                          snapshot.get("lod", {}).get("named_records", {})):
+                for entity_id, entity in table.items():
+                    if (not isinstance(entity, dict) or entity.get("kind") != "character"
+                            or not isinstance(entity.get("stats"), dict)):
+                        continue
+                    missing = {"strength", "speed", "endurance", "toughness"} - set(entity["stats"])
+                    if missing:
+                        mapped = CharacterSystem.migrate_legacy_physical_stats(
+                            snapshot["seed"], entity_id, entity["stats"])
+                        entity["stats"].update({key: mapped[key] for key in missing})
+                    if "combat_equipment" not in entity:
+                        entity["combat_equipment"] = CharacterSystem.default_combat_equipment(
+                            entity.get("role"))
         seed = snapshot["seed"]
         if type(seed) not in (int, str):
             raise ValueError("Invalid world snapshot seed")
@@ -656,7 +704,8 @@ class WorldState:
         travel = TravelSystem(geography, weather, snapshot["travel"]["transits"],
                               snapshot["travel"]["closed_routes"])
         economy = EconomySystem.restore(geography, snapshot["economy"])
-        characters = CharacterSystem.restore(snapshot["characters"])
+        characters = CharacterSystem.restore(
+            snapshot["characters"], allow_legacy_digest=schema_version < SNAPSHOT_SCHEMA_VERSION)
         crew_ships = CrewShipSystem.restore(snapshot["crew_ships"])
         decisions = DecisionSystem.restore(snapshot["decisions"])
         encounters = EncounterSystem.restore(snapshot["encounters"])

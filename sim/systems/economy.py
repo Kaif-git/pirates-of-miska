@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -344,6 +345,10 @@ class EconomySystem:
         self.islands = {island_id: _copy_json(state) for island_id, state in islands.items()}
         self.merchants = {merchant_id: _copy_json(state)
                           for merchant_id, state in (merchants or {}).items()}
+        for merchant in self.merchants.values():
+            merchant.setdefault("status", "active")
+            merchant.setdefault("closed_event_id", None)
+            merchant.setdefault("closure_reason", None)
         self.ship_supplies = {ship_id: _copy_json(state)
                               for ship_id, state in (ship_supplies or {}).items()}
         self.crew_accounts = {crew_id: _copy_json(state)
@@ -478,7 +483,21 @@ class EconomySystem:
                     or merchant["capacity_milli"] <= 0
                     or merchant.get("home_island") not in self.islands
                     or type(merchant.get("last_route_attempt_day")) is not int
-                    or merchant["last_route_attempt_day"] < -7):
+                    or merchant["last_route_attempt_day"] < -7
+                    or merchant.get("activity_blocker_reason") is not None
+                    and not isinstance(merchant.get("activity_blocker_reason"), str)
+                    or merchant.get("activity_blocker_since_day") is not None
+                    and (type(merchant.get("activity_blocker_since_day")) is not int
+                         or merchant["activity_blocker_since_day"] < 0)
+                    or merchant.get("status") not in {"active", "closed"}
+                    or (merchant.get("status") == "active"
+                        and (merchant.get("closed_event_id") is not None
+                             or merchant.get("closure_reason") is not None))
+                    or (merchant.get("status") == "closed"
+                        and (not isinstance(merchant.get("closed_event_id"), str)
+                             or not merchant["closed_event_id"]
+                             or not isinstance(merchant.get("closure_reason"), str)
+                             or not merchant["closure_reason"]))):
                 raise ValueError(f"Invalid merchant state: {merchant_id}")
             cargo, basis = merchant.get("cargo_milli"), merchant.get("cargo_basis_silver")
             if (not isinstance(cargo, dict) or set(cargo) != set(self.goods)
@@ -692,6 +711,8 @@ class EconomySystem:
                           member_ids: list[str], amount: int, *, caused_by: str) -> tuple[str, int]:
         if crew_id in self.crew_accounts or merchant_id not in self.merchants:
             raise ValueError("Crew account already exists or funding merchant is unknown")
+        if self.merchants[merchant_id].get("status", "active") != "active":
+            raise ValueError("A closed merchant claim cannot fund a new crew account")
         if type(amount) is not int or amount < 0 or len(set(member_ids)) != len(member_ids):
             raise ValueError("Invalid crew funding amount or roster")
         self._validate_cause(world, caused_by)
@@ -804,6 +825,81 @@ class EconomySystem:
         self.pending_ship_events.append(event.id)
         return event.id
 
+    def consume_prisoner_supplies(self, world, ship_id: str, crew_id: str,
+                                  prisoner_ids: list[str], requested: dict[str, int], *,
+                                  caused_by: str, day: int) -> str:
+        """Charge captive provisions to the captor vessel's finite stores."""
+        ship = world.entities.get(ship_id)
+        if (ship_id not in self.ship_supplies or not ship or ship.get("kind") != "ship"
+                or ship.get("crew_id") != crew_id or not prisoner_ids
+                or any(person_id not in world.entities
+                       or world.encounters.prisoners.get(person_id, {}).get("status") != "held"
+                       or world.encounters.prisoners.get(person_id, {}).get("captor_ship_id") != ship_id
+                       for person_id in prisoner_ids)):
+            raise ValueError("Prisoner provisions require active custody and a ship supply account")
+        if any(goods_id not in self.goods or type(quantity) is not int or quantity < 0
+               for goods_id, quantity in requested.items()):
+            raise ValueError("Invalid prisoner provision demand")
+        self._validate_cause(world, caused_by)
+        supply = self.ship_supplies[ship_id]
+        consumed = {goods_id: 0 for goods_id in self.goods}
+        shortage = {goods_id: 0 for goods_id in self.goods}
+        for goods_id, quantity in requested.items():
+            used = min(supply[goods_id], quantity)
+            supply[goods_id] -= used
+            consumed[goods_id] = used
+            shortage[goods_id] = quantity - used
+            self.pending_ship_consumption[goods_id] += used
+        event = world.event_log.append(
+            tick=day * (world.config["time"]["hours_per_day"]
+                        // world.config["time"]["hours_per_tick"]),
+            event_type="PRISONER_PROVISIONS_CONSUMED",
+            location=world.entities[ship_id].get("location", {}).get("id"),
+            actors=[{"role": "captor_crew", "entity_id": crew_id}],
+            targets=[{"role": "prisoner", "entity_id": person_id}
+                     for person_id in sorted(prisoner_ids)],
+            data={"ship_id": ship_id, "crew_id": crew_id,
+                  "prisoner_ids": sorted(prisoner_ids),
+                  "consumed_milli": consumed, "shortage_milli": shortage},
+            caused_by=[caused_by],
+            causes_tags=["prisoner_custody", "daily_provisions"],
+            magnitude=0.05 if not any(shortage.values()) else 0.2)
+        world.entities[ship_id]["supplies"] = dict(supply)
+        self.pending_ship_events.append(event.id)
+        return event.id
+
+    def lose_ship_supplies(self, world, ship_id: str, loss_permille: int, *,
+                           caused_by: str, weather_state: str) -> str | None:
+        """Remove only goods actually aboard and record the loss as a ledger sink."""
+        if (ship_id not in self.ship_supplies or type(loss_permille) is not int
+                or not 0 <= loss_permille <= 1000
+                or weather_state not in {"storm", "hurricane"}):
+            raise ValueError("Invalid weather supply-loss request")
+        if not world.entities.get(ship_id) or world.entities[ship_id].get("kind") != "ship":
+            raise ValueError("Weather supply loss requires an active vessel")
+        self._validate_cause(world, caused_by)
+        supply = self.ship_supplies[ship_id]
+        lost = {good: quantity * loss_permille // 1000
+                for good, quantity in supply.items()}
+        lost = {good: quantity for good, quantity in lost.items() if quantity}
+        if not lost:
+            return None
+        for good, quantity in lost.items():
+            supply[good] -= quantity
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="SHIP_SUPPLIES_LOST",
+            location=world.location_of(ship_id)["id"],
+            targets=[{"role": "weather_damaged_ship", "entity_id": ship_id}],
+            data={"ship_id": ship_id, "weather_state": weather_state,
+                  "loss_permille": loss_permille, "goods_lost_milli": lost,
+                  "ledger_sink": {"silver": 0, "goods": lost}},
+            caused_by=[caused_by],
+            causes_tags=["weather_consequence", "ship_supply_loss", weather_state],
+            magnitude=0.35 if weather_state == "storm" else 0.6)
+        world.entities[ship_id]["supplies"] = dict(supply)
+        self.ledger.record_sink(event.id, goods=lost)
+        return event.id
+
     def _record_merchant_endowment(self, event_id: str, silver: int,
                                    cargo: dict[str, int]) -> None:
         self.ledger.record_source(event_id, silver=silver, goods=cargo)
@@ -866,6 +962,11 @@ class EconomySystem:
             "risk_cost_basis_points": risk_cost_basis_points,
             "last_event_id": event.id,
             "last_route_attempt_day": -7,
+            "activity_blocker_reason": None,
+            "activity_blocker_since_day": None,
+            "status": "active",
+            "closed_event_id": None,
+            "closure_reason": None,
             "home_island": island_id,
         }
         world.assign_ship_title(
@@ -917,6 +1018,8 @@ class EconomySystem:
     def trade(self, world, merchant_id: str, island_id: str, goods_id: str,
               side: str, quantity_milli: int, *, caused_by: str) -> dict[str, Any]:
         merchant = self._merchant(merchant_id)
+        if merchant["status"] != "active":
+            raise ValueError("Closed merchant accounts cannot trade; merchant no longer owns or commands this vessel")
         if island_id not in self.islands or goods_id not in self.goods:
             raise ValueError("Trade requires a known island and good")
         if side not in {"buy", "sell"}:
@@ -944,6 +1047,7 @@ class EconomySystem:
         cash_before = merchant["silver"]
         cargo_before = merchant["cargo_milli"][goods_id]
         local_cash_debits = {}
+        profit_silver = 0
         if side == "buy":
             # Merchant buys from the island market.
             capacity_left = merchant["capacity_milli"] - sum(merchant["cargo_milli"].values())
@@ -974,6 +1078,7 @@ class EconomySystem:
                 total_silver = _ceil_div(quantity * price_milli, VALUE_SCALE)
             basis = merchant["cargo_basis_silver"][goods_id]
             basis_sold = basis * quantity // max(1, available)
+            profit_silver = total_silver - basis_sold
             merchant["cargo_milli"][goods_id] -= quantity
             merchant["cargo_basis_silver"][goods_id] -= basis_sold
             market["stockpile_milli"][goods_id] += quantity
@@ -984,6 +1089,9 @@ class EconomySystem:
         if isinstance(ship.get("cargo"), dict):
             ship["cargo"] = dict(merchant["cargo_milli"])
 
+        controller_crew_id = ship.get("controller_crew_id")
+        controller_crew = world.crew_ships.crews.get(controller_crew_id)
+        merchant_faction = controller_crew.get("faction_id") if controller_crew else None
         event = world.event_log.append(
             tick=world.clock.tick,
             event_type="MARKET_TRADE",
@@ -999,19 +1107,187 @@ class EconomySystem:
                   "merchant_cash_before": cash_before,
                   "merchant_cash_after": merchant["silver"],
                   "merchant_cargo_before_milli": cargo_before,
-                  "merchant_cargo_after_milli": merchant["cargo_milli"][goods_id]},
+                  "merchant_cargo_after_milli": merchant["cargo_milli"][goods_id],
+                  "profit_silver": profit_silver,
+                  "merchant_faction_id": merchant_faction},
             caused_by=[caused_by],
             causes_tags=["market_order", f"good:{goods_id}", f"side:{side}"],
             magnitude=min(1.0, total_silver / 10000),
         )
         merchant["last_event_id"] = event.id
         market["last_economy_event_id"] = event.id
+        if side == "sell" and profit_silver > 0 and controller_crew:
+            captain_id = controller_crew.get("captain_id")
+            if captain_id:
+                world.politics.record_public_deed(
+                    world, captain_id, event.id, deed_kind="profitable_trade")
+        island_faction = world.politics.island_rulers.get(island_id)
+        if (merchant_faction in world.politics.factions
+                and island_faction in world.politics.factions
+                and merchant_faction != island_faction):
+            world.politics.record_trade(
+                merchant_faction, island_faction, total_silver, world=world,
+                caused_by=event.id)
+        if side == "sell" and profit_silver > 0:
+            self._record_profitable_trade_rivalry(world, event, merchant_faction)
         self.ledger.assert_balanced(self, validate_history=False)
         return event.to_record()
+
+    def _record_profitable_trade_rivalry(self, world, sale_event, seller_faction: str | None) -> None:
+        ticks_per_day = (world.config["time"]["hours_per_day"]
+                         // world.config["time"]["hours_per_tick"])
+        window = 30 * ticks_per_day
+        prior = next((candidate for candidate in reversed(world.event_log.by_type("MARKET_TRADE"))
+                      if candidate.id != sale_event.id
+                      and candidate.tick >= world.clock.tick - window
+                      and candidate.location == sale_event.location
+                      and candidate.data.get("goods_id") == sale_event.data["goods_id"]
+                      and candidate.data.get("side") == "sell"
+                      and candidate.data.get("profit_silver", 0) > 0
+                      and candidate.data.get("merchant_id") != sale_event.data["merchant_id"]), None)
+        if prior is None:
+            return
+        trade_ids = sorted((prior.id, sale_event.id))
+        if any(tuple(sorted(event.data.get("trade_event_ids", ()))) == tuple(trade_ids)
+               for event in world.event_log.by_type("PROFITABLE_TRADE_RIVALRY")):
+            return
+        other_faction = prior.data.get("merchant_faction_id")
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="PROFITABLE_TRADE_RIVALRY",
+            location=sale_event.location,
+            actors=[{"role": "competing_seller", "entity_id": prior.data["merchant_id"]}],
+            targets=[{"role": "competing_seller", "entity_id": sale_event.data["merchant_id"]}],
+            data={"goods_id": sale_event.data["goods_id"],
+                  "trade_event_ids": trade_ids,
+                  "merchant_ids": sorted((prior.data["merchant_id"],
+                                           sale_event.data["merchant_id"])),
+                  "faction_ids": sorted({faction for faction in
+                                         (other_faction, seller_faction) if faction}),
+                  "profits_silver": [prior.data["profit_silver"],
+                                     sale_event.data["profit_silver"]]},
+            caused_by=trade_ids,
+            causes_tags=["profitable_market_rivalry", f"good:{sale_event.data['goods_id']}"],
+            magnitude=0.18,
+        )
+        if (other_faction in world.politics.factions
+                and seller_faction in world.politics.factions
+                and other_faction != seller_faction):
+            world.politics.record_trade_rivalry(
+                world, event.id, other_faction, seller_faction)
+
+    def negotiate_shortage_relief(self, world, merchant_id: str, island_id: str,
+                                  goods_id: str, quantity_milli: int, *,
+                                  pressure_event_id: str) -> str:
+        """Settle an evidenced essential-goods shortage through a finite market sale."""
+        pressure = world.event_log.get(pressure_event_id)
+        if (pressure.type != "ISLAND_ECONOMY_UPDATED"
+                or pressure.location != island_id
+                or pressure.data.get("shortage_milli", {}).get(goods_id, 0) <= 0
+                or goods_id not in self.goods):
+            raise ValueError("Shortage relief requires a matching recorded goods shortage")
+        existing = next((event for event in reversed(world.event_log.by_type(
+            "SHORTAGE_RELIEF_NEGOTIATED"))
+            if event.data.get("pressure_event_id") == pressure_event_id
+            and event.data.get("goods_id") == goods_id), None)
+        if existing is not None:
+            return existing.id
+        merchant = self._merchant(merchant_id)
+        if merchant["cargo_milli"].get(goods_id, 0) <= 0:
+            raise ValueError("Merchant has no carried relief goods")
+        trade_record = self.trade(
+            world, merchant_id, island_id, goods_id, "sell", quantity_milli,
+            caused_by=pressure_event_id)
+        trade_event = world.event_log.get(trade_record["id"])
+        negotiated = world.event_log.append(
+            tick=world.clock.tick, event_type="SHORTAGE_RELIEF_NEGOTIATED",
+            location=island_id,
+            actors=[{"role": "relief_seller", "entity_id": merchant_id}],
+            targets=[{"role": "shortage_market", "entity_id": island_id}],
+            data={"pressure_event_id": pressure_event_id, "trade_event_id": trade_event.id,
+                  "merchant_id": merchant_id, "goods_id": goods_id,
+                  "quantity_milli": trade_event.data["quantity_milli"],
+                  "silver_transferred": trade_event.data["silver_transferred"],
+                  "shortage_before_milli": pressure.data["shortage_milli"][goods_id],
+                  "materially_settled": True},
+            caused_by=list(dict.fromkeys((pressure_event_id, trade_event.id))),
+            causes_tags=["shortage_negotiation", "finite_relief_trade"], magnitude=0.4,
+        )
+        world.politics.record_shortage_relief(
+            world, pressure_event_id, negotiated.id, merchant_id, island_id)
+        return negotiated.id
+
+    def enforce_contraband_trade(self, world, trade_event_id: str, authority_faction_id: str, *,
+                                 caused_by: str) -> str:
+        """Confiscate a recorded illegal sale and transfer its finite fine to the port."""
+        trade_event = world.event_log.get(trade_event_id)
+        action = world.event_log.get(caused_by)
+        if (trade_event.type != "MARKET_TRADE"
+                or self.goods.get(trade_event.data.get("goods_id"), {}).get("category")
+                != "contraband"
+                or trade_event.data.get("side") != "sell"
+                or action.type != "ENFORCEMENT_ACTION"
+                or action.data.get("action_id") != "inspect_contraband"
+                or action.data.get("trade_event_id") != trade_event_id
+                or action.data.get("authority_faction_id") != authority_faction_id):
+            raise ValueError("Contraband enforcement requires a legal inspection of a recorded sale")
+        island_id = trade_event.data["island_id"]
+        if world.politics.island_rulers.get(island_id) != authority_faction_id:
+            raise ValueError("Enforcement authority does not govern this market")
+        authority = world.politics.factions.get(authority_faction_id)
+        authority_leader_id = authority.get("leader_id") if authority else None
+        if not any(actor.get("role") == "enforcement_officer"
+                   and actor.get("entity_id") == authority_leader_id
+                   for actor in action.actors):
+            raise ValueError("Contraband inspection was not authorized by the governing faction")
+        previous = next((event for event in reversed(world.event_log.by_type("CONTRABAND_SEIZED"))
+                         if event.data.get("trade_event_id") == trade_event_id), None)
+        if previous is not None:
+            return previous.id
+        merchant = self._merchant(trade_event.data["merchant_id"])
+        ship = world.entities.get(merchant["ship_id"])
+        crew_id = ship.get("controller_crew_id") if ship else None
+        crew = world.crew_ships.crews.get(crew_id)
+        account = self.crew_accounts.get(crew_id)
+        quantity = trade_event.data["quantity_milli"]
+        goods_id = trade_event.data["goods_id"]
+        market = self.islands[island_id]
+        fine = max(1, (quantity + 999) // 1000)
+        if (not crew or not account or crew["treasury_silver"] != account["treasury_silver"]
+                or account["treasury_silver"] < fine
+                or market["stockpile_milli"][goods_id] < quantity):
+            raise ValueError("Port cannot enforce the sale without available goods and fine funds")
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="CONTRABAND_SEIZED", location=island_id,
+            actors=[{"role": "enforcing_authority", "entity_id": authority_faction_id}],
+            targets=[{"role": "seller", "entity_id": merchant["id"]}],
+            data={"trade_event_id": trade_event_id, "merchant_id": merchant["id"],
+                  "crew_id": crew_id, "goods_id": goods_id,
+                  "quantity_milli": quantity, "fine_silver": fine,
+                  "market_stock_before_milli": market["stockpile_milli"][goods_id],
+                  "market_stock_after_milli": market["stockpile_milli"][goods_id] - quantity,
+                  "island_treasury_before_silver": market["treasury_silver"],
+                  "island_treasury_after_silver": market["treasury_silver"] + fine,
+                  "crew_treasury_before_silver": account["treasury_silver"],
+                  "crew_treasury_after_silver": account["treasury_silver"] - fine,
+                  "ledger_sink": {"silver": 0, "goods": {goods_id: quantity}}},
+            caused_by=list(dict.fromkeys((trade_event_id, caused_by))),
+            causes_tags=["contraband_enforcement", "finite_confiscation"], magnitude=0.45,
+        )
+        market["stockpile_milli"][goods_id] -= quantity
+        market["treasury_silver"] += fine
+        account["treasury_silver"] -= fine
+        crew["treasury_silver"] -= fine
+        self.ledger.record_sink(event.id, goods={goods_id: quantity})
+        self.ledger.assert_balanced(self, validate_history=False)
+        world.politics.record_contraband_enforcement(
+            world, authority_faction_id, crew_id, caused_by=event.id)
+        return event.id
 
     def best_trade_route(self, world, merchant_id: str) -> dict[str, Any] | None:
         self._prepare_route_cache(world)
         merchant = self._merchant(merchant_id)
+        if merchant["status"] != "active":
+            return None
         ship_id = merchant["ship_id"]
         ship = world.entities.get(ship_id)
         if (not ship or not ship_is_commandable(world, ship_id)
@@ -1108,6 +1384,8 @@ class EconomySystem:
     def dispatch_trade_route(self, world, merchant_id: str, plan: dict[str, Any], *,
                              caused_by: str | None = None) -> str:
         merchant = self._merchant(merchant_id)
+        if merchant["status"] != "active":
+            raise ValueError("Closed merchant accounts cannot dispatch voyages")
         if plan.get("merchant_id") != merchant_id or plan.get("origin") not in self.islands:
             raise ValueError("Trade route plan does not belong to this merchant")
         ship = world.entities.get(merchant["ship_id"])
@@ -1131,6 +1409,8 @@ class EconomySystem:
         """Find a profitable future market and reposition empty to its exporter."""
         self._prepare_route_cache(world)
         merchant = self._merchant(merchant_id)
+        if merchant["status"] != "active":
+            return None
         ship_id = merchant["ship_id"]
         ship = world.entities.get(ship_id)
         if (not ship or not ship_is_commandable(world, ship_id)
@@ -1304,7 +1584,8 @@ class EconomySystem:
             return
         ship_id = scheduled.payload["actors"][0]["entity_id"]
         merchant_id = next((key for key, state in self.merchants.items()
-                            if state["ship_id"] == ship_id), None)
+                            if state["ship_id"] == ship_id
+                            and state.get("status", "active") == "active"), None)
         if merchant_id is None:
             return
         merchant = self.merchants[merchant_id]
@@ -1422,7 +1703,7 @@ class EconomySystem:
             except KeyError as exc:
                 raise ValueError("Ledger sink references an unknown event") from exc
             expected_sink = event.data.get("ledger_sink")
-            if (not isinstance(expected_sink, dict)
+            if (not isinstance(expected_sink, Mapping)
                     or expected_sink.get("silver") != sink["silver"]
                     or expected_sink.get("goods") != sink["goods"]):
                 raise ValueError("Ledger sink does not match its causal event")
@@ -1452,7 +1733,8 @@ class EconomySystem:
                         produced[goods_id] += quantity
                     for goods_id, quantity in event.data["consumption_milli"].items():
                         consumed[goods_id] += quantity
-                elif event.type == "SHIP_SUPPLIES_CONSUMED":
+                elif event.type in {"SHIP_SUPPLIES_CONSUMED",
+                                    "PRISONER_PROVISIONS_CONSUMED"}:
                     if (event.data.get("ship_id") not in self.ship_supplies
                             or set(event.data.get("consumed_milli", {})) != set(self.goods)
                             or set(event.data.get("shortage_milli", {})) != set(self.goods)):
@@ -1481,7 +1763,8 @@ class EconomySystem:
             if ((ship_id not in world.entities and ship_id not in world.archive)
                     or (world.entities.get(ship_id) or world.archive.get(ship_id)).get("kind") != "ship"):
                 raise ValueError(f"Merchant has no active vessel: {merchant_id}")
-            if world.archive.get(ship_id, {}).get("sunk_tick") is not None:
+            if (merchant["status"] == "active"
+                    and world.archive.get(ship_id, {}).get("sunk_tick") is not None):
                 raise ValueError(f"Sunk ship retains an active merchant account: {merchant_id}")
             try:
                 last_event = world.event_log.get(merchant["last_event_id"])
@@ -1489,30 +1772,172 @@ class EconomySystem:
                 raise ValueError(f"Merchant references an unknown event: {merchant_id}") from exc
             if last_event.type not in {
                     "MERCHANT_CREATED", "MARKET_TRADE", "MERCHANT_ROUTE_DECISION",
-                    "VOYAGE_STARTED", "VOYAGE_ARRIVED", "MERCHANT_VESSEL_REPLACED"}:
+                    "VOYAGE_STARTED", "VOYAGE_ARRIVED", "MERCHANT_VESSEL_REPLACED",
+                    "MERCHANT_ACTIVITY_BLOCKED", "MERCHANT_CLOSED"}:
                 raise ValueError(f"Merchant references a non-merchant event: {merchant_id}")
-            if ship_id in world.travel.transits:
-                if "location" in world.entities[ship_id]:
-                    raise ValueError(f"Merchant vessel has stale location while at sea: {merchant_id}")
+            if merchant["status"] == "active":
+                if (world.entities.get(ship_id, {}).get("legal_owner")
+                        != {"kind": "merchant", "id": merchant_id}):
+                    raise ValueError(f"Active merchant has lost title to its vessel: {merchant_id}")
             else:
+                try:
+                    closed_event = world.event_log.get(merchant["closed_event_id"])
+                except KeyError as exc:
+                    raise ValueError(f"Merchant closure references an unknown event: {merchant_id}") from exc
+                if (closed_event.type != "MERCHANT_CLOSED"
+                        or closed_event.data.get("merchant_id") != merchant_id
+                        or closed_event.data.get("ship_id") != ship_id
+                        or closed_event.data.get("reason") != merchant["closure_reason"]
+                        or merchant["last_event_id"] != closed_event.id
+                        or len(closed_event.caused_by) != 1):
+                    raise ValueError(f"Merchant closure does not match its lifecycle event: {merchant_id}")
+                cause = world.event_log.get(closed_event.caused_by[0])
+                expected_cause = ({"SHIP_ACQUIRED", "SHIP_CAPTURED"}
+                                  if merchant["closure_reason"] == "vessel_title_transferred"
+                                  else {"SHIP_SUNK"}
+                                  if merchant["closure_reason"] == "vessel_sunk" else set())
+                if cause.type not in expected_cause:
+                    raise ValueError(f"Merchant closure has an invalid causal transition: {merchant_id}")
+            if ship_id in world.travel.transits:
+                if ship_id in world.entities and "location" in world.entities[ship_id]:
+                    raise ValueError(f"Merchant vessel has stale location while at sea: {merchant_id}")
+            elif merchant["status"] == "active":
                 location = world.entities[ship_id].get("location", {})
                 if location.get("kind") != "island" or location.get("id") not in self.islands:
                     raise ValueError(f"Merchant vessel is not at a known island: {merchant_id}")
+
+        relief_causes = set()
+        for event in world.event_log.by_type("SHORTAGE_RELIEF_NEGOTIATED"):
+            key = (event.data.get("pressure_event_id"), event.data.get("goods_id"))
+            if key in relief_causes:
+                raise ValueError("One shortage cause has duplicate relief negotiations")
+            relief_causes.add(key)
+            try:
+                pressure = world.event_log.get(key[0])
+                trade = world.event_log.get(event.data.get("trade_event_id"))
+            except (KeyError, TypeError) as exc:
+                raise ValueError("Shortage relief references an unknown cause or trade") from exc
+            goods_id = key[1]
+            quantity = event.data.get("quantity_milli")
+            if (pressure.type != "ISLAND_ECONOMY_UPDATED"
+                    or pressure.location != event.location
+                    or pressure.data.get("shortage_milli", {}).get(goods_id, 0) <= 0
+                    or trade.type != "MARKET_TRADE"
+                    or trade.data.get("merchant_id") != event.data.get("merchant_id")
+                    or trade.data.get("island_id") != event.location
+                    or trade.data.get("goods_id") != goods_id
+                    or trade.data.get("side") != "sell"
+                    or trade.data.get("quantity_milli") != quantity
+                    or type(quantity) is not int or quantity <= 0
+                    or event.data.get("materially_settled") is not True
+                    or set(event.caused_by) != {pressure.id, trade.id}
+                    or trade.caused_by != (pressure.id,)):
+                raise ValueError("Shortage relief does not match its pressure and finite trade")
+
+        seizure_trades = set()
+        for event in world.event_log.by_type("CONTRABAND_SEIZED"):
+            trade_id = event.data.get("trade_event_id")
+            if trade_id in seizure_trades:
+                raise ValueError("Contraband sale has duplicate confiscation outcomes")
+            seizure_trades.add(trade_id)
+            try:
+                trade = world.event_log.get(trade_id)
+                inspection = next(world.event_log.get(parent_id) for parent_id in event.caused_by
+                                  if world.event_log.get(parent_id).type == "ENFORCEMENT_ACTION")
+            except (KeyError, StopIteration, TypeError) as exc:
+                raise ValueError("Contraband seizure lacks its trade and inspection causes") from exc
+            quantity = event.data.get("quantity_milli")
+            fine = event.data.get("fine_silver")
+            goods_id = event.data.get("goods_id")
+            expected_ledger_sink = {"silver": 0, "goods": {goods_id: quantity}}
+            if (trade.type != "MARKET_TRADE" or trade.data.get("goods_id") != "contraband"
+                    or trade.data.get("side") != "sell"
+                    or trade.data.get("island_id") != event.location
+                    or trade.data.get("merchant_id") != event.data.get("merchant_id")
+                    or trade.data.get("quantity_milli") != quantity
+                    or inspection.data.get("action_id") != "inspect_contraband"
+                    or inspection.data.get("trade_event_id") != trade.id
+                    or inspection.data.get("authority_faction_id")
+                    not in world.politics.island_rulers.values()
+                    or world.politics.island_rulers.get(event.location)
+                    != inspection.data.get("authority_faction_id")
+                    or type(quantity) is not int or quantity <= 0
+                    or type(fine) is not int or fine <= 0
+                    or event.data.get("market_stock_before_milli")
+                    - event.data.get("market_stock_after_milli") != quantity
+                    or event.data.get("crew_treasury_before_silver")
+                    - event.data.get("crew_treasury_after_silver") != fine
+                    or event.data.get("island_treasury_after_silver")
+                    - event.data.get("island_treasury_before_silver") != fine
+                    or event.data.get("ledger_sink") != expected_ledger_sink
+                    or not {trade.id, inspection.id}.issubset(set(event.caused_by))):
+                raise ValueError("Contraband seizure does not match legal authority or conserved transfer")
+
+        rivalry_pairs = set()
+        for event in world.event_log.by_type("PROFITABLE_TRADE_RIVALRY"):
+            trade_ids = event.data.get("trade_event_ids")
+            pair = tuple(sorted(trade_ids)) if isinstance(trade_ids, (list, tuple)) else ()
+            if len(pair) != 2 or pair[0] == pair[1] or pair in rivalry_pairs:
+                raise ValueError("Profitable trade rivalry has invalid or duplicate evidence")
+            rivalry_pairs.add(pair)
+            try:
+                first, second = (world.event_log.get(event_id) for event_id in pair)
+            except KeyError as exc:
+                raise ValueError("Profitable trade rivalry references an unknown sale") from exc
+            if (first.type != "MARKET_TRADE" or second.type != "MARKET_TRADE"
+                    or any(sale.data.get("side") != "sell"
+                           or sale.data.get("profit_silver", 0) <= 0
+                           or sale.location != event.location
+                           or sale.data.get("goods_id") != event.data.get("goods_id")
+                           for sale in (first, second))
+                    or first.data.get("merchant_id") == second.data.get("merchant_id")
+                    or event.caused_by != pair
+                    or sorted(event.data.get("merchant_ids", ())) != sorted((
+                        first.data.get("merchant_id"), second.data.get("merchant_id")))):
+                raise ValueError("Profitable trade rivalry lacks two matching profitable sales")
 
     def _make_merchant_decisions(self, world) -> None:
         decision_day = self.last_updated_day
         for merchant_id in sorted(self.merchants):
             merchant = self.merchants[merchant_id]
+            if merchant["status"] != "active":
+                continue
             if decision_day - merchant["last_route_attempt_day"] < 7:
+                continue
+            if merchant["ship_id"] in world.travel.transits:
+                merchant["activity_blocker_reason"] = None
+                merchant["activity_blocker_since_day"] = None
                 continue
             merchant["last_route_attempt_day"] = decision_day
             plan = self.best_trade_route(world, merchant_id)
             if plan is not None:
                 self.dispatch_trade_route(world, merchant_id, plan)
+                merchant["activity_blocker_reason"] = None
+                merchant["activity_blocker_since_day"] = None
                 continue
             reposition = self.best_reposition(world, merchant_id)
             if reposition is None:
+                reason, details = self._merchant_blocker_reason(world, merchant_id)
+                if merchant["activity_blocker_reason"] != reason:
+                    merchant["activity_blocker_since_day"] = decision_day
+                merchant["activity_blocker_reason"] = reason
+                blocked = world.event_log.append(
+                    tick=world.clock.tick, event_type="MERCHANT_ACTIVITY_BLOCKED",
+                    location=(world.location_of(merchant["ship_id"])["id"]
+                              if merchant["ship_id"] in world.entities else None),
+                    actors=[{"role": "merchant", "entity_id": merchant_id}],
+                    targets=[{"role": "merchant_vessel", "entity_id": merchant["ship_id"]}],
+                    data={"merchant_id": merchant_id, "ship_id": merchant["ship_id"],
+                          "blocker_reason": reason,
+                          "blocker_since_day": merchant["activity_blocker_since_day"],
+                          "day": decision_day, **details},
+                    caused_by=[merchant["last_event_id"]],
+                    causes_tags=["merchant_activity", "blocker_telemetry", reason],
+                    magnitude=0.05)
+                merchant["last_event_id"] = blocked.id
                 continue
+            merchant["activity_blocker_reason"] = None
+            merchant["activity_blocker_since_day"] = None
             decision = world.event_log.append(
                 tick=world.clock.tick,
                 event_type="MERCHANT_ROUTE_DECISION",
@@ -1529,6 +1954,126 @@ class EconomySystem:
                 self.merchants[merchant_id]["ship_id"],
                 reposition["source_island"], caused_by=decision.id,
             )
+
+    def close_merchant_for_title_transfer(self, world, ship_id: str,
+                                          previous_owner: dict[str, Any] | None,
+                                          new_owner: dict[str, Any],
+                                          ownership_event_id: str) -> str | None:
+        """Close a firm whose legally titled vessel was transferred.
+
+        Account silver and cargo remain conserved as an unresolved merchant
+        claim; neither is awarded to the captor or silently destroyed.
+        """
+        if not isinstance(previous_owner, dict) or previous_owner.get("kind") != "merchant":
+            return None
+        merchant_id = previous_owner.get("id")
+        merchant = self.merchants.get(merchant_id)
+        if merchant is None or merchant.get("ship_id") != ship_id:
+            raise ValueError("Transferred merchant title has no matching account")
+        if merchant.get("status", "active") == "closed" or new_owner == previous_owner:
+            return None
+        ownership = world.event_log.get(ownership_event_id)
+        return self._close_merchant_account(
+            world, merchant, ship_id, ownership.id,
+            reason="vessel_title_transferred", new_owner=new_owner,
+            location=world.location_of(ship_id))
+
+    def close_merchant_for_vessel_loss(self, world, ship_id: str,
+                                      loss_event_id: str,
+                                      location: dict[str, Any] | None = None) -> str | None:
+        merchant = next((row for row in self.merchants.values()
+                         if row.get("ship_id") == ship_id
+                         and row.get("status", "active") == "active"), None)
+        if merchant is None:
+            return None
+        world.event_log.get(loss_event_id)
+        return self._close_merchant_account(
+            world, merchant, ship_id, loss_event_id, reason="vessel_sunk",
+            location=location)
+
+    def _close_merchant_account(self, world, merchant: dict[str, Any], ship_id: str,
+                                cause_event_id: str, *, reason: str,
+                                new_owner: dict[str, Any] | None = None,
+                                location: dict[str, Any] | None = None) -> str:
+        cause = world.event_log.get(cause_event_id)
+        resolved_location = location if location is not None else world.location_of(ship_id)
+        closed = world.event_log.append(
+            tick=world.clock.tick, event_type="MERCHANT_CLOSED",
+            location=resolved_location.get("id"),
+            actors=[{"role": "merchant", "entity_id": merchant["id"]}],
+            targets=[{"role": "merchant_vessel", "entity_id": ship_id}],
+            data={"merchant_id": merchant["id"], "ship_id": ship_id,
+                  "reason": reason, "new_owner": new_owner,
+                  "retained_silver": merchant["silver"],
+                  "retained_cargo_milli": dict(merchant["cargo_milli"]),
+                  "account_disposition": "retained_as_unresolved_merchant_claim"},
+            caused_by=[cause.id],
+            causes_tags=["merchant_lifecycle", "merchant_closed", reason,
+                         "assets_retained"],
+            magnitude=0.5)
+        merchant["status"] = "closed"
+        merchant["closed_event_id"] = closed.id
+        merchant["closure_reason"] = reason
+        merchant["activity_blocker_reason"] = None
+        merchant["activity_blocker_since_day"] = None
+        merchant["last_event_id"] = closed.id
+        return closed.id
+
+    def _merchant_blocker_reason(self, world, merchant_id: str) -> tuple[str, dict[str, Any]]:
+        merchant = self._merchant(merchant_id)
+        ship_id = merchant["ship_id"]
+        ship = world.entities.get(ship_id)
+        if not ship:
+            return "ship_missing", {}
+        if ship_id in world.travel.transits:
+            return "underway", {"route_ids": world.travel.transits[ship_id]["route_ids"]}
+        commandable = ship_is_commandable(world, ship_id)
+        title_matches = ship.get("legal_owner") == {"kind": "merchant", "id": merchant_id}
+        if not commandable or not title_matches:
+            reason = ("title_and_controller_unavailable" if not commandable and not title_matches
+                      else "controller_unavailable" if not commandable
+                      else "legal_title_mismatch")
+            return reason, {
+                "commandable": commandable,
+                "controller_crew_id": ship.get("controller_crew_id"),
+                "legal_owner": ship.get("legal_owner"),
+            }
+        location = ship.get("location", {})
+        if location.get("kind") != "island" or location.get("id") not in self.islands:
+            return "location_unavailable", {"location": location}
+        free_capacity = merchant["capacity_milli"] - sum(merchant["cargo_milli"].values())
+        if free_capacity <= 0:
+            return "cargo_hold_full", {"free_capacity_milli": free_capacity}
+        if merchant["silver"] <= 0 and not any(merchant["cargo_milli"].values()):
+            return "working_capital_empty", {"silver": merchant["silver"]}
+        origin = location["id"]
+        viable_spreads = 0
+        routable_markets = 0
+        for destination, market in self.islands.items():
+            if destination == origin or self._market_liquidity(market) <= 0:
+                continue
+            try:
+                self.geography.shortest_path(origin, destination,
+                                             blocked_routes=frozenset(self.blockades))
+            except ValueError:
+                continue
+            routable_markets += 1
+            for good in self.goods:
+                source_price = self.islands[origin]["prices_milli"][good]
+                if (self.islands[origin]["stockpile_milli"][good] > 0
+                        and market["prices_milli"][good] > source_price):
+                    viable_spreads += 1
+                    break
+        if routable_markets == 0:
+            reason = "routes_blocked_or_unreachable"
+        elif viable_spreads == 0:
+            reason = "no_positive_market_spread_or_buyer_liquidity"
+        else:
+            reason = "no_positive_net_profit_after_travel_and_risk"
+        return reason, {"routable_market_count": routable_markets,
+                        "positive_spread_market_count": viable_spreads,
+                        "silver": merchant["silver"],
+                        "free_capacity_milli": free_capacity}
 
     def _merchant(self, merchant_id: str) -> dict[str, Any]:
         try:

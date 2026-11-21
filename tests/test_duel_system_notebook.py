@@ -131,7 +131,7 @@ def test_v1_notebook_migrates_to_v7_without_losing_observed_counts():
     data = book.to_data()
     data["version"] = 1
     restored = Notebook.from_data(data, load_config())
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.entry("brute", KEY).counts == book.entry("brute", KEY).counts
 
 
@@ -143,3 +143,27 @@ def test_entry_retains_only_last_five_private_keys_and_validates_public_full_joi
     assert len(data["archetypes"]["brute"][0]["full_keys"]) == 5
     with pytest.raises(ValueError, match="public"):
         record(book, full=replace(FULL, public=replace(KEY, gap_band="FAR")))
+
+
+def test_session_records_every_valid_ai_tactical_category_without_crashing():
+    from pirates.duel_system.ai import TACTICAL_CATEGORIES, observe
+    from pirates.duel_system.session import DuelSession
+
+    session = DuelSession.new(seed=1, guide_mode="off")
+    observation = observe(session.state, session.enemy.id)
+    categories = set(session.state.config["ai"]["tie_order"])
+    categories.update(TACTICAL_CATEGORIES)
+    categories.update({"CRAWL", "RISE"})
+
+    for category in sorted(categories):
+        session._record_npc(session.enemy.id, category, observation)
+
+    entry = session.notebook.entry("ronin", observation.public_key, npc_id=session.enemy.id)
+    assert entry.total == len(categories)
+    assert set(dict(entry.counts)) == categories
+
+
+def test_notebook_still_rejects_categories_that_are_not_ai_decisions():
+    book = Notebook(load_config())
+    with pytest.raises(ValueError, match="Unknown notebook action"):
+        record(book, "NOT_A_DUEL_ACTION")

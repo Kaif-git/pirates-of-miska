@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 import math
@@ -61,6 +62,19 @@ _EVENT_LABELS = {
     "BATTLE_CASUALTY": "a battle casualty",
     "FACTION_POWER_VACUUM": "a faction's crisis of command",
     "LOD_PROMOTED": "a rise from the background",
+    "PUBLIC_RENOWN_EARNED": "recognition for a verified deed",
+    "PROFITABLE_TRADE_RIVALRY": "a rivalry over profitable trade",
+    "SHORTAGE_RELIEF_NEGOTIATED": "the easing of a recorded shortage",
+    "CONTRABAND_SEIZED": "a lawful contraband seizure",
+    "DREAM_PLAN_COMPLETED": "the completion of a proven ambition",
+    "DREAM_PLAN_FAILED": "an ambition's verified failure",
+    "DREAM_PLAN_ABANDONED": "an abandoned ambition",
+    "TREASURE_CLUE_LEARNED": "the learning of a treasure clue",
+    "TREASURE_CLUE_SPREAD": "a circulating treasure rumor",
+    "TREASURE_RUMOR": "a circulating treasure rumor",
+    "RUMOR_SHARED": "the passing of an uncertain report",
+    "FEUD_RAID_ATTEMPTED": "a grudge-driven raid attempt",
+    "CREW_EMPLOYMENT_ACCEPTED": "the employment of a stranded crew",
 }
 
 
@@ -246,6 +260,15 @@ class NameRegistry:
 
 class Chronicler:
     """Ranks and narrates immutable events, returning artifacts without mutating world."""
+
+    _THREAD_TERMINALS = {
+        "DREAM_PLAN_COMPLETED", "DREAM_PLAN_FAILED", "DREAM_PLAN_ABANDONED",
+        "PLAN_STEP_BLOCKED", "PLAN_STEP_FAILED",
+        "TREASURE_FOUND", "PROFITABLE_TRADE_RIVALRY", "SHORTAGE_RELIEF_NEGOTIATED",
+        "CONTRABAND_SEIZED", "TREATY_BREACHED", "TREATY_OBLIGATION_FULFILLED",
+        "ENCOUNTER_RESOLVED", "BATTLE_CONCLUDED", "LEGEND_RECOGNIZED",
+        "PUBLIC_RENOWN_EARNED", "FEUD_RAID_ATTEMPTED", "CREW_EMPLOYMENT_ACCEPTED",
+    }
 
     def __init__(self, templates: dict[str, Any] | None = None) -> None:
         self.catalog = load_templates() if templates is None else templates
@@ -643,7 +666,51 @@ class Chronicler:
                                       "event records into annual summaries.",
                               "event_ids": [], "collapsed": True, "event_count": count})
         return sorted(prose, key=lambda row: (row["tick"],
-                                             row["event_ids"][0] if row["event_ids"] else ""))
+                                              row["event_ids"][0] if row["event_ids"] else ""))
+
+    def story_threads(self, world, *, limit: int = 100, tone: str = "plain") -> list[dict[str, Any]]:
+        """Return compact outcome-centered threads with explicit immutable event provenance."""
+        if type(limit) is not int or limit < 1:
+            raise ValueError("Story-thread limit must be a positive integer")
+        threads = []
+        for terminal in world.event_log:
+            if terminal.type not in self._THREAD_TERMINALS:
+                continue
+            pending = [(parent_id, 1) for parent_id in terminal.caused_by]
+            ancestors = {}
+            while pending and len(ancestors) < 48:
+                parent_id, depth = pending.pop(0)
+                if parent_id in ancestors or depth > 12:
+                    continue
+                parent = world.event_log.get(parent_id)
+                ancestors[parent_id] = parent
+                pending.extend((ancestor_id, depth + 1) for ancestor_id in parent.caused_by)
+            chain = sorted((*ancestors.values(), terminal), key=lambda event: (event.tick, event.id))
+            steps = []
+            for event in chain:
+                if event.type in {"WORLD_GENERATED", "ISLAND_ECONOMY_INITIALIZED",
+                                  "CHARACTER_GENERATED", "SHIP_CREATED", "CREW_FOUNDED"}:
+                    continue
+                if event.event_class == "routine" and event.type not in {
+                        "AGENT_ACTION", "MARKET_TRADE", "DREAM_PROGRESS",
+                        "RUMOR_SHARED", "TREASURE_RUMOR", "TREASURE_CLUE_SPREAD"}:
+                    continue
+                row = {"event_id": event.id, "tick": event.tick,
+                       "event_type": event.type, "text": self.narrate(world, event, tone=tone),
+                       "caused_by_event_ids": list(event.caused_by), "certainty": "recorded_fact"}
+                if event.type in {"RUMOR_SHARED", "TREASURE_RUMOR", "TREASURE_CLUE_SPREAD"}:
+                    row["certainty"] = "rumor"
+                    if "confidence_permille" in event.data:
+                        row["confidence_permille"] = event.data["confidence_permille"]
+                    if "distorted" in event.data:
+                        row["distorted"] = event.data["distorted"]
+                steps.append(row)
+            threads.append({"thread_id": terminal.id, "terminal_event_id": terminal.id,
+                            "terminal_type": terminal.type,
+                            "title": terminal.type.replace("_", " ").title(),
+                            "steps": steps,
+                            "evidence_event_ids": [row["event_id"] for row in steps]})
+        return threads[-limit:]
 
     def rumor(self, world, event, *, rumor_seed: int = 0) -> dict[str, Any]:
         if type(rumor_seed) is not int:
@@ -763,11 +830,190 @@ class Chronicler:
                 "headlines": [{"event_id": event.id, "text": self.narrate(world, event)}
                               for event in ranked[:5]]}
 
+    def simulation_report(self, world) -> dict[str, Any]:
+        """Summarize observed records/state; absent events remain zero, never quota-filled."""
+        events = list(world.event_log)
+        by_type = Counter(event.type for event in events)
+        by_class = Counter(event.event_class for event in events)
+        plans = world.decisions.agents.values()
+        plan_rows = [state["plan"] for state in plans if state.get("plan")]
+        plan_status = Counter(plan["status"] for plan in plan_rows)
+        plan_status["blocked_steps"] = sum(
+            step.get("status") == "blocked" for plan in plan_rows for step in plan["steps"])
+        plan_status["failed_steps"] = sum(
+            step.get("status") == "failed" for plan in plan_rows for step in plan["steps"])
+        treasure_chains = []
+        for found in world.event_log.by_type("TREASURE_FOUND"):
+            pending = list(found.caused_by)
+            seen = set()
+            chain = []
+            while pending and len(seen) < 64:
+                event_id = pending.pop(0)
+                if event_id in seen:
+                    continue
+                seen.add(event_id)
+                event = world.event_log.get(event_id)
+                chain.append(event)
+                pending.extend(event.caused_by)
+            chain.sort(key=lambda event: (event.tick, event.id))
+            treasure_chains.append({"discovery_event_id": found.id,
+                                    "treasure_id": found.data.get("treasure_id"),
+                                    "clue_event_ids": [event.id for event in chain
+                                                       if event.type in {
+                                                           "TREASURE_RUMOR", "TREASURE_CLUE_SPREAD",
+                                                           "TREASURE_CLUE_LEARNED"}],
+                                    "evidence_event_ids": [event.id for event in chain] + [found.id]})
+        conflict_types = {
+            "ROUTE_BLOCKADED", "SHORTAGE_RELIEF_NEGOTIATED", "PROFITABLE_TRADE_RIVALRY",
+            "CONTRABAND_SEIZED", "TREATY_BREACHED", "TREATY_OBLIGATION_FULFILLED",
+            "TREATY_TRANSITION",
+        }
+        conflict_counts = {event_type: by_type[event_type] for event_type in sorted(conflict_types)}
+        encounter_outcomes = Counter(str(event.data.get("outcome", "unknown"))
+                                     for event in world.event_log.by_type("ENCOUNTER_RESOLVED"))
+        battle_outcomes = Counter(str(event.data.get("outcome", "unknown"))
+                                  for event in world.event_log.by_type("BATTLE_CONCLUDED"))
+        exchanges = list(world.event_log.by_type("PERSONAL_EXCHANGE"))
+        gear_morale = Counter()
+        for event in exchanges:
+            morale = event.data.get("attacker_morale")
+            if type(morale) is not int:
+                morale_band = "unknown"
+            elif morale < 34:
+                morale_band = "low"
+            elif morale < 67:
+                morale_band = "mid"
+            else:
+                morale_band = "high"
+            key = (event.data.get("weapon_id", "unknown"),
+                   event.data.get("armor_id", "unknown"), morale_band)
+            gear_morale[key] += 1
+        relative_attributes = Counter()
+        relative_stats: dict[str, Counter[str]] = defaultdict(Counter)
+        for event in world.event_log.by_type("PERSONAL_INITIATIVE"):
+            speeds = event.data.get("speed", ())
+            if isinstance(speeds, (list, tuple)) and len(speeds) == 2 \
+                    and all(type(value) is int for value in speeds):
+                delta = speeds[0] - speeds[1]
+                relative_attributes["first_faster" if delta > 0 else
+                                    "second_faster" if delta < 0 else "equal_speed"] += 1
+        for event in world.event_log.by_type("PERSONAL_COMBAT_STARTED"):
+            profiles = event.data.get("profiles_before", ())
+            if not isinstance(profiles, (list, tuple)) or len(profiles) != 2:
+                continue
+            for stat in ("combat", "speed", "strength", "endurance", "toughness", "willpower"):
+                values = [profile.get("stats", {}).get(stat, {}).get("effective")
+                          for profile in profiles if isinstance(profile, Mapping)]
+                if len(values) != 2 or any(type(value) is not int for value in values):
+                    continue
+                relative_stats[stat]["first_higher" if values[0] > values[1] else
+                                     "second_higher" if values[0] < values[1] else "equal"] += 1
+        personal_duels = []
+        for duel in world.event_log.by_type("LEGEND_DUEL"):
+            start_id = duel.data.get("personal_combat_started_event_id")
+            if not isinstance(start_id, str):
+                continue
+            start = world.event_log.get(start_id)
+            profiles = start.data.get("profiles_before", ())
+            stat_advantages = {}
+            if isinstance(profiles, (list, tuple)) and len(profiles) == 2:
+                for stat in ("combat", "speed", "strength", "endurance", "toughness", "willpower"):
+                    values = [profile.get("stats", {}).get(stat, {}).get("effective")
+                              for profile in profiles if isinstance(profile, Mapping)]
+                    if len(values) == 2 and all(type(value) is int for value in values):
+                        stat_advantages[stat] = ("first" if values[0] > values[1] else
+                                                 "second" if values[0] < values[1] else "even")
+            exchange_bands = []
+            for exchange_id in duel.data.get("personal_exchange_event_ids", ()):
+                exchange = world.event_log.get(exchange_id)
+                morale = exchange.data.get("attacker_morale")
+                morale_band = ("unknown" if type(morale) is not int else
+                               "low" if morale < 34 else "mid" if morale < 67 else "high")
+                exchange_bands.append({"weapon_id": exchange.data.get("weapon_id", "unknown"),
+                                       "armor_id": exchange.data.get("armor_id", "unknown"),
+                                       "attacker_morale_band": morale_band,
+                                       "hit": exchange.data.get("hit")})
+            personal_duels.append({"duel_event_id": duel.id,
+                                   "outcome": duel.data.get("outcome", "unknown"),
+                                   "winner_side": duel.data.get("winner_side"),
+                                   "relative_attributes": stat_advantages,
+                                   "exchange_bands": exchange_bands})
+        rival_pairs = Counter()
+        for event in world.event_log.by_type("FEUD_RAID_ATTEMPTED"):
+            raider = next((row.get("entity_id") for row in event.actors
+                           if row.get("role") == "raider"), None)
+            rival = next((row.get("entity_id") for row in event.targets
+                          if row.get("role") == "raided_rival"), None)
+            if raider and rival:
+                rival_pairs[tuple(sorted((raider, rival)))] += 1
+        open_obligations = [
+            {"treaty_key": key, "event_id": row["event_id"],
+             "obligated_faction": row["obligated_faction"]}
+            for key, treaty in sorted(world.politics.treaties.items())
+            for row in treaty["obligations"] if row["status"] == "open"]
+        stranded = [crew_id for crew_id, crew in world.crew_ships.crews.items()
+                    if not crew["ship_ids"] and crew.get("stranded_location")]
+        recovered = [event.id for event in events
+                     if event.type == "CREW_EMPLOYMENT_ACCEPTED"
+                     and "stranded_crew" in event.causes_tags]
+        return {
+            "event_counts": {"by_type": dict(sorted(by_type.items())),
+                             "by_class": dict(sorted(by_class.items())),
+                             "total": len(events)},
+            "dream_plans": {"observed_transitions": {
+                event_type: by_type[event_type] for event_type in (
+                    "DREAM_PLAN_COMPLETED", "DREAM_PLAN_FAILED", "DREAM_PLAN_ABANDONED")},
+                "current_state_counts": dict(sorted(plan_status.items()))},
+            "treasure": {"clue_events": (by_type["TREASURE_CLUE_LEARNED"]
+                                            + by_type["TREASURE_CLUE_SPREAD"]),
+                         "rumor_events": by_type["TREASURE_RUMOR"],
+                         "discovery_events": by_type["TREASURE_FOUND"],
+                         "undiscovered_sites": sum(row["discovered_event_id"] is None
+                                                   for row in world.environment.treasures.values()),
+                         "discovery_chains": treasure_chains},
+            "trade_conflicts": {"event_counts": conflict_counts,
+                                "blockades_open": len(world.economy.blockades),
+                                "treaty_obligations_open": len(open_obligations)},
+            "combat": {"encounter_outcomes": dict(sorted(encounter_outcomes.items())),
+                       "fleet_battle_outcomes": dict(sorted(battle_outcomes.items())),
+                       "personal_duels": personal_duels,
+                       "relative_attribute_bands": {
+                           stat: dict(sorted(counts.items()))
+                           for stat, counts in sorted(relative_stats.items())},
+                       "personal_exchange_bands": [
+                           {"weapon_id": weapon, "armor_id": armor,
+                            "attacker_morale_band": morale_band, "exchange_count": count}
+                           for (weapon, armor, morale_band), count
+                           in sorted(gear_morale.items())],
+                       "relative_speed_bands": dict(sorted(relative_attributes.items())),
+                       "limitation": "Personal-combat relative stat bands, attacker morale, weapon, armor, and initiative speed are descriptive event counts; the current event model does not join every band to a validated duel winner, so these are not causal win-rate estimates."},
+            "public_deeds": {"renown_awards": by_type["PUBLIC_RENOWN_EARNED"],
+                             "legend_recognitions": by_type["LEGEND_RECOGNIZED"],
+                             "rookie_promotions": by_type["ROOKIE_PROMOTED"],
+                             "deed_event_ids": [event.id for event in world.event_log.by_type(
+                                 "PUBLIC_RENOWN_EARNED")],
+                             "legend_recognition_event_ids": [event.id for event in
+                                                               world.event_log.by_type(
+                                                                   "LEGEND_RECOGNIZED")],
+                             "deeds_by_kind": dict(sorted(Counter(
+                                 event.data.get("deed_kind", "unknown")
+                                 for event in world.event_log.by_type("PUBLIC_RENOWN_EARNED")
+                             ).items()))},
+            "rivalry": {"attempts": by_type["FEUD_RAID_ATTEMPTED"],
+                        "repeat_pairs": [{"character_ids": list(pair), "attempts": count}
+                                         for pair, count in sorted(rival_pairs.items()) if count > 1]},
+            "open_obligations": open_obligations,
+            "stranded_crew_recovery": {"currently_stranded_crew_ids": sorted(stranded),
+                                        "recovery_events": recovered},
+        }
+
     def generate_all(self, world, *, tone: str = "plain") -> dict[str, Any]:
         before = (world.clock.tick, len(world.event_log), world.rng.snapshot(), world.ids.snapshot())
         awards = self.epithet_awards(world)
         artifacts = {
             "chronicle": self.running_chronicle(world, tone=tone),
+            "story_threads": self.story_threads(world, tone=tone),
+            "simulation_report": self.simulation_report(world),
             "rumors": [self.rumor(world, event, rumor_seed=world.seed if type(world.seed) is int else 0)
                        for event in world.event_log if self._is_significant(world, event)],
             "bounty_posters": self.bounty_posters(world),

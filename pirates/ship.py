@@ -984,21 +984,9 @@ class ShipLife:
         if (not vessel or vessel["quality"] != "clean" or type(amount_ml) is not int
                 or amount_ml < 1 or amount_ml > vessel["contents_ml"]):
             raise ValueError("Invalid clean-water decant")
-        from pirates.ship_storage import bundle_mass
         storage = self.storage
         incoming = {"clean_water_ml": amount_ml}
-        pending = [job.transfer | {"delivered": job.state in ("done", "cancelled")}
-                   for job in self.jobs if job.transfer]
-        return_mass = sum(bundle_mass(row["bundle"]) for job in self.jobs
-                          if job.state not in ("done", "cancelled") for row in job.supply_plan
-                          if row["pile"] == "water" and not row["returned"])
-        transfer_mass = sum(bundle_mass(job.transfer["bundle"]) for job in self.jobs
-                            if job.transfer and job.state not in ("done", "cancelled")
-                            and job.transfer["destination"] == "water")
-        pile = storage.piles["water"]
-        if (not storage.reserve_capacity("water", incoming, pending)
-                or bundle_mass(pile.contents) + bundle_mass(incoming) + return_mass + transfer_mass
-                    > pile.capacity_kg):
+        if not storage.reserve_capacity("water", incoming, self.jobs):
             raise ValueError("Water stockpile lacks unreserved capacity for this decant")
         self.stores["clean_water_ml"] += amount_ml
         vessel["contents_ml"] -= amount_ml
@@ -2697,10 +2685,19 @@ class ShipLife:
             integer(sailor.z, 0, 8)
             local = (sailor.x - 69, sailor.y - 12, sailor.z)
             parts = world.ship_model.at(*local)
-            if (not any(c.kind == "floor" for c in parts)
-                    or any(c.kind == "wall" for c in parts)
-                    or (sailor.z == world.active_deck
-                        and not world.game_map.is_walkable(sailor.x, sailor.y))
+            transfer_visit = getattr(world, "_restore_deck_visit", None)
+            from pirates.sea_transfer import in_deck
+            valid_away_position = (
+                isinstance(transfer_visit, dict)
+                and isinstance(transfer_visit.get("participants"), list)
+                and sailor.id in transfer_visit["participants"]
+                and sailor.z == 0 and in_deck(sailor.x, sailor.y))
+            valid_home_position = (
+                any(c.kind == "floor" for c in parts)
+                and not any(c.kind == "wall" for c in parts)
+                and (sailor.z != world.active_deck
+                     or world.game_map.is_walkable(sailor.x, sailor.y)))
+            if (not (valid_away_position or valid_home_position)
                     or (sailor.x, sailor.y, sailor.z) in occupied):
                 raise ValueError("Invalid / overlapping crew position")
             occupied.add((sailor.x, sailor.y, sailor.z))

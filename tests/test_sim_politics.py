@@ -92,6 +92,8 @@ def test_treaty_obligation_breach_is_single_use_and_damages_institutional_relati
     treaty_event = world.politics.propose_treaty(
         world, first, second, "alliance", caused_by=cause)
     request = world.politics.request_aid(world, first, second, caused_by=treaty_event)
+    with pytest.raises(ValueError, match="already open"):
+        world.politics.request_aid(world, first, second, caused_by=request)
     amendment = world.politics.propose_treaty(
         world, second, first, "nonaggression", caused_by=request)
     treaty = world.politics.treaties["|".join(sorted((first, second)))]
@@ -111,6 +113,86 @@ def test_treaty_obligation_breach_is_single_use_and_damages_institutional_relati
     assert restored.politics.treaties == world.politics.treaties
 
 
+def test_treaty_allows_only_one_open_aid_obligation_per_pair():
+    world = WorldState.create("bounded-open-aid-obligation")
+    first, second = _factions(world)
+    leader_a = world.politics.factions[first]["leader_id"]
+    leader_b = world.politics.factions[second]["leader_id"]
+    cause = world.entities[leader_a]["last_event_id"]
+    for _ in range(6):
+        world.memories.add_memory(world, leader_a, leader_b, "saved", event_id=cause,
+                                  intensity_permille=1000, valence_permille=1000)
+        world.memories.add_memory(world, leader_b, leader_a, "saved", event_id=cause,
+                                  intensity_permille=1000, valence_permille=1000)
+    treaty_id = world.politics.propose_treaty(
+        world, first, second, "alliance", caused_by=cause)
+    first_request = world.politics.request_aid(
+        world, first, second, caused_by=treaty_id)
+    with pytest.raises(ValueError, match="already open"):
+        world.politics.request_aid(world, first, second, caused_by=first_request)
+    world.politics.resolve_obligation(
+        world, second, first_request, fulfilled=True, caused_by=treaty_id)
+    second_request = world.politics.request_aid(
+        world, first, second, caused_by=first_request)
+    treaty = world.politics.treaties["|".join(sorted((first, second)))]
+    assert second_request != first_request
+    assert sum(item["status"] == "open" for item in treaty["obligations"]) == 1
+
+
+def test_public_renown_rejects_synthetic_market_rows_without_stat_changes():
+    world = WorldState.create("synthetic-market-deed-rejected")
+    merchant = world.economy.merchants["merchant_000001"]
+    ship = world.entities[merchant["ship_id"]]
+    crew = world.crew_ships.crews[ship["controller_crew_id"]]
+    captain = world.entities[crew["captain_id"]]
+    stats_before = dict(captain["stats"])
+    fake_trade = world.event_log.append(
+        tick=world.clock.tick, event_type="MARKET_TRADE", location=ship["location"]["id"],
+        data={"merchant_id": merchant["id"], "side": "sell", "profit_silver": 999},
+        caused_by=[merchant["last_event_id"]])
+
+    assert world.politics.record_public_deed(
+        world, captain["id"], fake_trade.id, deed_kind="profitable_trade") is None
+    assert captain["reputation"] == {}
+    assert captain["stats"] == stats_before
+    assert not world.event_log.by_type("PUBLIC_RENOWN_EARNED")
+
+
+def test_hostile_treaty_breach_can_transition_to_a_single_peaceful_settlement():
+    world = WorldState.create("trade-conflict-peace-settlement")
+    first, second = _factions(world)
+    leader_a = world.politics.factions[first]["leader_id"]
+    leader_b = world.politics.factions[second]["leader_id"]
+    cause = world.entities[leader_a]["last_event_id"]
+    for _ in range(6):
+        world.memories.add_memory(world, leader_a, leader_b, "saved", event_id=cause,
+                                  intensity_permille=1000, valence_permille=1000)
+        world.memories.add_memory(world, leader_b, leader_a, "saved", event_id=cause,
+                                  intensity_permille=1000, valence_permille=1000)
+    alliance = world.politics.propose_treaty(
+        world, first, second, "alliance", caused_by=cause)
+    hostile = world.event_log.append(
+        tick=world.clock.tick, event_type="ENCOUNTER_RESOLVED", location=None,
+        data={"outcome": "ship_captured"}, caused_by=[alliance],
+        causes_tags=["hostile_action_fixture"], magnitude=0.5)
+    war = world.politics._record_hostile_treaty_breach(
+        world, first, second, caused_by=hostile.id)
+    assert war is not None
+    assert world.event_log.get(war).data["to_state"] == "war"
+    breach = world.event_log.by_type("TREATY_BREACHED")[-1]
+
+    peace = world.politics.propose_treaty(
+        world, second, first, "nonaggression", caused_by=breach.id)
+
+    assert world.event_log.get(peace).data["from_state"] == "war"
+    assert world.event_log.get(peace).data["to_state"] == "nonaggression"
+    assert world.politics.treaties["|".join(sorted((first, second)))]["state"] == "nonaggression"
+    with pytest.raises(ValueError, match="Invalid treaty transition"):
+        world.politics.propose_treaty(world, first, second, "nonaggression", caused_by=peace)
+    world.event_log.validate_causality()
+    assert WorldState.from_snapshot(world.to_snapshot()).to_snapshot() == world.to_snapshot()
+
+
 def test_politics_data_rejects_impossible_self_transition():
     data, _ = load_politics_data()
     invalid = copy.deepcopy(data)
@@ -122,7 +204,7 @@ def test_politics_data_rejects_impossible_self_transition():
 
 def test_seeded_faction_records_home_territory_and_snapshot_resume():
     world = WorldState.create(811)
-    assert len(world.crew_ships.crews) == 3
+    assert len(world.crew_ships.crews) == 6
     assert len(world.politics.factions) == 2
     merchant_id = _merchant_coalition(world)
     merchant = world.politics.factions[merchant_id]

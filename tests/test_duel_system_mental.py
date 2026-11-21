@@ -7,13 +7,14 @@ import pytest
 from pirates.duel_system.config import load_config
 from pirates.duel_system.engine import Choice, advance_one_tick, check_end_conditions, commit_action
 from pirates.duel_system.mental import (
-    change_anger, fear_decision, initialize_fight, postfight_state,
+    change_anger, change_fear, fear_decision, initialize_fight, postfight_state,
 )
 from pirates.duel_system.model import (
     ActionKind, CombatState, Equipment, EventType, Personality, Severity, Weapon, Wound, Zone,
 )
-from pirates.duel_system.stats import effective_stats, pay_stamina
+from pirates.duel_system.stats import effective_stats, fear, pain_burden, pay_stamina
 from test_duel_system_foundation import bare_fighter
+from duel_test_helpers import force_clean_aims
 from test_duel_system_scheduler import arena, advance_to
 
 
@@ -59,7 +60,7 @@ def test_two_hits_without_return_increase_anger_and_own_hit_resets_counter():
     resolve_strike(state, attacker, defender, defense_snapshot(state, defender))
     first = defender.anger
     resolve_strike(state, attacker, defender, defense_snapshot(state, defender))
-    assert defender.anger - first == pytest.approx(7 + 6)
+    assert defender.anger - first == pytest.approx(9.375)
     assert defender.hits_without_return == 2
     commit_action(state, defender.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     resolve_strike(state, defender, attacker, defense_snapshot(state, attacker))
@@ -160,19 +161,131 @@ def test_prefight_morale_level_fear_and_postfight_carry_are_owned():
     assert not fighter.wounds[0].bandaged
 
 
-def worked(kind, weight=0, *, tiles=3, enemy_pos=(4, 0)):
+def test_fight_fear_starts_from_confidence_not_courage_or_morale():
     cfg = load_config()
-    cfg["accuracy"]["jitter"] = 0
+    recruit_personality = Personality(**deepcopy(cfg["ronin"]))
+    veteran_personality = Personality(**deepcopy(cfg["ronin"]))
+    recruit_personality.traits = deepcopy(cfg["ai_profiles"]["recruit"]["traits"])
+    veteran_personality.traits = deepcopy(cfg["ai_profiles"]["veteran"]["traits"])
+    recruit = bare_fighter("recruit", personality=recruit_personality)
+    veteran = bare_fighter("veteran", personality=veteran_personality)
+    recruit_personality.courage, veteran_personality.courage = 25, -20
+    recruit.morale, veteran.morale = 100, 0
+    state = initialize_fight([recruit, veteran], config=cfg, rng_seed=7)
+    assert fear(state.fighters[0], cfg) == pytest.approx(80)
+    assert fear(state.fighters[1], cfg) == pytest.approx(30)
+    assert state.fighters[0].morale != state.fighters[1].morale
+
+
+def test_hit_pain_and_continuing_bleed_raise_fear_once_per_resolved_cause():
+    from pirates.duel_system.wounds import apply_wound
+    state = arena()
+    attacker, defender = state.fighters
+    before = fear(defender, state.config)
+    apply_wound(state, attacker, defender, Zone.TORSO, Severity.CUT,
+                power=10, net=12, site="CHEST")
+    after_hit = fear(defender, state.config)
+    assert after_hit > before
+    assert any(event.type == EventType.POOL_CHANGE and "HIT_PAIN_BLEED" in event.cause_tags
+               for event in state.event_log)
+    state.fighters[1].action = None
+    advance_one_tick(state)
+    assert fear(defender, state.config) > after_hit
+    assert any(event.type == EventType.POOL_CHANGE and "CONTINUING_BLEED" in event.cause_tags
+               for event in state.event_log)
+
+
+def test_anger_tolerance_moderates_positive_gain_but_not_decay():
+    state = arena()
+    fighter = state.fighters[0]
+    fighter.personality = Personality(**deepcopy(state.config["ronin"]))
+    fighter.personality.anger_tolerance = 0.5
+    change_anger(state, fighter, 20, "TEST_HIT")
+    assert fighter.anger == 10
+    change_anger(state, fighter, -4, "TEST_CALM")
+    assert fighter.anger == 6
+    fighter.personality.anger_tolerance = 1
+    change_anger(state, fighter, 20, "STOIC")
+    assert fighter.anger == 6
+
+
+def test_pain_tolerance_reduces_effective_pain_without_erasing_raw_injury_burden():
+    state = arena()
+    fighter = state.fighters[0]
+    fighter.pain = 80
+    fighter.personality = Personality(**deepcopy(state.config["ronin"]))
+    fighter.personality.pain_tolerance = 0
+    untrained_burden = pain_burden(fighter, state.config)
+    untrained_speed = effective_stats(fighter, state.config).speed
+    fighter.personality.pain_tolerance = 1
+    trained_burden = pain_burden(fighter, state.config)
+    trained_speed = effective_stats(fighter, state.config).speed
+    assert fighter.pain == 80
+    assert trained_burden < untrained_burden
+    assert trained_speed > untrained_speed
+
+
+def test_fear_and_anger_effective_stats_and_balance_are_monotonic():
+    from pirates.duel_system.stability import balance_rating
+    state = arena()
+    fighter = state.fighters[0]
+    fighter.fear_meter = 0
+    fighter.anger = 0
+    calm = effective_stats(fighter, state.config)
+    calm_balance = balance_rating(fighter, state.config, state.tick)
+    fighter.fear_meter = 100
+    fearful = effective_stats(fighter, state.config)
+    assert fearful.speed < calm.speed
+    assert fearful.accuracy < calm.accuracy
+    fighter.fear_meter = 0
+    fighter.anger = 100
+    angry = effective_stats(fighter, state.config)
+    assert angry.speed > calm.speed
+    assert angry.strength > calm.strength
+    assert angry.accuracy < calm.accuracy
+    assert balance_rating(fighter, state.config, state.tick) < calm_balance
+
+
+def test_legacy_save_folds_morale_fear_and_nervousness_into_fear_pool():
+    state = arena()
+    data = state.to_data()
+    row = data["fighters"][0]
+    row.pop("fear_meter")
+    row["morale"], row["anger"], row["nervousness"] = 40, 20, 0.3
+    restored = CombatState.from_data(data)
+    fighter = restored.fighters[0]
+    assert fear(fighter, restored.config) == pytest.approx(40)
+    assert fighter.nervousness == 0
+    assert CombatState.from_data(restored.to_data()).fighters[0].fear_meter == pytest.approx(40)
+
+
+def test_v21_session_load_migrates_fear_and_drops_live_nervousness():
+    from pirates.duel_system.session import DuelSession
+    session = DuelSession.new(guide_mode="off")
+    data = deepcopy(session.to_data())
+    data["version"] = data["state"]["schema_version"] = data["state"]["config"]["schema_version"] = 21
+    row = next(item for item in data["state"]["fighters"] if item["id"] == session.player.id)
+    row.pop("fear_meter")
+    row["morale"], row["anger"], row["nervousness"] = 40, 20, 0.3
+    restored = DuelSession.from_data(data)
+    assert fear(restored.player, restored.state.config) == pytest.approx(40)
+    assert restored.player.nervousness == 0
+    assert restored.to_data()["version"] == 27
+
+
+def worked(kind, weight=0, *, tiles=3, enemy_pos=(4, 0), aim=Zone.HAND):
+    cfg = load_config()
+    force_clean_aims(cfg)
     fighters = [bare_fighter("player", pos=(0, 0), equipment=Equipment(Weapon(weight=weight)), **cfg["fixtures"]["dorime"]),
                 bare_fighter("ronin", pos=enemy_pos, equipment=Equipment(Weapon(weight=weight)), **cfg["fixtures"]["ronin"])]
     fighters[0].accuracy = 20  # Explicit called-hand fixture; the matched novice baseline remains Accuracy 10.
     state = CombatState(fighters, config=cfg)
-    commit_action(state, "player", Choice(ActionKind.DASH_LIGHT, Zone.HAND, (1, 0), tiles))
+    commit_action(state, "player", Choice(ActionKind.DASH_LIGHT, aim, (1, 0), tiles))
     commit_action(state, "ronin", Choice(kind, Zone.TORSO if kind in {ActionKind.LIGHT, ActionKind.HEAVY} else None))
     return state
 
 
-def test_worked_unweighted_dash_light_interrupts_heavy_at_t5_and_guard_parries_drifted_arm():
+def test_worked_unweighted_dash_light_interrupts_heavy_and_guard_parries_covered_arm():
     state = worked(ActionKind.HEAVY, tiles=1, enemy_pos=(2, 0))
     assert state.fighters[0].action.strike_tick == 5
     assert state.fighters[1].action.strike_tick == 7
@@ -181,7 +294,7 @@ def test_worked_unweighted_dash_light_interrupts_heavy_at_t5_and_guard_parries_d
     assert (hit.zone, hit.severity) == (Zone.HAND, Severity.CUT)
     assert hit.deltas["power"] == 14
     assert state.fighters[1].action is None
-    state = worked(ActionKind.GUARD, tiles=1, enemy_pos=(2, 0))
+    state = worked(ActionKind.GUARD, tiles=1, enemy_pos=(2, 0), aim=Zone.ARM)
     state.fighters[1].action.parry_window = 4  # isolate a supported parry-window contact
     assert state.fighters[0].action.strike_tick == 5
     advance_to(state, 5)

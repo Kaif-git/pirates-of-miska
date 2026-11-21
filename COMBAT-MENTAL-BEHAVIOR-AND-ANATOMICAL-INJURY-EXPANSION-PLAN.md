@@ -1,0 +1,273 @@
+# Mental-Threshold Behavior and Anatomical Injury Expansion Plan
+
+**Status (Nov 21, 2026):** design and proposed behavior rules approved by the user (“yes, i agree with them all”). The approved architecture uses universal thresholds, numeric per-NPC susceptibility instead of a separate personality decision layer, one shared legal-action scorer, and injury consequences flowing through physical/mental condition into behavior. Phase 0 and Phase 1 injury implementation/regressions are complete. Schema 25 added qualified vital-site outcomes and bilateral sight limits; current schema 26 adds bounded fear-gain susceptibility as the threshold work begins. Shared threshold modes, universal scorer, full behavior migration/distribution audit and hands-on review remain incomplete. Configured force bands reuse existing severe-force breakpoints and are mechanical tuning, not medical claims or final balance.
+
+**Authority:** This is the controlling approved design for mental-threshold behavior and expanded anatomical injury. It supersedes conflicting personality-specific behavior proposals in `COMBAT-INJURY-MENTAL-EXPANSION-PLAN.md` §6 and later-phase wording where those propose separate named personality action policies. It does not supersede approved mental-stat effect curves, eye-trauma/bleed tuning, combat timing, or unrelated combat requirements. Reconcile the older plan during implementation.
+
+**Scope:** specification duel engine under `pirates/duel_system/`, duel config/save migration, native duel UI, tests and controlled audit tools. Keep this isolated from legacy campaign combat and the simulation's separate personal-combat system.
+
+## 1. User contract and design principles
+
+The user wants NPC behavior to be simple to explain: a state reaches a threshold, and the NPC starts doing something. NPCs may share the same threshold meanings; what differs numerically is how much experience/event input it takes for each NPC to reach them. Combat style should come from one universal legal-action scoring model using current condition, own stats and known opponent circumstances—not from Brute/Veteran/etc. hand-authored behavioral scripts. The user prefers injuries to alter physical/mental condition, which then influences behavior, rather than each injury site directly scripting a reaction.
+
+### Approved architecture
+
+1. **Injury resolution:** attack geometry, contact, armor and post-armor force resolve a specific site/severity/outcome.
+2. **Condition consequences:** injury updates bleeding, pain, structural/function limits, stability/reflex, blood and any justified consciousness/terminal result.
+3. **Effective condition:** the existing derived-stat pipeline computes current capability once from base attributes, equipment, injury and mental-state effects.
+4. **Threshold state:** pain/fear/anger/morale cross shared behavior thresholds. Numeric NPC response parameters control gain/tolerance/threshold susceptibility. A threshold activates a persistent behavioral mode or a critical response.
+5. **One shared decision policy:** enumerate legal actions, score their expected tactical/survival value using effective capability and observable evidence, then commit one action for the exchange. Modes shape preference or trigger a priority response; they never legalize impossible moves or grant a second action.
+
+### Guard against double-counting
+
+The scorer consumes **effective stats once**. Pain/fear/anger effects already represented in effective Speed/Strength/Accuracy/balance are not added again as generic score penalties. A behavioral threshold is a separate decision layer: it may favor/avoid classes of actions or issue a critical flee/yield intent, but it does not repeat the same physical penalty. Injury consequences are likewise applied once through the condition/stat/terminal systems, not again as an injury-specific AI punishment.
+
+Keep authored/base Accuracy distinct from derived effective Accuracy: injury does not silently rewrite the authored stat; existing approved fear/anger modifiers to effective Accuracy remain unless separately changed with the user. Eye impairment is proposed to affect supported vision/observation/target legality, not to smuggle in a second generic Accuracy penalty.
+
+### Invariants
+
+- Deterministic seeded combat and deterministic save/resume; no wall-clock, UI/render or future-RNG influence on decisions.
+- At most one voluntary action per active fighter per exchange. Crossing a behavior threshold does not create an extra action. Immediate incapacitation/death remains a physical terminal result, not an AI action.
+- Candidate legality, reach, geometry, timing, occupied tiles, exits and interruption remain engine-authoritative. AI scoring never overrides them.
+- Frozen/shared decision snapshot; group NPCs use only their own exact condition and witnessed/coarse hostile evidence. Never reveal hidden pools, injuries, stats, queued actions or future choices through AI, coach, notebook or render.
+- Preserve collision safety, event causality, active-action serialization, config/session/snapshot/notebook/world-journal compatibility, and separation from legacy combat.
+- No adaptive anti-player model in the first release. First prove the universal baseline; adaptation is a separately reviewed later option based only on resolved, witnessed player behavior.
+- No claim of medical realism or broad combat balance from formula tests, small seed samples or screenshots.
+
+## 2. Current-source baseline to recheck before implementation
+
+These are source-grounded entry points checked while authoring this proposal; implementation must repeat the audit because the worktree contains concurrent, uncommitted combat/simulation changes.
+
+- Current duel config is schema **24** (`content/duel_system.json:2`), including the separate `DASH_SLASH` action. Confirm actual schema again before selecting the next version; do not assume it remains 24.
+- `pirates/duel_system/model.py:253-272` currently stores permanent eye trauma, impaired-eye count and severed-hand sides. `Wound` already carries broad zone, site/side, structure/contact/severity/function data; audit its exact current fields before extending it.
+- `model.py:285-320` still defines `Personality` with archetype, base/weights, reaction delay, zone preference, composure/courage, five traits, score bias and anger/pain tolerances. This mixes combat identity, mental response and action preference—the concepts this design separates/reduces.
+- `pirates/duel_system/mental.py:21-79` changes anger/fear and executes a fear-break yield only at an actual NPC decision. `stats.py` owns derived effective physical stats. `wounds.py` applies injury/pain/reflex and special outcomes. Re-audit these exact functions and event ordering before choosing new hooks.
+- `pirates/duel_system/ai.py:74-184` builds an observation with full solo versus restricted group knowledge; `candidates`/`score_actions`/`choose_action` later produce legal choices and deterministic selections. Keep the observation privacy boundary; refactor the scoring inputs rather than adding render-time simulation.
+- `session.py` owns NPC decision/recording; `engine.py` owns action commitment, event order, terminal conditions and per-exchange action limits. `render_model.py`, `exchange_log.py`, `duel_layout.py`, `duel_ui.py` own the player-facing condition and recap.
+- `wounds.py::choose_anatomical_site` and `injury_profile` already map broad zones/subsites and some special outcomes. Existing special cases include permanent eye trauma, hand severance, head concussion/unconsciousness, neck-qualified decapitation, limb/foot function and bleed. Their current thresholds are per-outcome mechanics, not universal “injury points.”
+- The prior mental/injury record is `COMBAT-INJURY-MENTAL-EXPANSION-PLAN.md`; the broad combat record is `COMBAT-EXPANSION-PLAN.md`. Record new approvals/evidence in both after implementation, and remove stale status statements only with source/evidence review.
+
+### Phase 0 source truth and baseline audit (Nov 21, 2026)
+
+This audit was repeated against the current worktree. The repository has extensive unrelated, uncommitted combat, ship and simulation work; preserve it. No combat implementation was changed during this audit.
+
+- **Current state/schema:** duel config is schema 24. `Fighter` persists `fear_meter`, raw pain/anger/morale, current `Personality`, bounded `ai_experience`, active `action`, wounds/statuses, permanent eye/hand injuries, and fear decision count. `CombatState.to_data/from_data` also carries RNG seed/draw count, event log, pending interrupts/injury responses, ground weapons and config. `DuelSession.to_data/from_data` carries notebook, committed exchange, selected choice, inputs and cursors. `Notebook` stores public and full observation keys; its visible view filters full keys. World saves contain `duel_journal`, restored through `DuelSession.from_data`; this is distinct from `pirates/combat.py`'s `guided-duel-v1` legacy-kernel slice and its replay-tail validation.
+- **Migration surface:** `config.py::upgrade_config` accepts schemas 1–24 and advances to schema 25 while retaining compatible authored tuning except explicit migrations. `CombatState.from_data` upgrades old config and repairs legacy wound rates, fear fields and action bearings; `_fighter_from_data` derives missing fear and maps old hand loss. `DuelSession.from_data` advances old session/notebook versions and reconstructs an exchange around active actions. `Notebook.from_data` rebuilds typed public/full keys. A future schema bump must update these together and test custom config, active action, and journal round-trip; do not touch legacy guided-duel versioning unless evidence shows it is required.
+- **Mental state today:** persisted fear is 0–100 and starts from confidence/nervousness; fear/anger/pain affect derived effective stats in `stats.py`. Pain tolerance is already used by `pain_burden`/stat effects, while positive anger gain is moderated by anger tolerance. Hit injury adds configured pain, anger and fear once in `wounds.py`; continuing bleed later adds fear from actual blood loss. Existing `fear_decision` is not a shared threshold controller: at each NPC decision it checks `legacy_fear_pressure` (morale/anger-derived), requires 3 consecutive decisions at configured threshold 80, then yields regardless of morale or exit viability. It does not currently gate on critical pain.
+- **AI and privacy today:** `ai.py::observe` deliberately distinguishes solo and group knowledge; group scoring uses witnessed/coarse opponent bleeding/instability and default rather than hidden exact hostile pools/stats. The policy still reads per-profile base/weights/score bias/zone preference/composure/traits/courage, uses several profile-specific scoring branches and the bounded resolved-outcome `ai_experience` adaptation. `session.py` computes NPC plans from one clone before committing the player/NPC actions, records witnessed decisions, and calls fear-break once per NPC decision. Notebook public entries omit full keys. This privacy boundary is a hard constraint for the replacement.
+- **Injury mechanics today:** anatomy tables include scalp/forehead/skull/neck/cheeks/jaws/ears/nose, paired eyes, torso chest/ribs/abdomen/flanks/back, limb sites and side labels. Broad sites use deterministic seeded selection. Existing mechanisms include wound bands by net force, armor-aware strike resolution, generic wound bleed/pain, head unconsciousness, strict heavy clean cutting neck decapitation, cumulative clean eye trauma, hand severance/disarm, leg/foot function, injury shock/reflex, and event-backed injury numbers. There are no heart/lung/liver outcomes. Bilateral eye injury blocks precise eye aiming and eye-hit eligibility, but `CombatState.can_see` does not currently reduce sight/observation by eye state; `Accuracy` remains unchanged. Ear and nose currently have no consumed hearing/breathing capability.
+- **Scheduler/UI today:** `DuelSession._start_exchange` captures a shared pre-commit snapshot and permits one voluntary commitment per fighter in the exchange. `advance_one_tick` increments tick, updates passive/aim state, snapshots defense, resolves due/clashing strikes, then pending injury reflexes/interrupts, movement/action completion, end conditions and perception events. Same-tick strikes are collected before strike resolution. Structured `HIT`/`WOUND`/`STATUS` and special-outcome events feed `exchange_log.py`; immutable `RenderModel` is the UI boundary. Group events carry witnesses/hearers and are filtered when projected. Threshold events should be emitted from simulation state changes, not render/preview.
+- **Reproducible baseline evidence:** `python -B -m pytest -q tests/test_duel_system_mental.py tests/test_duel_system_ai.py tests/test_duel_system_personality.py tests/test_duel_system_wounds.py tests/test_duel_system_severe_outcomes.py tests/test_duel_system_session.py tests/test_duel_system_notebook.py tests/test_duel_system_multi.py` → **164 passed**. `python -B tools/audit_duel_full_fights.py --fights 5` (seed 9400, 5 fixed-policy fights per each of six existing profiles) completed all 30 fights. The top NPC action share ranged from 0.431 (recruit) to 0.839 (counterfighter); examples: brute 163/216 Light, aggressor 40/53 Dash-Light, counterfighter 188/224 Light, recruit 50/116 Light, bully 34/77 Heavy. This is a descriptive single-player-policy baseline only, not balance/acceptance evidence.
+- **Ordinary `DuelSession` probe (seed 17, veteran, initial legal NPC choice):** at raw pain/fear/anger 0, NPC committed Walk; at pain 50 it committed Adrenaline; at fear meter 50 it committed Walk; at anger 50 it committed Walk; at fear/pain/anger 50 and morale 20 it committed Adrenaline; at fear meter 100 and morale 20 it committed Run. Existing fear decision count remained 0 in these traces because the old break is based on morale/anger-derived pressure, not `fear_meter`. These outcomes expose the current mix of physical stats, tactical terms and legacy fear logic; they are not target behavior.
+- **Focused injury/eye probes:** current deterministic applied outcomes include a deep torso CHEST hit at net 30 → torso wall, bleed 8/turn, winded, pain +28; a deep HEAD/NECK hit at net 30 → neck structure, bleed 8/turn and unconsciousness; and a deep heavy LEFT_FOOT hit at net 26 → bone/crippled, slowed/no-dash effects and unconsciousness under the existing broad-leg threshold. Bilateral eye state prevents eye targeting but leaves ordinary `can_see` true. Existing mechanics and tests, not real-session balancing, establish these baselines.
+- **Audit gate:** implementation may now proceed against these verified integration points. Numerical organ/site force bands remain to be calibrated from existing post-armor net/contact/armor mechanics and tests; the new threshold controller must not reuse the legacy morale-derived fear gate. Expand the audit fixture into explicit before/at/after and save-resume tests as implementation proceeds.
+
+### Phase 1 implementation checkpoint (Nov 21, 2026)
+
+- `content/duel_system.json` is now schema 25. It adds heart/lung/liver sub-sites, piercing-only post-armor penetration at 24 force points, a heart-fatal gate at 42 points, 12 blood/turn for qualified nonfatal organ wounds, a bilateral sight range of one tile, and a clean heavy-cutting ear-loss outcome at the existing 22-point sever threshold with 12/turn bleeding. These starter values reuse existing severe-force/bleed scales; they are not medical claims and remain subject to actual play review. Ear loss persists by side; side-specific hearing is not modeled.
+- Schema 1–24 config, combat-state, session and notebook data migrate to 25. Existing authored torso sites are retained and the new sites are appended. `Wound.vital_outcome` persists qualified organ outcomes; old wounds default to no vital outcome. `PermanentInjuries.severed_ears` persists side-specific structural ear loss. Active `duel_journal` migration follows the same `DuelSession` path; the legacy guided-duel kernel remains separate.
+- Qualified organ outcome requires a torso hit to resolve to HEART/LUNG/LIVER, DEEP-or-greater severity, a configured qualifying damage type (`PIERCING`), and post-armor net force ≥24. Heart contact at ≥42 sets blood to zero and produces the ordinary terminal death path; below 42 it causes configured major bleeding. Lung and liver outcomes use distinct persisted structures/functions and the same configured bleed. Subthreshold and non-piercing contacts do not accumulate into organ outcomes. Site resolution remains seeded and the actual site/side is carried in wound/hit events.
+- Bilateral eye injury now limits `CombatState.can_see` to configured one-tile sight and continues to block precise eye targeting; it does not alter authored Accuracy. Hearing and nonterminal breathing mechanics remain deferred.
+- Focused phase-1 verification: severe-outcome suite **34 passed** after adding right-lung/liver site identity, seeded subsite replay and nose/face scope checks. Earlier severe-outcome + injury-response + wound suites passed **106**. Config schema 25 validates. Tests cover below/at/above force, actual armor changing a fatal heart outcome to nonfatal bleeding, nonqualifying contact/severity, repeated subthreshold contacts, bilateral sight range, permanent ear loss, deterministic continuation, Wound round-trip, schema-24 journal migration, native injury readout, and unwitnessed group-organ privacy. Latest full `tests/test_duel*.py` run: **583 passed in 117.86s**. `compileall` and `git diff --check` pass; Git reports only expected LF→CRLF normalization advisories.
+- Nose/face audit: deep NOSE contact resolves the existing `FACIAL_BONE` structure and generic head-impact function; high enough force still causes the existing unconscious outcome. No nose-specific breathing/exertion effect is added because this duel model has no separately consumed respiratory capability. Ear hearing similarly remains deferred; side-specific ear loss is persisted and represented as structural outcome without asserting a sound penalty.
+- Existing limb/head injury coverage was re-audited in the 583-test suite: `test_duel_system_wounds.py` covers armor, contact, deep foot function, wrist/hand eligibility, wound bands and stale bilateral-eye fallback; `test_duel_system_injury_response.py` covers contact/armor/depth/head incapacity/reflex/migration/privacy; `test_duel_system_severe_outcomes.py` covers head/neck/eye/hand and new vital/ear outcomes. This closes the implementation regression gate, not hands-on consequence review. Later release phase still requires native responsive review and must present concrete user play scenarios; no tests or captures imply acceptance.
+
+### Phase 2 susceptibility schema checkpoint (Nov 21, 2026)
+
+- Schema 26 adds `fear_gain_susceptibility` to numeric NPC response profiles, bounded `[0.5, 1.5]`; pain and anger continue to reuse existing effective-pain/pain-tolerance and anger-tolerance inputs, avoiding duplicate meters or knobs. The authored profile multiplier is deterministically derived from legacy confidence as `round(0.75 + (1 - confidence) * 0.5, 3)` when absent. Explicit custom multipliers are preserved.
+- `Personality` persists the multiplier; old fighter/session state lacking it maps from its saved confidence (or neutral confidence 0.5), and old config profile migration follows the same mapping. Current schema-26 config/snapshot/session/notebook paths bypass upgrader logic; only prior versions 1–25 migrate. No threshold behavior is changed by this schema-only checkpoint.
+- Focused check: `tests/test_duel_system_personality.py tests/test_duel_system_session.py tests/test_duel_system_foundation.py` → **45 passed**. Config schema 26 validates and reports configured susceptibility for all six profiles. This is not yet connected to fear event gains; next task implements threshold transitions and consumption.
+
+## 3. Numeric response model: replace personality policy, not physical stats
+
+### 3.1 What remains
+
+- Physical combat attributes (e.g. Speed, Strength, Accuracy, Endurance), equipment, derived impairment and current mental meters remain the capability/condition inputs to the universal scorer.
+- Keep a stable NPC identity/profile label for roster, dialogue and save references if other systems need it. A label such as “Veteran” must not select a separate combat decision table after this change.
+- Keep only compact numeric **response parameters** needed to vary how an NPC reaches or leaves shared threshold states. Candidate fields: per-state event-gain multipliers or tolerance, recovery/calming rates where approved, and optional per-NPC threshold offsets if testing proves gain sensitivity alone is insufficient. All fields are bounded, finite, schema-validated and non-negative/in-range.
+- Use the existing confidence/anger tolerance/pain tolerance only after a field-by-field audit; do not duplicate them under new names. Preserve the already approved mental-state-to-effective-stat formulas unless the user separately approves changing those formulas.
+
+### 3.2 What is removed from tactical selection
+
+- No archetype-specific score tables, hand-authored action `score_bias`, zone preference or personality-selected policy branches in the new scorer.
+- No AI opponent-modeling based on the player's hidden/unwitnessed traits or behavior. Do not make adaptation a prerequisite for variety.
+- If old `Personality` fields are needed for dialogue/identity, separate those consumers from combat decision parameters; do not keep a hidden old policy active behind the new universal scorer.
+
+### 3.3 Save migration
+
+- Determine the actual current release/schema and all constructors/serializers before editing. Bump the next schema exactly once for the combined saved-state change, with config, `CombatState`, active `DuelSession`, notebook, and `duel_journal` coverage as applicable.
+- Map old NPC profile fields deterministically into numeric response parameters. Preserve names/identity and all active actions, paths, bearings, deadlines, RNG seed/draw count, existing meters, wounds, permanent injuries and eye trauma. New values receive explicit neutral/configured defaults.
+- The new policy is intentionally behavior-changing after migration; document that old saves retain state/timing but new NPC decisions follow the new policy. Do not promise byte-identical old-policy futures. Require deterministic continuation once loaded under the new schema.
+- Preserve custom authored tuning when migrating; fill missing new keys without overwriting unrelated custom values. Test prior shipped defaults and hand-authored non-default values separately.
+
+## 4. Threshold semantics and response priorities (proposal)
+
+Use a shared 0–100 interpretation. **50 and 100 are approved universal trigger levels**; NPC differences come from numeric susceptibility/gain, not separate meaning per archetype. Exact gain formulas/rates remain implementation tuning. Hysteresis is approved: a mode enters at its trigger and exits at a lower threshold to avoid oscillation. A crossing is processed once and recorded with meter, threshold, cause and selected response.
+
+| State | 50: active mode (preference, not forced extra action) | 100: critical response (only at a legal decision boundary) | Conflict rule |
+|---|---|---|---|
+| Pain | **Protective:** favor a timely safe Guard/Defend, spacing, or treatment when a safe full treatment window exists. Continue attacking if the shared scorer finds a strong, legal reason; no blanket flee. | **Break:** first choose a viable escape/exit when one exists; otherwise yield if surrender is available and morale is below its agreed threshold. If neither is valid, remain in combat and choose the safest legal action rather than deadlock. | Critical physical incapacity/terminal state supersedes behavior. A critical pain response outranks anger's pressure preference. |
+| Fear | **Cautious:** give defense, spacing and avoiding a clearly losing trade more value. It does not mean automatic retreat. | **Break:** prioritize a legal path to an exit; if none, yield only if the morale/yield rule allows it; otherwise use a desperate but legal survival action. | Resolve with pain in one shared Break priority; never alternate contradictory “attack/flee” scripts. |
+| Anger | **Press:** prefer feasible pressure, attack or shove when the action scorer sees a viable opening; do not blindly attack Guard or walk into a known threat. | **Hot:** strengthen the same pressure preference, not an unconditional attack. It cannot override terminal/incapacitated state, a critical survival response, or action legality. | Anger is lower priority than critical fear/pain and physical safety. |
+| Morale | At **25 or below**, morale allows yielding when a critical pain/fear response is active and no viable exit exists. Morale is a resolve-to-continue gate, not another duplicate fear/pain stat penalty. | No separate “high morale” action override. | Approved; if yielding is unavailable in the current duel context, choose the safest legal action instead of deadlocking. |
+
+**Decision-boundary rule:** threshold events caused by an impact update condition immediately in deterministic event order, but AI responds at its next ordinary legal choice. Existing committed actions are not cancelled merely because a meter crossed 50/100. Only existing physical interruption, incapacitation, or an explicitly approved critical-yield rule may interrupt a commitment. Threshold does not grant an additional decision.
+
+**Critical-response precedence:** (1) death/unconsciousness/terminal or physically disabled action set; (2) critical survival/break response; (3) protective/cautious mode; (4) anger pressure mode; (5) ordinary shared tactical scoring. If a flee path is impossible, the policy falls through to yield eligibility, then safest legal action. A critical response must never loop on an impossible exit or make an illegal action.
+
+### 4.1 State gains and threshold crossings
+
+- Keep existing approved fear/anger/pain state/effective-stat mechanics as the baseline; audit actual persisted scale and gain events. Normalize or migrate to 0–100 only if the existing schema does not already satisfy it.
+- Use configured event causes: received hit/injury, pain burden, actual blood loss/serious bleed, credible witnessed threat, being parried/blocked, repeated observed evasion, treatment/safe recovery as individually approved. One physical event must not count twice merely because it emits both HIT and WOUND; ongoing bleed contributes from actual blood lost, not both bleed-rate display and blood-loss event.
+- NPC numeric susceptibility scales how much a defined event changes a meter; tolerance moderates a defined cause. Threshold meaning remains shared. Prefer a small interpretable set of parameters over independent knobs for every site/action.
+- Emit a structured `BEHAVIOR_THRESHOLD`/mode event (or extend an existing event safely) with actor, state, before/after, entered/exited threshold, causal event, mode, and chosen critical response. Avoid logging hidden opponent state into public/witnessed events.
+- Threshold updates must be pure with respect to rendering, guide, preview and score inspection; call only on actual state changes/decision lifecycle.
+
+## 5. Universal action scorer
+
+### 5.1 Candidate and evaluation pipeline
+
+1. Construct one frozen observation. Solo exact knowledge and group witnessed/coarse knowledge retain their current privacy distinctions.
+2. Enumerate engine-legal candidate actions only. Keep invalid paths, absent body parts, out-of-reach targets and impossible resources out of the decision set.
+3. Apply terminal/disabled and critical response priorities from §4.
+4. Evaluate legal actions with one universal, inspectable score. Candidate utility components: expected legal contact/control/position value; ability to prevent a known imminent threat; chance of route/strike success using current geometry and effective capability; stamina/fatigue/recovery cost; exposure to witnessed commitments; and the active threshold mode preference.
+5. Select the highest-valued legal choice. Resolve exact/near ties with deterministic seeded variation, bounded so variation cannot defeat an explicit survival priority or legality.
+6. Record the decision and score reasons for diagnostics without making hidden reasons public. Notebook categories must accept every actual candidate action.
+
+### 5.2 Stat and opponent inputs
+
+- Own current effective stats, stamina, fatigue, blood, pain, stability/ground state, injuries/function, weapon/reach, armor burden, current action/recovery and legal routes may affect feasibility, costs and utility.
+- Opponent inputs must be those the actor could actually know: observed position/weapon, visible active commitment/phase after the configured perception delay, witnessed movement/parry/wound/bleeding/instability, and any explicitly public duel setup information. Do not directly read exact hidden group enemy pools, injury internals, authored attributes or queued action.
+- Solo mode may use only facts the current solo observation contract deliberately exposes; review whether opponent exact stats are actually observable before scoring with them. Do not assume that “the player can inspect the profile” means the NPC knows it.
+- The scorer may estimate a conditional action outcome from current rules/observations, but must not rollout future turns, inspect future RNG or promise a hit. Keep rendering pure; any player-facing forecast is a separate public-snapshot projection.
+
+### 5.3 Why numeric stats can create distinct styles
+
+Higher Speed changes actual deadlines/route feasibility; Strength changes actual contests/impact; weapon/reach and condition change useful ranges/actions; injuries change what is possible; threshold susceptibility changes which behavioral modes activate and when. Thus the same policy can produce different behavior from different numbers and circumstances. If equal-stat NPCs are intentionally too similar, first tune a minimal numeric response profile, not archetype-specific action branches. Report action distributions and repeated-policy convergence honestly.
+
+## 6. Expanded anatomical injury model
+
+### 6.1 Resolution chain and common representation
+
+Do not treat “eye,” “organ,” or “head” as direct behavior instructions. Use a common record with as much of this existing/needed data as is relevant: broad zone, anatomical site/side, contact type, post-armor force, tissue/structure reached, wound severity, immediate outcome, ongoing bleed/pain, function flags/multipliers/duration, permanence, and source event. Keep numeric thresholds in `content/duel_system.json`; never recompute or infer outcomes in the UI.
+
+Damage severity must be grounded in resolved post-armor force, contact class (cut/pierce/blunt), physical site and relevant existing injury. Armor, aim drift/miss, unavailable anatomy and clean-contact conditions remain meaningful. A small cut must not become an organ wound simply because the chosen broad zone is TORSO. A single sufficiently severe, qualified strike may produce a catastrophic special outcome; repeated lesser contacts may accumulate only where a named cumulative rule exists. Do not make every attempt to aim at a vital site lethal.
+
+### 6.2 Site coverage and consequence proposal
+
+| Region / sites to model | Injury/outcome coverage to implement or verify | Route into behavior |
+|---|---|---|
+| **Eyes** (left/right) | Preserve eligible eye-contact trauma accumulation and one/bilateral impairment. Make bilateral impairment materially affect supported vision-dependent observation/target legality; explain remaining capability. Do not rewrite authored Accuracy or add a second injury-specific effective-Accuracy penalty. | Vision/function affects what the fighter can observe/target; resulting pain/fear/blood can cross normal thresholds. No “eye wound → flee” rule. Bilateral impairment alone is not automatic death or unconsciousness. |
+| **Nose / face** | Site-qualified facial cut, blunt trauma and severe structural injury; numeric bleed/pain/function consequences. Candidate function effect: breathing/effort only for a sufficiently severe outcome, not every facial hit. | Pain/blood and any configured exertion/function change feed the ordinary state/scorer pipeline. |
+| **Ear(s)** | Cut, severe laceration or qualified partial/complete loss; persistent side-specific hearing function only if it can be represented and tested consistently. | Hearing impairment may degrade sound-only/group threat evidence; no direct behavior script and no hidden-state reveal. If current game has no meaningful sound perception, defer hearing mechanics instead of adding a cosmetic stat. |
+| **Forehead / scalp / skull / brain** | Separate superficial scalp/forehead wounds from severe skull/brain trauma. Qualified concussion can cause dizzy/stagger/unconscious outcomes; head wound does not automatically mean concussion. | Pain/blood/function and the current physical shock/terminal rules feed thresholds. Preserve fixed Accuracy unless specifically reapproved. |
+| **Neck** | Distinguish nonfatal neck soft-tissue injury, major-vessel/airway/structural trauma, and qualified decapitation. Retain the existing strict contact/severity gate for decapitation unless a new one is explicitly approved. | Serious bleeding/function loss can cause critical state/terminal outcome. Decapitation is immediate terminal mechanics, not a flee decision. |
+| **Torso** | Add site-specific internal structures only with a deterministic, armor-aware rule: e.g. chest/lung, heart, liver, abdomen. Distinguish surface/muscle/rib-wall injury from organ penetration/rupture. A high-force qualified vital hit may be immediately fatal or cause a critical blood-loss outcome; do not make all torso hits organ hits. | Bleeding, pain, winded/breathing/other supported function effects update condition once; thresholds then change choices. No special “torso causes panic” branch. |
+| **Arm / shoulder / elbow / forearm** | Preserve side-specific strength/grip/guard function; define fracture/deep injury and permanent impairment only when supported by contact/force. | Reduced capability and available actions enter the same scorer. |
+| **Hand / wrist / fingers / thumb** | Preserve weapon-hand versus support-hand distinction, grip, disarm and qualified severance. Add side-specific partial/full loss only with explicit item-drop and save behavior. | Weapon use, parry and action legality change mechanically; pain/blood can cross universal thresholds. |
+| **Leg / hip / thigh / knee / shin / calf** | Preserve reduced movement/footing/cripple outcomes; define serious structural outcomes and whether lasting loss persists. | Effective Speed/stability and route legality change; scorer chooses only feasible moves. |
+| **Foot / ankle** | Preserve painful footing, slowed movement and no-Dash thresholds where configured; distinguish superficial wound from tendon/bone/structural damage. | Movement capability and stability feed the scorer; no direct injury-specific flee instruction. |
+| **Any other vital/site** | Add a site only when it has a distinct explainable physical consequence and testable legal targeting/resolution. | All use the same chain. Avoid a catalogue of sites that only changes text. |
+
+### 6.3 Severity ladder and “injuries are consequential” standard
+
+Use a compact escalating ladder tied to current mechanics, with exact numeric bands finalized after force/contact/site audit:
+
+1. **Superficial:** visible/painful but little or no continuing functional effect; any bleed is minor and explicit.
+2. **Wounding:** meaningful pain and continuing bleed, with site-appropriate temporary function loss where supported.
+3. **Serious/structural:** substantial bleed or meaningful capability loss (e.g. no Dash, grip/weapon limit, concussion/stagger, severe torso function); treatment urgency is clear.
+4. **Catastrophic:** permanent loss, immediate unconsciousness, critical organ/major-vessel outcome, decapitation or death only through a configured qualified result. Explain exact cause and terminal effect.
+
+These are communication/mechanics tiers, not a universal hidden injury score. Preserve separately named thresholds such as eye trauma, head unconsciousness, limb crippling, hand severance and decapitation. Avoid stacking duplicate penalties for the same wound (e.g. functional Speed reduction plus a second equal AI Speed penalty). Multiple wounds, merge/cap rules, bandaging and active wound migration need explicit tests.
+
+### 6.4 Two impaired eyes / severe wound acceptance
+
+The expected result is **not** “two impaired eyes automatically kill the fighter.” It is also not acceptable for bilateral impairment to be nearly cosmetic. The simulation/UI must show the actual bilateral function change and corresponding target/observation limits; pain, bleeding, concussion or shock effects must be numerically sourced; the universal scorer must react only through those changed capabilities and threshold modes. If the user expects bilateral blindness itself to trigger collapse or surrender, that is a separate explicit design choice—not assumed here.
+
+## 7. Event order, persistence and player feedback
+
+- Resolve strike geometry/target lock/dispersion → armor/post-armor force → site/severity/outcome → immediate physical/terminal effects → wound/pain/blood/mental-state deltas → threshold transition record → existing interruptions/movement/action completion in their defined scheduler order. Re-audit exact order before settling the order of threshold events relative to same-tick opposing hits.
+- Simultaneous hits must both resolve under the established same-tick rules before the NPC makes its next voluntary choice. Do not let the first same-tick wound steal the opponent's already committed action unless the physical interruption rules say so.
+- Save active injury outcomes, function/permanence, threshold mode/hysteresis state if required, numeric response parameters, RNG state and unresolved commitments. Round-trip at threshold edges and in active action paths. Prefer deriving mode from stored meters where that avoids extra mutable state, but hysteresis requires a persisted or otherwise deterministic entry/exit latch.
+- Main condition card/recap should answer: **where was hit; what physically happened; how bad; what function changed; what bleed/pain/blood consequence occurred; what threshold was crossed; what response the NPC actually chose and why.** Do not expose hidden exact enemy pools in group combat. Use qualitative uncertain cues for unobserved mental state and clearly label witnessed/stale evidence.
+- Explain actual outcomes from structured event deltas. No UI-only recomputation of organ penetration, death, impairment, or AI motivation.
+- Maintain accessible text-coded meaning; do not use color alone. Review 1280×800, 960×700 and 640×600, including scroll/detail path for the expanded ledger.
+
+## 8. Implementation phases and gates
+
+### Phase 0 — re-audit and freeze contracts
+
+- Re-read current code/config/schema and user-approved mental stat rules; verify current thresholds/scales, effect curves, event causes, site catalog, permanent injuries and exact scheduler ordering.
+- Re-run ordinary player-controlled DuelSession traces for: accumulated low-level hits, one serious cut, lethal head/neck/vital contact, bilateral eye impairment, hand/leg function loss, high fear, high anger, mixed pain/fear/anger, and blocked exit.
+- Record baseline AI choices/distributions and save/replay/privacy/action-count invariants. No code behavior changes in this phase.
+- **Gate:** update this plan with exact source truth and any contradictions; seek user resolution of any conflict with already-approved stat rules.
+
+### Phase 1 — injury outcome catalog and physical function
+
+- Define site × contact × post-armor force outcome tables and caps in centralized config. Add only sites with a mechanical/functional distinction. Decide torso vital penetration, nose/ear functions, fracture permanence and treatment interaction before implementing each.
+- Keep injury-derived consequences in the physical model: blood, pain, function, stability/reflex, consciousness/permanence/terminal state. Injury does not directly select an NPC action.
+- Make bilateral-eye impairment materially alter supported vision-dependent capabilities without silently modifying Accuracy. Do not invent hearing gameplay if no perception channel can consume it.
+- Add event deltas and migrations, then event-level unit tests for each special outcome and adjacent below/above threshold boundary.
+- **Gate:** concrete site/outcome policy is user-approved in §10; exact config bands remain provisional until source audit and controlled threshold tests justify them. Any new outcome beyond the approved table returns for consultation.
+
+### Phase 2 — condition-to-effective-capability integration
+
+- Ensure physical injury and mental-state effects are applied exactly once and compose without double penalty. Add a source ledger from raw base stat to each effective capability/function status.
+- Test that a light contact does not silently cause a catastrophic consequence, while qualified severe head/neck/organ/limb hits materially alter function or end the fight. Test repeated/subthreshold eye contacts and bilateral outcome.
+- No NPC action scoring/threshold behavior redesign yet; use player-controlled fixtures and compare derived stats/legality.
+- **Gate:** confirm numeric condition and functional consequences in real session traces and player-facing readouts before behavior changes are introduced.
+
+### Phase 3 — shared mental threshold controller
+
+- Implement shared enter/exit thresholds and numeric per-NPC susceptibility/tolerance; ensure once-per-cause gain and no duplicate hit+wound or bleed-rate+blood-loss counting.
+- Implement mode/priority resolution from §4; trigger at legal decision boundaries, never grant extra actions. Critical physical terminal state remains higher priority.
+- Emit deterministic threshold/mode events and persist any hysteresis latch. Keep existing mental-to-physical effect formulas unchanged.
+- Test all thresholds at below/equal/above values, hysteresis, threshold reached during a committed action, simultaneous threshold conflicts, no legal exit, surrender disabled, death/unconsciousness, and save/resume.
+- **Gate:** response table is user-approved in §10. Review actual event/readout and ordinary encounter traces with the user before release acceptance or any material behavioral change.
+
+### Phase 4 — one universal legal-action scoring model
+
+- Replace tactical archetype/trait score branches with one universal candidate scoring path using legal actions, effective own capability, observable opponent facts, risk/cost/timing and active threshold mode.
+- Reduce/migrate `Personality`/profile fields to identity-only labels plus numeric response parameters; ensure no obsolete score-bias branch is still consulted.
+- Keep deterministic tie selection, one frozen snapshot, notebook vocabulary, and group hidden-state invariance. Do not implement adaptation in this phase.
+- Add score-reason diagnostics for developers, not hidden-state UI leaks. Run matched action-distribution audits by numeric response profile, equal stats and different gear/condition; report top-action share, category diversity, movement, defensive response, threshold response and terminal result, with sample sizes/limits.
+- **Gate:** review ordinary and pressured opening plus full-fight distributions; if the universal scorer converges pathologically, change generic utility terms or numeric susceptibility, not add profile branches without consultation.
+
+### Phase 5 — UI/recap and accessible verification
+
+- Add concise site/severity/function/bleed/pain/threshold/response explanation from events. Ensure own exact condition remains visible and opponent/group condition respects observation privacy.
+- Add a guided actual-game test route/scenario for ordinary injury escalation, bilateral eyes, limb function, vital injury, threshold crossing and legal escape/yield cases. Reuse or extend the existing named-profile/scenario entry without disrupting campaign time/save/legacy combat.
+- Native review all three requested sizes, gameplay input, recap, scroll/detail, exits, and screenshots; scripted review is not player acceptance.
+
+### Phase 6 — release compatibility and hands-on acceptance
+
+- Run focused injury/mental/AI/session/notebook/privacy/UI tests and the full `tests/test_duel*.py` suite; add `test_play_inspection.py` and campaign save/journal tests where touched.
+- Run `compileall`, `git diff --check`, config validation, migration matrix from supported versions, deterministic replay across save/resume, group hidden-state invariance, one voluntary action, collision/route safety and terminal-state regressions.
+- Run native guided walkthroughs with real input at 1280×800/960×700/640×600. Then ask the user to test the real controls/ordinary outcomes and revise from their report. Never treat tests/distributions/screenshots as fun, balance or acceptance.
+
+## 9. Acceptance criteria
+
+- **Threshold clarity:** shared 50/100 semantics behave exactly at edges; NPCs with distinct numeric susceptibility reach them after distinct, explainable amounts of event input. Same seed/state/observations reproduce identical choices and threshold events.
+- **No double-counting:** state-to-effective-stat curve is applied once; a mode changes preference/priority without applying the same physical penalty a second time. Tests assert formula and score decomposition.
+- **Behavior:** pain/fear/anger/morale table resolves conflicts deterministically; escape/yield only occurs when the scenario and legal actions permit it; no deadlocks, illegal routes, extra voluntary actions or attacks after terminal state.
+- **Universal policy:** identical legal candidates and equivalent effective/observable state yield the same universal scoring rationale independent of old archetype label. Numeric profile parameters can alter threshold timing, not define bespoke action menus.
+- **Injuries:** every supported site/outcome has below/at/above threshold and armor/contact tests, actual event evidence, functional consequence and clear recap. Vital damage may be catastrophic only on qualified physical outcomes; superficial injury remains distinct.
+- **Senses/limbs:** bilateral eye impairment has a material tested vision/observation/target limitation without rewriting authored Accuracy or duplicating mental modifiers; arm/hand/leg/foot impairment changes supported capabilities/actions; ear/nose effects are implemented only if mechanically consumed.
+- **Persistence/privacy:** current and migrated active fights preserve injuries, threshold modes, profile numbers, pending action schedules and deterministic continuation; group AI/UI does not read or expose unobserved exact hostile state.
+- **Player acceptance:** user validates actual-game use and consequences. No scripted-only acceptance claim.
+
+## 10. User-approved decisions and implementation boundaries
+
+On Nov 21, 2026, the user approved all recommendations from the design review. This resolves the design questions below; it does not mean code, tuning or acceptance work is already complete.
+
+1. **Shared thresholds:** pain 50 = Protective, 100 = Break; fear 50 = Cautious, 100 = Break; anger 50 = Press, 100 = Hot. Shared 0–100 meanings for all NPCs. Enter at 50/100 and exit below 40/90 respectively. Numeric event susceptibility, not per-archetype thresholds, varies the time/input to reach a mode.
+2. **Yield and priority:** critical pain/fear first seeks a legal viable exit. If no exit is viable, yield at morale ≤25 when yielding is allowed; otherwise pick the safest legal action. Critical physical incapacity/terminal state outranks all modes; critical survival outranks protective/cautious behavior; anger never overrides survival or legality.
+3. **Numeric variation:** use susceptibility/event-gain numbers and existing tolerance fields after audit; no separate archetype action policies or per-NPC threshold offsets in the first version. Pain behavior uses effective pain after existing Pain Tolerance, without creating a second pain meter. Do not add calming/recovery causes until their conditions are specified and tested.
+4. **Universal scorer:** one deterministic legal-action scorer uses effective own capability, costs/timing, tactical/survival value and actually observable opponent evidence. No adaptation to player habits in the first version. Any later adaptation must be separately reviewed and use only resolved/witnessed history.
+5. **Vital injuries:** support distinct qualified torso heart/lung/liver outcomes, with deterministic post-armor force/contact/site gates. Heart may be immediately fatal only when its configured severe gate is met; lung can cause major bleeding and winded/breathing impairment; liver can cause major internal bleeding. No surprise random death roll. Broad torso hits resolve to deterministic seeded plausible sites, and the actual site is recorded/reported.
+6. **Persistence:** permanent persistence is reserved for actual lasting structural loss (existing eye/hand loss and approved new severe structural losses). Ordinary wounds and temporary function effects are not silently permanent. Infection, complex healing/scars and campaign medical bridging stay out of scope.
+7. **Eyes and Accuracy:** bilateral eye impairment must materially limit supported vision/observation/precise targeting. Do not rewrite authored Accuracy or add a duplicate injury-specific Accuracy penalty; preserve existing approved fear/anger effects on derived effective Accuracy. Bilateral blindness alone does not automatically kill or knock out.
+8. **Ear/nose:** ear loss may be recorded with side-specific bleeding/pain; implement hearing impairment only if a real sound-perception mechanic consumes it. Nose injuries produce pain/bleeding; breathing/exertion impairment only for a severe supported structural result. Do not add cosmetic-only mechanics as if they affected decisions.
+9. **Open technical work, not unresolved design approval:** audit current source/schema; choose exact config force bands from existing mechanics and tests; map old `Personality`/save data deterministically into numeric response parameters; prove consequence ordering, event privacy, UI and action distributions. Any material departure from these approved rules returns to the user for approval.
+
+Implementation status is tracked in §2. Phase completion and acceptance are not implied by this approval or checkpoint; exact tuning and hands-on review remain open.

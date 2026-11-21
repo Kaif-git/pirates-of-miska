@@ -1,0 +1,17 @@
+{
+  "id": "lawful-trader-mvp",
+  "version": 1,
+  "name": "Lawful Trader — Authored Archipelago",
+  "entry_port": "verdant",
+  "ports": [
+    "verdant",
+    "cinder",
+    "freeport"
+  ],
+  "policies": {
+    "generated_prehistory": false,
+    "strategic_society": false,
+    "npc_destination_activity": false,
+    "hostile_population_trade": false
+  }
+}

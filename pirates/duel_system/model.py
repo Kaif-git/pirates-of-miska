@@ -11,7 +11,8 @@ from enum import Enum
 import math
 import random
 
-from .config import load_config, upgrade_config, validate_config
+from .config import (_legacy_fear_susceptibility, load_config, upgrade_config,
+                     validate_config)
 
 
 class Zone(str, Enum):
@@ -37,6 +38,7 @@ class ActionKind(str, Enum):
     GUARD = "GUARD"
     DASH = "DASH"
     DASH_LIGHT = "DASH_LIGHT"
+    DASH_SLASH = "DASH_SLASH"
     WALK = "WALK"
     RUN = "RUN"
     CRAWL = "CRAWL"
@@ -62,6 +64,7 @@ class EventType(str, Enum):
     MOVE = "MOVE"
     WHIFF = "WHIFF"
     HIT = "HIT"
+    CLASH = "CLASH"
     BLOCK = "BLOCK"
     PARRY = "PARRY"
     GUARD_BREAK = "GUARD_BREAK"
@@ -109,6 +112,7 @@ class Wound:
     damage_type: str = "CUTTING"
     site: str | None = None
     side: str | None = None
+    vital_outcome: str | None = None
 
     def __post_init__(self):
         self.zone, self.severity = Zone(self.zone), Severity(self.severity)
@@ -135,6 +139,8 @@ class Wound:
             raise ValueError("Wound site must be a nonempty label")
         if self.side not in {None, "LEFT", "RIGHT", "CENTER"}:
             raise ValueError("Wound side must be LEFT, RIGHT, CENTER or unspecified")
+        if self.vital_outcome not in {None, "HEART_FATAL", "HEART_BLEED", "LUNG_BLEED", "LIVER_BLEED"}:
+            raise ValueError("Unknown persisted vital-injury outcome")
 
 
 def wound_structure(zone, severity, damage_type="CUTTING"):
@@ -253,6 +259,8 @@ class PermanentInjuries:
     hand_severed: bool = False
     eyes_damaged: int = 0
     severed_hands: list[str] = field(default_factory=list)
+    severed_ears: list[str] = field(default_factory=list)
+    eye_trauma: float = 0
 
     def __post_init__(self):
         if not isinstance(self.hand_severed, bool):
@@ -260,10 +268,17 @@ class PermanentInjuries:
         if (isinstance(self.eyes_damaged, bool) or not isinstance(self.eyes_damaged, int)
                 or not 0 <= self.eyes_damaged <= 2):
             raise ValueError("Permanent eye injury count must be 0, 1 or 2")
+        if (isinstance(self.eye_trauma, bool) or not isinstance(self.eye_trauma, (int, float))
+                or not math.isfinite(self.eye_trauma) or self.eye_trauma < 0):
+            raise ValueError("Cumulative eye trauma must be a finite nonnegative number")
         if (not isinstance(self.severed_hands, list)
                 or any(side not in {"LEFT", "RIGHT"} for side in self.severed_hands)
                 or len(self.severed_hands) != len(set(self.severed_hands))):
             raise ValueError("Severed hand sides must be a unique list of LEFT/RIGHT")
+        if (not isinstance(self.severed_ears, list)
+                or any(side not in {"LEFT", "RIGHT"} for side in self.severed_ears)
+                or len(self.severed_ears) != len(set(self.severed_ears))):
+            raise ValueError("Severed ear sides must be a unique list of LEFT/RIGHT")
 
 
 @dataclass
@@ -290,6 +305,9 @@ class Personality:
         "patience": 0.25, "adaptability": 0.35,
     })
     score_bias: dict[str, float] = field(default_factory=dict)
+    anger_tolerance: float = 0.5
+    pain_tolerance: float = 0.5
+    fear_gain_susceptibility: float = 1.0
 
     def __post_init__(self):
         dimensions = {"aggression", "discipline", "confidence", "patience", "adaptability"}
@@ -301,6 +319,15 @@ class Personality:
         if (isinstance(self.composure, bool) or not math.isfinite(self.composure)
                 or not 0 <= self.composure <= 1):
             raise ValueError("Personality composure must be in [0, 1]")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) or not 0 <= value <= 1
+               for value in (self.anger_tolerance, self.pain_tolerance)):
+            raise ValueError("Mental tolerances must be in [0, 1]")
+        if (isinstance(self.fear_gain_susceptibility, bool)
+                or not isinstance(self.fear_gain_susceptibility, (int, float))
+                or not math.isfinite(self.fear_gain_susceptibility)
+                or not 0.5 <= self.fear_gain_susceptibility <= 1.5):
+            raise ValueError("Fear-gain susceptibility must be finite and in [0.5, 1.5]")
         if isinstance(self.reaction_delay, bool) or not isinstance(self.reaction_delay, int) or self.reaction_delay < 0:
             raise ValueError("Personality reaction delay must be a nonnegative integer")
         if any(not isinstance(key, str) or isinstance(value, bool)
@@ -350,10 +377,16 @@ class ActiveAction:
     attack_bearing: tuple[int, int] | None = None
     bearing_lock_tick: int | None = None
     contextual_defense: bool = False
+    tactical_resolved: bool = False
+    clash_resolved: bool = False
 
     def __post_init__(self):
         if not isinstance(self.contextual_defense, bool):
             raise ValueError("Contextual defense flag must be boolean")
+        if not isinstance(self.tactical_resolved, bool):
+            raise ValueError("Tactical resolution flag must be boolean")
+        if not isinstance(self.clash_resolved, bool):
+            raise ValueError("Clash resolution flag must be boolean")
         if self.attack_bearing is not None and (
                 tuple(self.attack_bearing) not in {
                     (0, -1), (1, -1), (1, 0), (1, 1),
@@ -388,6 +421,7 @@ class Fighter:
     pain: float | None = None
     anger: float | None = None
     morale: float | None = None
+    fear_meter: float | None = None
     pos: tuple[int, int] | None = None
     action: ActiveAction | None = None
     last_action_cat: str = "NONE"
@@ -484,6 +518,10 @@ class Fighter:
         for key in ("fatigue", "pain", "anger", "morale", "nervousness"):
             if getattr(self, key) is None:
                 setattr(self, key, default[key])
+        if self.fear_meter is None:
+            confidence = (self.personality.traits["confidence"] if self.personality
+                          else default["confidence"])
+            self.fear_meter = default["pool_max"] * (1 - confidence)
         if self.stamina is None:
             self.stamina = cap
         if self.blood is None:
@@ -508,18 +546,25 @@ class Fighter:
             self.last_fast_direction = tuple(self.last_fast_direction)
         if self.prefight is not None:
             self.fatigue = self.prefight.fatigue
-            self.nervousness = self.prefight.nervousness
             if self.prefight.stamina is not None:
                 self.stamina = self.prefight.stamina
             if self.prefight.blood is not None:
                 self.blood = self.prefight.blood
             self.wounds = deepcopy(self.prefight.injuries)
             self.permanent_injuries = deepcopy(self.prefight.permanent_injuries)
+            confidence = (self.personality.traits["confidence"] if self.personality
+                          else default["confidence"])
+            self.fear_meter = min(default["pool_max"],
+                                  default["pool_max"] * (1 - confidence)
+                                  + self.prefight.nervousness * default["pool_max"])
+        # Kept as a compatibility field for old state payloads only; current
+        # mental pressure is represented by fear_meter.
+        self.nervousness = 0
         if self.equipment.weapon is None:
             self.disarmed = True
         if not isinstance(self.decapitated, bool):
             raise ValueError("Decapitation state must be boolean")
-        for key in ("fatigue", "blood", "pain", "anger", "morale", "stamina", "nervousness"):
+        for key in ("fatigue", "blood", "pain", "anger", "morale", "fear_meter", "stamina", "nervousness"):
             value = getattr(self, key)
             upper = cap if key == "stamina" else 1 if key == "nervousness" else default["pool_max"]
             if not math.isfinite(value) or not default["pool_min"] <= value <= upper:
@@ -604,6 +649,17 @@ class Event:
 
 def _fighter_from_data(data):
     values = deepcopy(data)
+    if "fear_meter" not in values:
+        # Legacy saves represented fear as a morale/anger derivation and stored
+        # nervousness separately. Fold both into the new persisted fear pool.
+        cfg = load_config()
+        legacy = max(0, (cfg["fear"]["morale_center"] - values.get("morale", cfg["defaults"]["morale"]))
+                     * cfg["fear"]["morale_scale"]
+                     - cfg["fear"]["anger_offset"] * values.get("anger", cfg["defaults"]["anger"]))
+        values["fear_meter"] = min(cfg["defaults"]["pool_max"],
+                                   legacy + values.get("nervousness", 0) * cfg["defaults"]["pool_max"])
+    # The separate nervousness field remains load-compatible only.
+    values["nervousness"] = 0
     old_hand_severed = values.pop("hand_severed", False)
     permanent = values.get("permanent_injuries")
     if permanent is None:
@@ -617,6 +673,9 @@ def _fighter_from_data(data):
     values["wounds"] = [Wound(**item) for item in values["wounds"]]
     values["statuses"] = [Status(**item) for item in values["statuses"]]
     if values["personality"]:
+        values["personality"].setdefault(
+            "fear_gain_susceptibility",
+            _legacy_fear_susceptibility(values["personality"]))
         values["personality"] = Personality(**values["personality"])
     for row in values.get("contact_memory", {}).values():
         if row.get("position") is not None:
@@ -772,7 +831,10 @@ class CombatState:
 
     def can_see(self, observer, target):
         distance = max(abs(observer.pos[0]-target.pos[0]), abs(observer.pos[1]-target.pos[1]))
-        if distance > self.config["group"]["vision_range"]:
+        vision_range = self.config["group"]["vision_range"]
+        if observer.permanent_injuries.eyes_damaged >= 2:
+            vision_range = min(vision_range, self.config["injury"]["bilateral_vision_range"])
+        if distance > vision_range:
             return False
         for pos in self.line_cells(observer.pos, target.pos):
             if self.walkable is not None and pos not in self.walkable:
@@ -865,7 +927,7 @@ class CombatState:
             actors = {fighter.id: fighter for fighter in self.fighters}
             sources = [actors[identity] for identity in (actor, target) if identity in actors]
             event_type = EventType(kind)
-            direct_target_events = {EventType.HIT, EventType.WOUND, EventType.BLOCK, EventType.PARRY,
+            direct_target_events = {EventType.HIT, EventType.CLASH, EventType.WOUND, EventType.BLOCK, EventType.PARRY,
                                     EventType.GUARD_BREAK, EventType.STAGGER, EventType.INJURY_RESPONSE,
                                     EventType.FALL, EventType.RISE, EventType.SHOVE, EventType.DISARM,
                                     EventType.INCAPACITATED, EventType.SEVER, EventType.EYE_INJURY,
@@ -879,7 +941,7 @@ class CombatState:
                               or event_type in direct_target_events and fighter.id == target
                               or visible_sources and all(source.id == fighter.id or self.can_see(fighter, source)
                                                          for source in visible_sources))
-            audible = {EventType.ACTION_START, EventType.MOVE, EventType.WHIFF, EventType.HIT, EventType.WOUND,
+            audible = {EventType.ACTION_START, EventType.MOVE, EventType.WHIFF, EventType.HIT, EventType.CLASH, EventType.WOUND,
                        EventType.BLOCK, EventType.PARRY, EventType.FALL, EventType.SHOVE,
                        EventType.INCAPACITATED, EventType.SEVER, EventType.EYE_INJURY,
                        EventType.DECAPITATION, EventType.TERMINAL_OUTCOME, EventType.FEAR_BREAK,
@@ -924,8 +986,16 @@ class CombatState:
     def from_data(cls, data):
         values = deepcopy(data)
         version = values.pop("schema_version")
-        if version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+        if version in set(range(1, 27)):
             values["config"] = upgrade_config(values["config"])
+            prior_bleed = {
+                "TORSO": {"CUT": 3, "DEEP": 6},
+                "HEAD": {"CUT": 3, "DEEP": 6},
+                "EYE": {"CUT": 3, "DEEP": 6},
+                "LEG": {"CUT": 2, "DEEP": 4},
+                "ARM": {"CUT": 2, "DEEP": 4},
+                "HAND": {"CUT": 2, "DEEP": 4, "SEVERED": 8},
+            }
             for fighter in values["fighters"]:
                 wound_rows = fighter.get("wounds", [])
                 prefight = fighter.get("prefight") or {}
@@ -934,6 +1004,11 @@ class CombatState:
                     if wound.get("severity") == Severity.GRAZE.value:
                         wound["bleed_per_turn"] = 0
                         wound.setdefault("initial_blood_loss", 0)
+                        continue
+                    zone, severity = wound.get("zone"), wound.get("severity")
+                    old_rate = prior_bleed.get(zone, {}).get(severity)
+                    if (old_rate is not None and wound.get("bleed_per_turn") == old_rate):
+                        wound["bleed_per_turn"] = values["config"]["wounds"][zone][severity]["bleed"]
         elif version != load_config()["schema_version"]:
             raise ValueError("Unsupported combat snapshot version")
         elif values["config"].get("schema_version") != version:

@@ -1,7 +1,7 @@
 """Shared deterministic geometry for locked sword attacks and their telegraphs."""
 from __future__ import annotations
 
-from .model import ActionKind
+from .model import ActionKind, Zone
 
 
 _OCTANTS = ((0, -1), (1, -1), (1, 0), (1, 1),
@@ -42,7 +42,7 @@ def attack_cells(origin, bearing, kind):
         dx, dy = _OCTANTS[center]
         return frozenset((origin[0] + dx * step, origin[1] + dy * step)
                          for step in range(1, reach + 1))
-    if kind in {ActionKind.LIGHT, ActionKind.HEAVY, ActionKind.DASH_LIGHT,
+    if kind in {ActionKind.LIGHT, ActionKind.HEAVY, ActionKind.DASH_LIGHT, ActionKind.DASH_SLASH,
                 ActionKind.DISARM}:
         if reach != 1:
             return frozenset()
@@ -56,8 +56,25 @@ def attack_contains(origin, target, bearing, kind):
     return target in attack_cells(origin, bearing, kind)
 
 
+def attack_lane(aim):
+    """Top-down combat's committed vertical blade line for a broad target zone."""
+    if aim in {Zone.HEAD, Zone.EYE}:
+        return "HIGH"
+    if aim == Zone.LEG:
+        return "LOW"
+    return "MID"
+
+
+def attack_path(origin, bearing, kind, aim):
+    """Return layered cells occupied by a committed weapon arc, including its hilt."""
+    lane = attack_lane(aim)
+    cells = set(attack_cells(origin, bearing, kind))
+    cells.add(tuple(origin))
+    return frozenset((x, y, lane) for x, y in cells)
+
+
 def lock_delay(kind):
     """Base preparation ticks before target bearing locks; scaled by scheduler."""
     return {ActionKind.LIGHT: 1, ActionKind.HEAVY: 2,
-            ActionKind.THRUST: 1, ActionKind.DASH_LIGHT: 3,
+            ActionKind.THRUST: 1, ActionKind.DASH_LIGHT: 3, ActionKind.DASH_SLASH: 1,
             ActionKind.DISARM: 1}.get(ActionKind(kind), 0)

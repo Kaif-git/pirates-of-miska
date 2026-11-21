@@ -18,7 +18,7 @@ from omnisim.ui.ascii_renderer import AsciiRenderer
 from omnisim.ui.render_settings import RenderSettings
 from omnisim.world import tile as T
 from tales_sim.clock import TICKS_PER_SECOND
-from pirates.game import World, SAVE_PATH
+from pirates.game import World, SAVE_PATH, MVP_SAVE_PATH
 from pirates.combat import (NPC_PROFILE_INTEGER_FIELDS, NPC_PROFILE_RANGES,
                              speed_band, technique_summary, validate_npc_profile)
 from pirates.combat_core import WEAPONS, duel_weapon_for_actor
@@ -674,10 +674,17 @@ class PiratesRenderer(AsciiRenderer):
         ship = world.ship
         status = world.voyages.voyage["status"] if world.voyages.voyage else "moored"
         place = "OPEN SEA" if world.at_sea else PORTS[world.economy.port]['name']
+        food_line = (f"Food {ship.food_stock_g() / 1000:.0f}kg | Water {ship.stores['clean_water_ml'] / 1000:.0f}L | "
+                     f"Planks {ship.stores['planks']}"
+                     if world.scenario_id == "lawful-trader-mvp" else
+                     f"Food {ship.food_stock_g() / 1000:.1f} kg | Clean water {ship.stores['clean_water_ml'] / 1000:.1f} L | "
+                     f"Planks {ship.stores['planks']}")
         lines = [f"THE WAYWARD | {place} | {status}", f"{world.economy.money} Marks", world.clock.format(),
                  world.room_name(world.player.x, world.player.y, world.player.z),
                   f"Hull {ship.hull:.0f}% | Bilge {ship.bilge:.0f} | Rig {ship.rigging:.0f}%",
-                   f"Food {ship.food_stock_g() / 1000:.1f} kg | Clean water {ship.stores['clean_water_ml'] / 1000:.1f} L | Planks {ship.stores['planks']}", "", "CREW"]
+                    food_line, "", "CREW"]
+        if world.scenario_id == "lawful-trader-mvp":
+            lines.insert(1, "AUTHORED MVP | SIM OFF")
         if world.lockdown:
             lines.insert(5, "LOCKDOWN | ship doors barred")
         if world.hazards.fires or world.hazards.smoke:
@@ -715,6 +722,13 @@ class PiratesRenderer(AsciiRenderer):
             latest = world.combat.engine.log[-1].split("] ", 1)[-1]
             latest = re.sub(r"\s+at tick \d+", "", latest)
             return [latest, combat_control_hint(COMBAT_DASH_ARMED, world.combat)]
+        status_width = self.viewport[0] * self.tile_width
+        if status_width <= 400:
+            max_chars = max(20, status_width // 7 - 2)
+            latest = world.log[-1]
+            if len(latest) > max_chars:
+                latest = latest[:max_chars - 3].rstrip() + "..."
+            return [latest, "Arrows move | Enter | F2 crew | V"]
         return [world.log[-1], "Move: arrows/HJKL | PgUp/PgDn stairs | Enter interact | F2 crew | F8 blueprint | +/- zoom"]
 
     def _ship_mark(self, world, sx, sy, wx, wy, skip_actors=False):
@@ -1475,9 +1489,58 @@ def _inspect_action(renderer, world, action):
     inspect(renderer, world, x, y)
 
 
+def resolve_launch_world(args, parser):
+    generated_options = (args.seed is not None or args.npc_people is not None
+                         or args.npc_organizations is not None or args.npc_vessels is not None
+                         or args.history_days is not None)
+    if generated_options and not args.new:
+        parser.error("--seed and NPC settings require --new")
+    if args.replace_slot and (args.scenario is None or not args.new):
+        parser.error("--replace-slot requires --scenario lawful-trader-mvp and --new")
+    if args.scenario:
+        if generated_options:
+            parser.error("Generated NPC settings cannot be used with an authored scenario")
+        if args.smoke_render:
+            return World.new_authored_mvp()
+        if args.new:
+            if MVP_SAVE_PATH.exists() and not args.replace_slot:
+                parser.error(f"{MVP_SAVE_PATH} already exists; resume it or pass --replace-slot to replace it")
+            world = World.new_authored_mvp()
+            world.save_path = MVP_SAVE_PATH
+            return world
+        if MVP_SAVE_PATH.exists():
+            try:
+                return World.load(MVP_SAVE_PATH, expected_scenario_id=args.scenario)
+            except (ValueError, KeyError, TypeError, OSError) as error:
+                parser.exit(1, f"Cannot load {MVP_SAVE_PATH}: {error}\nUse --new --replace-slot to replace this slot.\n")
+        return World.new_authored_mvp()
+    if args.smoke_render:
+        return World()
+    if not args.new and SAVE_PATH.exists():
+        try:
+            return World.load(SAVE_PATH, expected_scenario_id=None)
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            parser.exit(1, f"Cannot load {SAVE_PATH}: {error}\nUse --new for a fresh game.\n")
+    settings = {key: value for key, value in {
+        "notable_people": args.npc_people,
+        "organization_count": args.npc_organizations,
+        "vessel_count": args.npc_vessels,
+        "history_days": args.history_days,
+    }.items() if value is not None}
+    try:
+        return World.new_generated(args.seed, settings)
+    except ValueError as error:
+        parser.error(str(error))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--new", action="store_true", help="Start a generated world, ignoring the existing save")
+    parser.add_argument("--new", action="store_true",
+                        help="Start a fresh game (generated unless --scenario is selected)")
+    parser.add_argument("--scenario", choices=("lawful-trader-mvp",),
+                        help="Resume or start an authored scenario in its own save slot")
+    parser.add_argument("--replace-slot", action="store_true",
+                        help="Allow --new --scenario to replace that scenario's save file")
     parser.add_argument("--seed", help="Reproducible seed for a generated --new world")
     parser.add_argument("--npc-people", type=int, help="Number of notable generated NPCs (default: 24)")
     parser.add_argument("--npc-organizations", type=int, help="Number of generated NPC organizations (default: 4)")
@@ -1486,28 +1549,7 @@ def main():
     parser.add_argument("--smoke-render", action="store_true", help="Render, exercise movement and exit without saving")
     parser.add_argument("--screenshot", type=Path, help="Save a native SDL screenshot")
     args = parser.parse_args()
-    if (args.seed is not None or args.npc_people is not None or args.npc_organizations is not None
-            or args.npc_vessels is not None or args.history_days is not None) and not args.new:
-        parser.error("--seed and NPC settings require --new")
-    if args.smoke_render:
-        world = World()
-    elif not args.new and SAVE_PATH.exists():
-        try:
-            world = World.load()
-        except (ValueError, KeyError, TypeError, OSError) as error:
-            # Do not silently replace a broken slot with a fresh autosave.
-            parser.exit(1, f"Cannot load {SAVE_PATH}: {error}\nUse --new for a fresh game.\n")
-    else:
-        settings = {key: value for key, value in {
-            "notable_people": args.npc_people,
-            "organization_count": args.npc_organizations,
-            "vessel_count": args.npc_vessels,
-            "history_days": args.history_days,
-        }.items() if value is not None}
-        try:
-            world = World.new_generated(args.seed, settings)
-        except ValueError as error:
-            parser.error(str(error))
+    world = resolve_launch_world(args, parser)
     renderer = PiratesRenderer(settings=RenderSettings(
         world_tileset="ascii", world_font_size=20,
         world_cell_width=20, world_cell_height=24))
@@ -1857,7 +1899,7 @@ def main():
                     world.message(f"Save failed: {error}")
             elif name == "load_game":
                 try:
-                    world = World.load()
+                    world = World.load(world.save_path, expected_scenario_id=world.scenario_id)
                 except (ValueError, KeyError, TypeError, OSError) as error:
                     world.message(f"Load failed: {error}")
             elif name == "help":
@@ -1874,7 +1916,9 @@ def main():
                     "Needs preempt work; carried supplies and progress are retained.",
                     "$: merchant. Stand within two tiles, then Enter to talk / buy / sell.",
                     "Enter > Trade cargo / crew equipment: allocate supplies at the hold.",
-                    "Enter > Island guide / coastal passage: arrange travel at helm / harbor office.",
+                    ("Authored MVP: fixed sample NPCs; strategic world simulation is disconnected."
+                     if world.scenario_id == "lawful-trader-mvp" else
+                     "Enter > Island guide / coastal passage: arrange travel at helm / harbor office."),
                     "F8: ship blueprint editor — B cycle, Space mark, C copy, M mirror, R rotate, Z undo, Enter queue.",
                     "C: shipboard combat arena. Combat: click target, Space attack, 1-3 styles, R aim, T reload, B dodge, G guard, P throw, Y hide; F11 exit."])
             else:

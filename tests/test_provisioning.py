@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from pirates.game import World
+from pirates.economy import MERCHANTS
 from pirates.management import ship_rows
 from pirates.provisioning import (CLEAN_WATER_L_PER_CREW_DAY,
                                   FOOD_KG_PER_CREW_DAY, forecast_provisions,
@@ -163,6 +164,89 @@ def test_readiness_names_paused_galley_remedy():
 
     assert any("galley automation is paused" in row for row in rows)
     assert any("unpause the galley" in row for row in rows)
+
+
+def test_readiness_adds_physical_crew_medical_ammunition_and_work_findings():
+    world = quiet_world()
+    ship = world.ship
+    ship.hull = 40
+    ship.rigging = 30
+    for sailor in ship.crew:
+        sailor.labors = {kind: 0 for kind in sailor.labors}
+    ship.stores["medicine"] = 0
+    ship.stores["bandages"] = 0
+    ship.stores["shot"] = 0
+    ship.ammo = {key: False for key in ship.ammo}
+    world.locked_doors = set(world.ship_model.navigation_geometry()["door"])
+    job = ship.add_job("readiness:repair", "repair", ship.stations["repair"], work=100)
+    world.advance(100)
+
+    rows = readiness_rows(world)
+    assert any("Hull: 40/100" in row and "rigging: 30/100" in row for row in rows)
+    assert any(row.startswith("Warning: hull is below") and "Next: patch hull" in row for row in rows)
+    assert any("estimated sailing drive" in row.lower() for row in rows)
+    assert any(row.startswith("Estimated load:") and "provisional margin" in row for row in rows)
+    assert any(row.startswith("Warning: access —") for row in rows)
+    assert any("Patch hull: none enabled" in row for row in rows)
+    assert any("Unfinished work:" in row and "sailing does not complete or refund" in row for row in rows)
+    assert any(f"order #{job.id}" in row and "blocked" in row and "Next:" in row for row in rows)
+    assert any("Medical stores: 0 medicine, 0 bandages" in row for row in rows)
+    assert any("combat wounds are not bridged" in row for row in rows)
+    assert any("Ammunition: 0 cannon(s) loaded; 0 reserve shot" in row for row in rows)
+    assert any("not departure gates" in row for row in rows)
+
+
+def test_readiness_warnings_do_not_add_a_new_departure_gate():
+    world = quiet_world()
+    world.ship.hull = 10
+    world.ship.rigging = 0
+    world.ship.crew = []
+    world.voyages.roles = {role: None for role in world.voyages.roles}
+
+    rows = readiness_rows(world)
+    assert any(row.startswith("Warning: hull is below") for row in rows)
+    assert any("no living crew route" in row for row in rows)
+    report = world.voyages.role_report(world)
+    assert any("SHIP AND CREW PREPARATION" in row for row in report)
+    assert any("Medical stores" in row for row in report)
+    assert any("Ammunition:" in row for row in report)
+    assert any("Departure gate policy" in row for row in report)
+
+    world.voyages.confirm(world, "cinder")
+    assert world.voyages.voyage["status"] == "underway"
+
+
+def test_authored_departure_fixes_a_paid_water_shortage_and_sails_with_hull_warning():
+    world = World.new_authored_mvp()
+    assert world.economy.port == "verdant"
+    world.ship.stores["clean_water_ml"] = 0
+    initial = readiness_rows(world)
+    assert any("Water: 0.0 L potable" in row for row in initial)
+
+    merchant_id = "bo"
+    merchant = MERCHANTS[merchant_id]
+    x, y = merchant["at"]
+    world.player.x, world.player.y = x + 1, y
+    world.refresh()
+    stock_before = world.economy.markets[merchant_id]["stock"]["spring_water_refill"]
+    money_before = world.economy.money
+    world.economy.trade(world, merchant_id, "spring_water_refill", 1, True)
+    assert world.economy.money < money_before
+    assert world.economy.markets[merchant_id]["stock"]["spring_water_refill"] == stock_before - 1
+
+    hold_x, hold_y = world.ship.stations["hold"]
+    world.player.x, world.player.y = hold_x - 1, hold_y
+    world.refresh()
+    world.economy.allocate(world, "spring_water_refill", 1)
+    assert "spring_water_refill" not in world.economy.cargo
+    assert any("Water: 5.0 L potable" in row for row in readiness_rows(world))
+
+    # The player fixes the water shortfall but deliberately accepts the already-supported hull caution.
+    world.ship.hull = 40
+    review = world.voyages.role_report(world)
+    assert any(row.startswith("Warning: hull is below") for row in review)
+    world.voyages.confirm(world, "cinder")
+    assert world.voyages.voyage["status"] == "underway"
 
 
 def test_readiness_reports_spoilage_light_and_unallocated_cargo():

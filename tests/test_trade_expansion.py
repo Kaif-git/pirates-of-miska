@@ -30,7 +30,9 @@ def test_trade_only_fantasy_goods_have_distinct_profitable_regional_markets():
     assert {item["origin"] for item_id, item in CATALOG.items() if item_id in goods} == set(PORTS)
     for item_id in goods:
         item = CATALOG[item_id]
-        assert "supply" not in item and "slot" not in item
+        assert "slot" not in item
+        if "supply" in item:
+            assert item_id == "salted_fruit" and item["supply"] == "salted_fruit_g"
         origin_seller = next(mid for mid, merchant in MERCHANTS.items()
                              if merchant["port"] == item["origin"]
                              and merchant["stock"].get(item_id, 0) > 0)

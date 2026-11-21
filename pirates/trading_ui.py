@@ -38,6 +38,90 @@ def market_rows(world, mid):
     return rows
 
 
+def market_observation_rows(world, mid):
+    """Render a saved, read-only market snapshot; never query the live remote market."""
+    from tales_sim.clock import GameClock, format_duration
+
+    merchant = MERCHANTS[mid]
+    observation = world.economy.market_observations.get(mid)
+    rows = [f"Source: {merchant['name']} at {PORTS[merchant['port']]['name']}"]
+    if observation is None:
+        return rows + ["No price observation has been recorded.",
+                       "Remote stock, purse and quotes are unknown until inspected locally."]
+    observed_clock = GameClock(observation["observed_at_ticks"])
+    age = max(0, world.clock.total_ticks - observation["observed_at_ticks"])
+    rows += [f"Last inspected: {observed_clock.format()} ({format_duration(age)} ago)",
+             f"Merchant purse then: {observation['merchant_funds']} Marks",
+             "Remembered stock and one-unit quotes only; this is not a live or executable offer.",
+             f"Ask excludes the {DELIVERY_FEE}-Mark/order delivery fee; quantity totals vary with stock.", ""]
+    for item_id, quote in sorted(observation["goods"].items(),
+                                 key=lambda pair: CATALOG[pair[0]]["name"].casefold()):
+        rows.append(f"{CATALOG[item_id]['name']}: {quote['stock']} in stock then | "
+                    f"ask {quote['ask']} / bid {quote['bid']} Marks per unit")
+    if not observation["goods"]:
+        rows.append("No goods were listed at this inspection.")
+    return rows
+
+
+def market_observation_status(world, mid):
+    from tales_sim.clock import GameClock, format_duration
+
+    observation = world.economy.market_observations.get(mid)
+    if observation is None:
+        return "Quote notes: unknown until inspected locally."
+    when = GameClock(observation["observed_at_ticks"]).format()
+    age = format_duration(max(0, world.clock.total_ticks - observation["observed_at_ticks"]))
+    return f"Quote notes last inspected {when} ({age} ago); remembered, not live."
+
+
+def trade_preview_rows(world, mid, item_id, amount, buying):
+    """Show an exact current quote and projected ledger/load deltas without committing."""
+    economy = world.economy
+    market = economy.markets[mid]
+    item = CATALOG[item_id]
+    total = economy.quote(mid, item_id, amount, buying)
+    mass, bulk = economy.load()
+    cargo_delta = amount if buying else -amount
+    next_mass = mass + item["weight_g"] * cargo_delta
+    next_bulk = bulk + item["bulk_ml"] * cargo_delta
+    goods_total = total - (DELIVERY_FEE if buying else 0)
+    next_money = economy.money + (-total if buying else total)
+    next_merchant_money = market["money"] + (goods_total if buying else -total)
+    seconds = 60 if buying else 10
+    verb = "Buy from" if buying else "Sell to"
+    rows = [f"{verb} {MERCHANTS[mid]['name']}: {amount} × {item['name']}.",
+            f"Quantity-sensitive total: {total} Marks {'due' if buying else 'proceeds'}."]
+    if buying:
+        rows += [f"Goods: {goods_total} Marks | Delivery: {DELIVERY_FEE} Marks per order.",
+                 "Porters deliver the purchase to trade cargo."]
+    else:
+        rows.append("No delivery fee; proceeds come from the merchant's finite purse.")
+    rows += [f"Captain's purse: {economy.money} → {next_money} Marks.",
+             f"Merchant's purse: {market['money']} → {next_merchant_money} Marks.",
+             f"Trade + issued-kit load: {mass}/{TRADE_MASS_G} g, {bulk}/{TRADE_BULK_ML} ml → "
+             f"{next_mass}/{TRADE_MASS_G} g, {next_bulk}/{TRADE_BULK_ML} ml.",
+             f"Time: {seconds} seconds; commit rechecks current stock, purse, cargo and capacity."]
+    if buying and economy.money < total:
+        rows.append("Cannot afford this order with the current purse.")
+    if not buying and market["money"] < total:
+        rows.append("Merchant purse cannot cover these proceeds; reduce quantity or choose another buyer.")
+    if buying and (next_mass > TRADE_MASS_G or next_bulk > TRADE_BULK_ML):
+        rows.append("This order exceeds trade-cargo capacity.")
+    return rows
+
+
+def remembered_market_menu(renderer, world):
+    mids = list(MERCHANTS)
+    choices = [f"{MERCHANTS[mid]['name']} — {PORTS[MERCHANTS[mid]['port']]['name']}"
+               for mid in mids]
+    selected = choose(renderer, world, "Remembered market notes — never live remote data",
+                      choices + ["Return"])
+    if selected is None or selected == len(mids):
+        return
+    panel(renderer, world, "Remembered market observation",
+          market_observation_rows(world, mids[selected]))
+
+
 def merchant_menu(renderer, world, mid):
     try:
         world.economy.require_merchant(world, mid)
@@ -55,10 +139,13 @@ def merchant_menu(renderer, world, mid):
             panel(renderer, world, merchant["name"], merchant["dialogue"] + ["", PORTS[merchant['port']]["description"]])
             continue
         if index == 3:
+            if getattr(world, "scenario_id", None) == "lawful-trader-mvp":
+                world.economy.observe_market(world, mid)
             panel(renderer, world, "Prices / trading terms", market_rows(world, mid))
             continue
         buying = index == 1
-        source = world.economy.markets[mid]["stock"] if buying else world.economy.cargo
+        source = (world.economy.markets[mid]["stock"] if buying else
+                  {key: world.economy.available_cargo(key) for key in world.economy.cargo})
         goods = [key for key, n in source.items() if n > 0 and mid in CATALOG[key]["market_buyers"]]
         if not goods:
             panel(renderer, world, "No goods", ["No suitable goods are available.", "Each merchant deals only in their listed categories."])
@@ -74,9 +161,11 @@ def merchant_menu(renderer, world, mid):
             continue
         total = world.economy.quote(mid, key, amount, buying)
         item = CATALOG[key]
-        confirmed = choose(renderer, world, f"{'Buy' if buying else 'Sell'} {amount} {item['name']}: {total} Marks", [
+        panel(renderer, world, "Transaction preview",
+              trade_preview_rows(world, mid, key, amount, buying))
+        confirmed = choose(renderer, world, f"{'Buy' if buying else 'Sell'} {amount} {item['name']}?", [
             "Confirm transaction", "Inspect item facts / utility", "Cancel"],
-            "Total includes stock-sensitive unit prices" + (f" and {DELIVERY_FEE} Marks delivery; advances 1 minute." if buying else "; advances 10 seconds."))
+            f"Quoted total: {total} Marks; {60 if buying else 10} seconds. Esc cancels with no time or transfer.")
         if confirmed == 1:
             panel(renderer, world, item["name"], item_detail_rows(key))
         elif confirmed == 0:
@@ -117,6 +206,34 @@ def item_detail_rows(item_id):
             "Found at: " + "; ".join(found)]
     if imports:
         rows.append("Regional buyers: " + ", ".join(imports))
+    return rows
+
+
+def port_guide_rows(world):
+    """Public-facing port/location guide; never reveals a remote live quote."""
+    authored_mvp = getattr(world, "scenario_id", None) == "lawful-trader-mvp"
+    rows = []
+    for key, port in PORTS.items():
+        rows += [port["name"] + (" (current harbor)" if key == world.economy.port else ""),
+                 port["tagline"], port["description"]]
+        for mid, merchant in MERCHANTS.items():
+            if merchant["port"] != key:
+                continue
+            rows.append(f"  {merchant['name']} — {merchant['title']} at {merchant['at']}")
+            if authored_mvp:
+                rows.append("    " + market_observation_status(world, mid))
+        rows.append("")
+    if authored_mvp:
+        rows += ["Merchant stocks and purses are finite; prices are local, not a live remote-price feed.",
+                 "The ports have different goods and trade needs; inspect locally for current quotes.",
+                 "Review remembered market notes for the last local price-list inspection; absent notes are unknown.",
+                 "Use V to choose a chart destination and sail freely. No delivery contract or passage fee is required."]
+    else:
+        rows += ["Verdant exports food, water, wood and cloth; imports tools, metal and weapons.",
+                 "Cinder exports manufactured goods; imports provisions, wood and cloth.",
+                 "Production and local consumption update daily; purses and stocks are finite.",
+                 "Coastal passage is abstracted, not simulated sailing.",
+                 "Book it beside the helm or at the harbor office (42,23)."]
     return rows
 
 
@@ -252,25 +369,26 @@ def candidate_terms_rows(candidate, day):
 
 
 def port_menu(renderer, world):
+    authored_mvp = getattr(world, "scenario_id", None) == "lawful-trader-mvp"
     while True:
-        index = choose(renderer, world, f"{PORTS[world.economy.port]['name']} — islands and coastal passage", [
-            "Island guide / merchant locations", "Merchant contracts / trader reputation", "Meet crew prospects / recruit",
-            f"Book passage to the other island ({PASSAGE_FEE} Marks, 30 minutes)"])
+        options = ["Island guide / merchant locations"]
+        if authored_mvp:
+            options.append("Review remembered market notes")
+        if not authored_mvp:
+            options.append("Merchant contracts / trader reputation")
+        options.append("Meet crew prospects / recruit")
+        if not authored_mvp:
+            options.append(f"Book passage to the other island ({PASSAGE_FEE} Marks, 30 minutes)")
+        else:
+            options.append("Return")
+        index = choose(renderer, world, f"{PORTS[world.economy.port]['name']} — port guide", options)
         if index is None:
             return
         if index == 0:
-            rows = []
-            for key, port in PORTS.items():
-                rows += [port["name"] + (" (current harbor)" if key == world.economy.port else ""), port["tagline"], port["description"]]
-                rows += [f"  {m['name']} — {m['title']} at {m['at']}" for m in MERCHANTS.values() if m["port"] == key]
-                rows.append("")
-            rows += ["Verdant exports food, water, wood and cloth; imports tools, metal and weapons.",
-                     "Cinder exports manufactured goods; imports provisions, wood and cloth.",
-                     "Production and local consumption update daily; purses and stocks are finite.",
-                     "Coastal passage is abstracted, not simulated sailing.",
-                      "Book it beside the helm or at the harbor office (42,23)."]
-            panel(renderer, world, "Island guide", rows)
-        elif index == 1:
+            panel(renderer, world, "Island guide", port_guide_rows(world))
+        elif authored_mvp and index == 1:
+            remembered_market_menu(renderer, world)
+        elif not authored_mvp and index == 1:
             contract_menu(renderer, world)
         elif index == 2:
             candidates = world.economy.recruitment.at_port(world.economy.port)
@@ -295,13 +413,15 @@ def port_menu(renderer, world):
             if confirm == 2:
                 world.economy.recruitment.decline(candidate["id"], world.economy.port)
                 world.message(f"You declined {candidate['name']}'s offer to join.")
-        else:
+        elif not authored_mvp:
             destination = next(key for key in PORTS if key != world.economy.port)
             confirm = choose(renderer, world, f"Passage to {PORTS[destination]['name']}", [f"Confirm {PASSAGE_FEE} Marks / 30 minutes", "Cancel"],
                              "Crew needs and work advance during travel. This is not naval sailing simulation.")
             if confirm == 0:
                 attempt(renderer, world, lambda: world.economy.travel(world, destination))
                 return
+        else:
+            return
 
 
 def contract_menu(renderer, world):

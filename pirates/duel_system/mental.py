@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from .config import load_config
 from .model import CombatState, EventType, PreFightState
-from .stats import clamp, fear
+from .stats import clamp, legacy_fear_pressure, pain_burden
 
 
 def anger_crash(state, fighter, cause):
@@ -20,6 +20,10 @@ def anger_crash(state, fighter, cause):
 
 def change_anger(state, fighter, delta, cause):
     rule = state.config["anger"]
+    if delta > 0:
+        tolerance = (fighter.personality.anger_tolerance if fighter.personality
+                     else state.config["defaults"]["anger_tolerance"])
+        delta *= 1 - tolerance
     before = fighter.anger
     fighter.anger_history = [(tick, anger) for tick, anger in fighter.anger_history
                              if state.tick - tick < rule["crash_window"]]
@@ -30,7 +34,16 @@ def change_anger(state, fighter, delta, cause):
                    deltas={"anger": fighter.anger - before}, cause_tags=(cause,))
     if (fighter.anger < rule["crash_low"] and before >= rule["crash_low"]
             and any(value > rule["crash_high"] for _, value in fighter.anger_history)):
-        anger_crash(state, fighter, "ANGER_DROP")
+                anger_crash(state, fighter, "ANGER_DROP")
+
+
+def change_fear(state, fighter, delta, cause):
+    before = fighter.fear_meter
+    fighter.fear_meter = clamp(before + delta, 0, state.config["defaults"]["pool_max"])
+    if fighter.fear_meter != before:
+        state.emit(EventType.POOL_CHANGE, fighter.id,
+                   deltas={"fear": fighter.fear_meter,
+                           "fear_delta": fighter.fear_meter - before}, cause_tags=(cause,))
 
 
 def blood_morale(state, fighter):
@@ -51,7 +64,8 @@ def fear_decision(state, fighter, *, on_break=None):
     if state.end_reason:
         return fighter.yielded or fighter.fled
     rule = state.config["fear"]
-    fighter.fear_decisions = fighter.fear_decisions + 1 if fear(fighter, state.config) >= rule["break_threshold"] else 0
+    fighter.fear_decisions = (fighter.fear_decisions + 1
+                              if legacy_fear_pressure(fighter, state.config) >= rule["break_threshold"] else 0)
     if fighter.fear_decisions < rule["break_decisions"]:
         return False
     if on_break is not None:
@@ -66,7 +80,7 @@ def fear_decision(state, fighter, *, on_break=None):
 
 
 def initialize_fight(fighters, *, config=None, rng_seed=0, walkable=None, exits=(), leaders=None):
-    """Own the inputs and apply the specified level/courage starting morale."""
+    """Own inputs; seed current fear from confidence and preserve legacy morale metadata."""
     cfg = deepcopy(config) if config is not None else load_config()
     state = CombatState(deepcopy(fighters), rng_seed=rng_seed, config=cfg,
                         walkable=deepcopy(walkable), exits=set(exits), leaders=deepcopy(leaders or {}))
@@ -74,11 +88,18 @@ def initialize_fight(fighters, *, config=None, rng_seed=0, walkable=None, exits=
         visible_hostiles = state.visible_hostiles_for(fighter.id)
         other = visible_hostiles[0] if visible_hostiles else (
             state.other(fighter) if len(state.fighters) <= 2 else None)
-        courage = fighter.personality.courage if fighter.personality else 0
+        confidence = (fighter.personality.traits["confidence"] if fighter.personality
+                      else cfg["defaults"]["confidence"])
+        legacy_prefight_nerves = fighter.prefight.nervousness if fighter.prefight else 0
+        fighter.fear_meter = clamp(cfg["defaults"]["pool_max"] * (1 - confidence)
+                                   + legacy_prefight_nerves * cfg["defaults"]["pool_max"],
+                                   0, cfg["defaults"]["pool_max"])
         level_penalty = (cfg["morale"]["level_gap_penalty"] * max(0, other.level - fighter.level)
                          if other else 0)
+        courage = fighter.personality.courage if fighter.personality else 0
         fighter.morale = clamp(cfg["morale"]["start"] + courage - level_penalty,
                                 0, cfg["defaults"]["pool_max"])
+        fighter.nervousness = 0
         fighter.anger_history = [(state.tick, fighter.anger)]
         blood_morale(state, fighter)
     from .perception import refresh_contacts
@@ -92,5 +113,5 @@ def postfight_state(state, fighter_id):
     fighter = next(item for item in state.fighters if item.id == fighter_id)
     return PreFightState(fatigue=fighter.fatigue, stamina=fighter.stamina,
                          blood=fighter.blood, injuries=deepcopy(fighter.wounds),
-                         nervousness=fighter.nervousness,
+                          nervousness=0,
                          permanent_injuries=deepcopy(fighter.permanent_injuries))

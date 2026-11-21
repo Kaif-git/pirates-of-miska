@@ -15,14 +15,18 @@ Two hard boundaries follow the plan:
   reputation. It never invents a stance, treaty, shared objective or fleet.
 
 Range is encounter-local and deliberately coarse: ``distant`` then ``close``.
-The strategic chart has no relative bearing or speed, so approach and evasion
-are deterministic encounter checks with visible time costs, not physics.
+Lookout observations may include chart-scale relative position/motion, but
+approach and evasion remain deterministic encounter checks with visible time
+costs, not tactical sailing physics.
 """
 from __future__ import annotations
 
 from hashlib import blake2b
+from copy import deepcopy
 import json
 import math
+
+from pirates import sea_trade
 
 SIGNAL_INTENTS = ("identify", "intentions", "warn_off")
 PARLEY_TOPICS = ("identity", "intentions", "warn_off", "stand_down", "transfer_permission")
@@ -30,6 +34,7 @@ MANIFEST_MODES = ("alone", "escorts", "everyone")
 THREATS = ("merchant", "pirates", "marines")
 MAX_SIGNALS = 6
 MAX_PARLEY_TOPICS = len(PARLEY_TOPICS)
+MAX_CROSSING_PARTICIPANTS = 6
 
 
 def new_contact():
@@ -42,6 +47,11 @@ def new_contact():
         "parley": None,
         "crossing": None,
         "combat_pending": None,
+        "crossing_completed": False,
+        "trade_offer": None,
+        "trade_pending": None,
+        "trade_sequence": 0,
+        "trade_receipts": [],
     }
 
 
@@ -67,8 +77,56 @@ def _unit(encounter, salt):
     return int.from_bytes(blake2b(payload, digest_size=8).digest(), "big") / 2**64
 
 
+def _contact_unit(encounter, salt):
+    identity = encounter.get("contact_instance_id", encounter.get("id", "unknown"))
+    payload = f"{identity}:{salt}".encode()
+    return int.from_bytes(blake2b(payload, digest_size=8).digest(), "big") / 2**64
+
+
 def _clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def pirate_risk_assessment(world, encounter):
+    """Estimate local warning response from visible vessel condition/crew/guns.
+
+    This is a bounded encounter estimate, not NPC hidden intent or legal
+    authority. Loaded shot, private cargo, faction goals and remote state are
+    intentionally excluded.
+    """
+    if threat_of(encounter) != "pirates":
+        raise ValueError("Pirate risk assessment requires an estimated pirate contact")
+    living_crew = sum(1 for sailor in world.ship.crew if sailor.health > 0)
+    layout = getattr(world.ship, "layout", None)
+    visible_guns = sum(1 for gun in ("port_cannon", "starboard_cannon")
+                       if layout is not None and layout.available(gun))
+    own_condition = _clamp((float(world.ship.hull) + float(world.ship.rigging)) / 200.0,
+                           0.15, 1.0)
+    other_crew = max(1, int(encounter.get("crew", 0)))
+    other_condition = _clamp(int(encounter.get("condition", 100)) / 100.0, 0.15, 1.0)
+    own_strength = max(1.0, living_crew + 2.0 * visible_guns) * own_condition
+    other_strength = other_crew * other_condition
+    ratio = own_strength / max(0.5, other_strength)
+    chance = _clamp(0.05 + (ratio - 0.75) * 0.42, 0.05, 0.80)
+    band = "favourable" if ratio >= 1.5 else "uncertain" if ratio >= 0.8 else "poor"
+    return {"band": band, "ratio": round(ratio, 3),
+            "warn_off_chance": round(chance, 4),
+            "warn_off_percent": round(chance * 100),
+            "own_visible_crew": living_crew, "own_visible_guns": visible_guns,
+            "other_observed_crew": other_crew,
+            "other_observed_condition": int(encounter.get("condition", 100))}
+
+
+def hostile_commitment_authorized(world, encounter):
+    """Return whether a scoped witnessed event or warrant supports commitment."""
+    return hostile_commitment_basis(world, encounter) is not None
+
+
+def hostile_commitment_basis(world, encounter):
+    """Return the local evidence row, never treating appearance as authority."""
+    voyages = getattr(world, "voyages", None)
+    resolver = getattr(voyages, "hostile_commitment_basis", None)
+    return resolver(world, encounter) if callable(resolver) else None
 
 
 def _mission_statement(encounter):
@@ -92,6 +150,19 @@ def sighting_rows(world, encounter):
         f"Observed condition {int(encounter.get('condition', 100))}/100 | "
         f"crew estimate {int(encounter.get('crew', 0))}",
     ]
+    if threat_of(encounter) == "pirates":
+        risk = pirate_risk_assessment(world, encounter)
+        rows.append(
+            f"Local risk: {risk['band']} readiness; a close warning has an estimated "
+            f"{risk['warn_off_percent']}% chance to make this crew back down. "
+            "Estimate uses observed crew/condition and visible crew/cannon fit; intent and hidden stores remain unknown.")
+    basis = hostile_commitment_basis(world, encounter)
+    if basis is None:
+        rows.append("Hostility: prohibited; no witnessed attack or verified warrant is recorded for this contact.")
+    else:
+        rows.append(f"Hostility: evidence recorded ({basis['cause']}); combat still requires the separate M5 authority.")
+    if threat_of(encounter) == "marines":
+        rows.append("Marine patrol: neutral by default; claimed colours do not establish a warrant or authorize attack.")
     org_id = encounter.get("organization_id")
     society = getattr(world, "society", None)
     organization = (society.organizations.get(org_id)
@@ -117,7 +188,25 @@ def sighting_rows(world, encounter):
 def contact_rows(world, encounter):
     """Current contact state and honest estimates, without leaking rolls."""
     contact = contact_of(encounter, create=False)
-    rows = [f"Range: {contact['range']}"]
+    rows = [f"Encounter range: {contact['range']}"]
+    instance_id = encounter.get("contact_instance_id")
+    if isinstance(instance_id, str):
+        rows.append(f"Lookout contact: {instance_id} (permissions apply to this meeting only).")
+    observation = encounter.get("relative_observation")
+    if isinstance(observation, dict):
+        bearing = observation["bearing_deg"]
+        bearing_text = "bearing unavailable" if bearing is None else f"bearing {bearing:.1f}°"
+        rows.append(f"Lookout: {observation['range_units']:.2f} chart units, {bearing_text}.")
+        motion_text = {
+            "unknown": "relative course not established",
+            "closing": "closing on the sampled course",
+            "overtaking": "same-course traffic is overtaking",
+            "opening": "opening on the sampled course",
+            "crossing": "crossing the sampled course",
+            "following": "following at similar speed",
+            "steady": "little relative movement observed",
+        }[observation["relative_motion"]]
+        rows.append(f"Observed motion: {motion_text}; chart-scale estimate, not tactical range.")
     if contact["signals"]:
         rows.append(f"Signal exchanges: {len(contact['signals'])}")
     if contact["approach_attempts"]:
@@ -147,12 +236,18 @@ def contact_rows(world, encounter):
 
 
 def validate_contact(contact, encounter_id=None, valid_nodes=None, *,
-                     valid_people=None, living_people=None, captain_id="captain"):
+                     valid_people=None, living_people=None, captain_id="captain",
+                     contact_instance_id=None, current_tick=None):
     """Strict validation for a persisted contact; raises ValueError."""
     if not isinstance(contact, dict) or set(contact) != set(new_contact()):
         raise ValueError("Invalid saved encounter contact")
     if contact["range"] not in ("distant", "close"):
         raise ValueError("Invalid saved encounter range")
+    if type(contact["crossing_completed"]) is not bool:
+        raise ValueError("Invalid saved crossing completion state")
+    sea_trade.validate_contact_trade(
+        contact, contact_instance_id or encounter_id or "unknown",
+        current_tick if current_tick is not None else 10**18)
     for key in ("approach_attempts", "evade_attempts"):
         if type(contact[key]) is not int or not 0 <= contact[key] <= 100:
             raise ValueError("Invalid saved encounter attempt count")
@@ -198,11 +293,14 @@ def validate_contact(contact, encounter_id=None, valid_nodes=None, *,
                 or crossing["mode"] not in MANIFEST_MODES
                 or not isinstance(crossing["participants"], list)
                 or not crossing["participants"]
+                or len(crossing["participants"]) > MAX_CROSSING_PARTICIPANTS
                 or any(not isinstance(sid, str) or not sid for sid in crossing["participants"])
                 or len(set(crossing["participants"])) != len(crossing["participants"])
                 or type(crossing["tick"]) is not int or crossing["tick"] < 0
                 or crossing["status"] != "pending"):
             raise ValueError("Invalid saved crossing request")
+        if contact["crossing_completed"]:
+            raise ValueError("A completed crossing cannot also be pending")
         if contact["range"] != "close":
             raise ValueError("Saved crossing request requires close range")
         if captain_id not in crossing["participants"]:
@@ -218,12 +316,16 @@ def validate_contact(contact, encounter_id=None, valid_nodes=None, *,
             raise ValueError("Whole-party crossing does not match the living crew manifest")
         if not (parley and parley["transfer_permission"]):
             raise ValueError("A peaceful crossing requires recorded permission")
+        if contact["trade_pending"] is not None:
+            raise ValueError("A crossing and a sea-trade quote cannot both be pending")
     handoff = contact["combat_pending"]
     if handoff is not None:
         validate_handoff(handoff, valid_nodes=valid_nodes, valid_people=valid_people,
                          living_people=living_people, captain_id=captain_id)
         if encounter_id is not None and handoff["encounter_id"] != encounter_id:
             raise ValueError("Combat handoff belongs to a different encounter")
+        if contact["trade_pending"] is not None or crossing is not None:
+            raise ValueError("A combat handoff cannot overlap another pending contact request")
         if contact["crossing"] is not None:
             raise ValueError("A contact cannot hold both a peaceful crossing and combat handoff")
         if handoff["cause"] != "cannon_fire" and contact["range"] != "close":
@@ -232,7 +334,7 @@ def validate_contact(contact, encounter_id=None, valid_nodes=None, *,
 
 
 def validate_sighting(encounter, valid_nodes=None, *, valid_people=None,
-                      living_people=None, captain_id="captain"):
+                      living_people=None, captain_id="captain", current_tick=None):
     """Validate the sighting fields later actions depend on, plus contact."""
     if not isinstance(encounter, dict):
         raise ValueError("Invalid saved ship sighting")
@@ -246,10 +348,50 @@ def validate_sighting(encounter, valid_nodes=None, *, valid_people=None,
             raise ValueError("Invalid saved ship sighting observation")
     if not 0 <= encounter["condition"] <= 100 or encounter["crew"] < 0:
         raise ValueError("Invalid saved ship sighting observation")
+    instance_id = encounter.get("contact_instance_id")
+    if instance_id is not None:
+        prefix = f"{encounter['id']}:"
+        suffix = instance_id[len(prefix):] if isinstance(instance_id, str) and instance_id.startswith(prefix) else ""
+        if (not suffix.isdigit() or str(int(suffix)) != suffix
+                or not 1 <= int(suffix) <= 1_000_000):
+            raise ValueError("Invalid lookout contact-instance identity")
+    chart_position = encounter.get("chart_position")
+    if chart_position is not None and (
+            not isinstance(chart_position, list) or len(chart_position) != 2
+            or any(type(value) not in (int, float) or not math.isfinite(value)
+                   or not -16 <= value <= 16 for value in chart_position)):
+        raise ValueError("Invalid saved lookout chart position")
+    observation = encounter.get("relative_observation")
+    if observation is not None and (
+            not isinstance(observation, dict)
+            or set(observation) != {"range_units", "bearing_deg", "relative_motion"}
+            or type(observation["range_units"]) not in (int, float)
+            or not math.isfinite(observation["range_units"])
+            or not 0 <= observation["range_units"] <= 32
+            or observation["bearing_deg"] is not None
+            and (type(observation["bearing_deg"]) not in (int, float)
+                 or not math.isfinite(observation["bearing_deg"])
+                 or not 0 <= observation["bearing_deg"] < 360)
+            or observation["relative_motion"] not in
+            ("unknown", "closing", "overtaking", "opening", "crossing", "following", "steady")):
+        raise ValueError("Invalid saved relative lookout observation")
     if "contact" in encounter:
+        contact = encounter["contact"]
+        legacy_contact_fields = {
+            "range", "approach_attempts", "evade_attempts", "signals",
+            "parley", "crossing", "combat_pending"}
+        if isinstance(contact, dict) and set(contact) in (
+                legacy_contact_fields,
+                legacy_contact_fields | {"crossing_completed"},
+                set(new_contact()) - {"trade_offer", "trade_pending", "trade_sequence", "trade_receipts"}):
+            defaults = new_contact()
+            for field, value in defaults.items():
+                contact.setdefault(field, deepcopy(value))
         validate_contact(encounter["contact"], encounter["id"], valid_nodes,
                          valid_people=valid_people, living_people=living_people,
-                         captain_id=captain_id)
+                         captain_id=captain_id,
+                         contact_instance_id=instance_id or encounter["id"],
+                         current_tick=current_tick)
         crossing = encounter["contact"].get("crossing")
         if crossing:
             action = {"kind": "cross_with_manifest", "mode": crossing["mode"],
@@ -391,7 +533,7 @@ def _consent_chance(encounter, contact, topic):
     return _clamp(base, 0.05, 0.90)
 
 
-def parley(encounter, topic):
+def parley(encounter, topic, *, world=None):
     """One consent-based close-range subject; never a lasting agreement."""
     if topic not in PARLEY_TOPICS:
         raise ValueError("Choose a recognised parley subject")
@@ -402,7 +544,8 @@ def parley(encounter, topic):
         raise ValueError("Parley requires close range; approach the vessel first")
     if contact["crossing"] is not None:
         raise ValueError("Withdraw the pending crossing request before opening a parley")
-    if threat_of(encounter) == "pirates":
+    threat = threat_of(encounter)
+    if threat == "pirates" and topic not in ("warn_off", "stand_down"):
         raise ValueError("The pirate vessel refuses parley and answers only with threats")
     parley_state = contact.get("parley")
     topics = parley_state["topics"] if parley_state else []
@@ -415,7 +558,21 @@ def parley(encounter, topic):
                         "transfer_permission": False, "warned_off": False}
         contact["parley"] = parley_state
     agreed = None
-    if topic in ("identity", "intentions"):
+    if threat == "pirates":
+        assessment = pirate_risk_assessment(world, encounter) if world is not None else None
+        chance = assessment["warn_off_chance"] if assessment is not None else 0.0
+        agreed = _contact_unit(encounter, f"pirate_fear:{topic}") < chance
+        if topic == "warn_off":
+            parley_state["warned_off"] = agreed
+            text = (f"{encounter['name']} backs down from your close warning for this encounter."
+                    if agreed else
+                    f"{encounter['name']} refuses the warning and holds its ground.")
+        else:
+            parley_state["stand_down"] = agreed
+            text = (f"{encounter['name']} accepts a mutual stand-down for this encounter only."
+                    if agreed else
+                    f"{encounter['name']} refuses to stand down.")
+    elif topic in ("identity", "intentions"):
         agreed = True
         text = (f"Identity challenge answered: {encounter['name']}, claiming "
                 f"{encounter.get('faction', 'unmarked')} colours."
@@ -472,13 +629,24 @@ def _stable_request_id(encounter, cause, tick, participants, requested_action):
     return blake2b(body.encode(), digest_size=12).hexdigest()
 
 
+def _stable_handoff_id(encounter, cause, tick, participants, requested_action,
+                       lawful_basis_id=None):
+    if lawful_basis_id is None:
+        return _stable_request_id(encounter, cause, tick, participants, requested_action)
+    body = json.dumps([encounter.get("id"), cause, tick, participants,
+                       requested_action, lawful_basis_id],
+                      separators=(",", ":"), sort_keys=True)
+    return blake2b(body.encode(), digest_size=12).hexdigest()
+
+
 def _position_snapshot(world, encounter):
     player_xy = world.voyages.map_coordinate()
     return {"player_chart": [round(float(player_xy[0]), 4), round(float(player_xy[1]), 4)],
             "target_node": encounter.get("node", world.voyages.position)}
 
 
-def build_handoff(world, encounter, cause, tick, participants, requested_action):
+def build_handoff(world, encounter, cause, tick, participants, requested_action,
+                  lawful_basis_id=None):
     if cause not in ("cannon_fire", "forced_boarding"):
         raise ValueError("Unknown combat handoff cause")
     if (not isinstance(participants, list) or not participants
@@ -486,8 +654,12 @@ def build_handoff(world, encounter, cause, tick, participants, requested_action)
             or any(not isinstance(sid, str) or not sid for sid in participants)
             or world.player.id not in participants):
         raise ValueError("Combat handoff requires unique stable participant ids including the captain")
-    request_id = _stable_request_id(encounter, cause, tick, participants, requested_action)
-    return {
+    if lawful_basis_id is not None and (not isinstance(lawful_basis_id, str)
+                                        or not lawful_basis_id):
+        raise ValueError("A lawful combat handoff requires a stable evidence identity")
+    request_id = _stable_handoff_id(encounter, cause, tick, participants,
+                                    requested_action, lawful_basis_id)
+    handoff = {
         "schema_version": 1,
         "request_id": request_id,
         "encounter_id": encounter["id"],
@@ -501,13 +673,17 @@ def build_handoff(world, encounter, cause, tick, participants, requested_action)
         "tick": tick,
         "status": "pending",
     }
+    if lawful_basis_id is not None:
+        handoff["lawful_basis_id"] = lawful_basis_id
+    return handoff
 
 
 def validate_handoff(handoff, valid_nodes=None, *, valid_people=None,
                      living_people=None, captain_id="captain"):
     required = {"schema_version", "request_id", "encounter_id", "cause", "participants",
                 "initiator", "target_id", "position", "range", "requested_action", "tick", "status"}
-    if (not isinstance(handoff, dict) or set(handoff) != required
+    if (not isinstance(handoff, dict) or set(handoff) not in
+            (required, required | {"lawful_basis_id"})
             or type(handoff["schema_version"]) is not int or handoff["schema_version"] != 1
             or not isinstance(handoff["request_id"], str) or not handoff["request_id"]
             or not isinstance(handoff["encounter_id"], str) or not handoff["encounter_id"]
@@ -528,6 +704,9 @@ def validate_handoff(handoff, valid_nodes=None, *, valid_people=None,
             or handoff["range"] not in ("distant", "close")
             or not isinstance(handoff["requested_action"], dict)
             or type(handoff["tick"]) is not int or handoff["tick"] < 0
+            or "lawful_basis_id" in handoff and
+            (not isinstance(handoff["lawful_basis_id"], str)
+             or not handoff["lawful_basis_id"])
             or handoff["status"] != "pending"):
         raise ValueError("Invalid saved combat handoff request")
     if valid_people is not None and any(sid not in valid_people for sid in handoff["participants"]):
@@ -550,8 +729,9 @@ def validate_handoff(handoff, valid_nodes=None, *, valid_people=None,
             raise ValueError("Boarding handoff does not match its declared crossing manifest")
         if handoff["range"] != "close":
             raise ValueError("A boarding handoff requires close range")
-    expected_id = _stable_request_id({"id": handoff["encounter_id"]}, handoff["cause"],
-                                     handoff["tick"], handoff["participants"], action)
+    expected_id = _stable_handoff_id(
+        {"id": handoff["encounter_id"]}, handoff["cause"], handoff["tick"],
+        handoff["participants"], action, handoff.get("lawful_basis_id"))
     if handoff["request_id"] != expected_id:
         raise ValueError("Combat handoff request identity does not match its contents")
     return handoff
@@ -559,9 +739,13 @@ def validate_handoff(handoff, valid_nodes=None, *, valid_people=None,
 
 def request_crossing(world, encounter, tick, mode, participants):
     """Record a peaceful transfer or create one durable boarding handoff."""
-    contact = contact_of(encounter)
+    contact = contact_of(encounter, create=False)
+    if contact is None:
+        contact = new_contact()
     if contact["range"] != "close":
         raise ValueError("A crossing request requires close range")
+    if contact["crossing_completed"]:
+        raise ValueError("This contact has already completed its one permitted crossing")
     if type(tick) is not int or tick < 0:
         raise ValueError("Crossing time must be a non-negative tick count")
     if mode not in MANIFEST_MODES:
@@ -592,28 +776,43 @@ def request_crossing(world, encounter, tick, mode, participants):
         if existing["mode"] == mode and existing["participants"] == list(participants):
             return existing
         raise ValueError("A different peaceful crossing request is already pending")
+    if contact["trade_pending"] is not None:
+        raise ValueError("Commit or cancel the pending sea-trade quote before requesting a crossing")
     parley_state = contact.get("parley")
     if parley_state and parley_state["warned_off"]:
         raise ValueError("The other captain accepted your warn-off; no crossing is available")
     permitted = bool(parley_state and parley_state["transfer_permission"])
     if not permitted:
+        basis = hostile_commitment_basis(world, encounter)
+        if basis is None:
+            raise ValueError(
+                "Hostile boarding is prohibited: no witnessed attack or verified warrant supports this contact.")
         handoff = build_handoff(world, encounter, "forced_boarding", tick,
-                                participants, requested_action)
+                                participants, requested_action, basis["event_id"])
         contact["combat_pending"] = handoff
-        validate_contact(contact)
+        encounter["contact"] = contact
+        validate_contact(contact, encounter.get("id"), contact_instance_id=(
+            encounter.get("contact_instance_id", encounter.get("id"))))
         return handoff
+    if len(participants) > MAX_CROSSING_PARTICIPANTS:
+        raise ValueError(
+            f"This vessel's peaceful transfer deck holds at most {MAX_CROSSING_PARTICIPANTS} people including the captain")
     request_id = _stable_request_id(encounter, "peaceful_transfer", tick,
                                     participants, requested_action)
     request = {"request_id": request_id, "mode": mode,
                "participants": list(participants), "tick": tick, "status": "pending"}
     contact["crossing"] = request
-    validate_contact(contact)
+    encounter["contact"] = contact
+    validate_contact(contact, encounter.get("id"), contact_instance_id=(
+        encounter.get("contact_instance_id", encounter.get("id"))))
     return request
 
 
 def request_cannon(world, encounter, tick, cannon):
     """Create a durable cannon-fire intent without firing or consuming shot."""
-    contact = contact_of(encounter)
+    contact = contact_of(encounter, create=False)
+    if contact is None:
+        contact = new_contact()
     if cannon not in ("port_cannon", "starboard_cannon"):
         raise ValueError("Choose an installed ship cannon")
     if contact["combat_pending"] is not None:
@@ -622,8 +821,12 @@ def request_cannon(world, encounter, tick, cannon):
         if existing["cause"] == "cannon_fire" and existing["requested_action"] == requested:
             return existing
         raise ValueError("A different combat handoff request is already pending")
-    if contact["crossing"] is not None:
+    if contact["crossing"] is not None or contact["trade_pending"] is not None:
         raise ValueError("Withdraw the peaceful crossing request before declaring cannon fire")
+    basis = hostile_commitment_basis(world, encounter)
+    if basis is None:
+        raise ValueError(
+            "Cannon fire is prohibited: no witnessed attack or verified warrant supports this contact.")
     if type(tick) is not int or tick < 0:
         raise ValueError("Cannon request time must be a non-negative tick count")
     if world.ship.ammo.get(cannon, 0) < 1 or not world.ship.layout.available(cannon):
@@ -631,9 +834,12 @@ def request_cannon(world, encounter, tick, cannon):
     participants = [world.player.id] + [sailor.id for sailor in world.ship.crew
                                        if sailor.health > 0 and sailor.labors.get("load", 0) > 0]
     handoff = build_handoff(world, encounter, "cannon_fire", tick, participants,
-                            {"kind": "fire_cannon", "cannon": cannon})
+                            {"kind": "fire_cannon", "cannon": cannon},
+                            basis["event_id"])
     contact["combat_pending"] = handoff
-    validate_contact(contact)
+    encounter["contact"] = contact
+    validate_contact(contact, encounter.get("id"), contact_instance_id=(
+        encounter.get("contact_instance_id", encounter.get("id"))))
     return handoff
 
 

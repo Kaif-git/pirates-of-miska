@@ -16,10 +16,11 @@ TEXT = (225, 219, 202)
 DIM = (160, 151, 143)
 GOLD = (232, 207, 122)
 GREEN = (124, 196, 147)
+AMBER = (235, 193, 105)
 RED = (255, 154, 122)
 PRIMARY_LABELS = ["Light", "Heavy", "Thrust", "Defend", "Dash", "Move", "Run",
-                  "Dash+Light", "Feint", "Shove", "Disarm", "Disengage", "Wait",
-                  "Bandage", "More", "Sheet", "Help"]
+                  "Dash+Light", "Dash+Slash", "Feint", "Shove", "Disarm", "Disengage", "Wait",
+                  "Bandage", "More", "Help"]
 
 
 def upload_layer(display, renderer, image, slot):
@@ -94,7 +95,7 @@ def draw_feedback(display, renderer, model, arena, screens):
             text(min(max(5, px-20), aw-font.getlength(cue)-6), cue_y, cue, color)
             draw.rectangle((px-1, py-1, px+tw, py+th), outline=(*color, 255), width=2)
             remaining = model.player_remaining if actor.is_player else None
-            if action in {"LIGHT", "HEAVY", "DASH_LIGHT"} and remaining is not None:
+            if action in {"LIGHT", "HEAVY", "DASH_LIGHT", "DASH_SLASH"} and remaining is not None:
                 target = actor_positions.get(actor.target_id)
                 if target is None:
                     continue
@@ -117,7 +118,8 @@ def draw_feedback(display, renderer, model, arena, screens):
     lanes = {}
     priority = lambda popup: (100 if popup.text.startswith(("DEATH", "FALLEN", "SEVERED")) else
                               80 if "DEEP" in popup.text or "impact" in popup.text.lower() else
-                              70 if popup.text in {"Flinched", "Recoil!", "Bleeding wound"} else
+                              75 if popup.text in {"Back 1 tile", "Reflex blocked", "Reflex recovery",
+                                                    "No reflex", "Bleeding wound"} else
                               50 if popup.text.startswith("Stability") else 10)
     selected_popups = []
     per_actor = {}
@@ -176,14 +178,16 @@ def context_labels(rows, model=None):
                 *( ["Prev Targets"] if any("[Prev Targets]" in row for row in rows) else []),
                 *( ["Next Targets"] if any("[Next Targets]" in row for row in rows) else []), "Back"]
     if any("[Tactics]" in row for row in rows):
-        return ["Tactics", "Run", "Dash+Light", "Bandage", "Eat", "Drink",
-                "Pickup", "Notebook", "Log", "Guide", "Strategy", "Timeline", "Back"]
+        return ["Tactics", "Run", "Dash+Light", "Dash+Slash", "Bandage", "Eat", "Drink",
+                "Pickup", "Notebook", "Log", "Guide", "Strategy", "Timeline", "Sheet", "Back"]
     if any(row.startswith("TACTICAL ACTIONS") for row in rows):
         return ["Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline", "Back"]
     if any(row.strip() == "[Tactics][Run][Dash+Light]" for row in rows):
-        return ["Run", "Dash+Light", "Bandage", "Eat", "Drink", "Pickup", "Notebook", "Log", "Guide", "Strategy", "Timeline", "Back"]
+        return ["Run", "Dash+Light", "Dash+Slash", "Bandage", "Eat", "Drink", "Pickup", "Notebook", "Log", "Guide", "Strategy", "Timeline", "Sheet", "Back"]
     if any("DISENGAGE — CHOOSE DIRECTION" in row for row in rows):
         return ["1 tile", "Back", "NW", "N", "NE", "W", "E", "SW", "S", "SE"]
+    if any("DASH SLASH — CHOOSE DIRECTION" in row.upper() for row in rows):
+        return ["Back", "NW", "N", "NE", "W", "E", "SW", "S", "SE"]
     if any("CHOOSE DIRECTION" in row for row in rows):
         return ["1 tile", "2 tiles", "3 tiles", "Back", "NW", "N", "NE", "W", "E", "SW", "S", "SE"]
     if any("[Back]" in row for row in rows):
@@ -213,7 +217,29 @@ def dashboard_geometry(width, height, count, *, detailed=False):
                 arena=(arena_left, arena_top, arena_width, max(60, arena_bottom-arena_top)),
                 info=(margin, arena_bottom+gap, width-2*margin, info_height),
                 controls=(margin, controls_top, width-2*margin, controls_height),
-                columns=controls_columns)
+                 columns=controls_columns)
+
+
+def compact_injury_row(row, columns):
+    """Prioritize injured site, severity/tissue and continuing blood loss."""
+    location, _, detail = row.partition(": ")
+    site = location.split(" — ", 1)[-1]
+    severity, _, rest = detail.partition(", ")
+    tissue = rest.split(";", 1)[0].split()
+    tissue_label = "-".join(tissue[:2]) if len(tissue) > 1 else " ".join(tissue)
+    bleed = next((part for part in row.split("; ") if part.startswith("continuing bleed")), "")
+    amount = bleed.removeprefix("continuing bleed ").split("/turn", 1)[0]
+    label = f"{site} {severity} {tissue_label}"
+    if amount:
+        full_label = f"{label}; bleed {amount}/t"
+        if len(full_label) <= columns:
+            return full_label
+        # The amount is the critical live status; retain site/severity and rate
+        # when the tissue/contact detail will not fit in the card.
+        label = f"{site} {severity}; bleed {amount}/t"
+        if len(label) <= columns:
+            return label
+    return textwrap.shorten(label, width=max(18, columns), placeholder="…")
 
 
 def draw_dashboard(display, renderer, model, rows, *, present=True):
@@ -342,19 +368,63 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
     else:
         threat_rows = []
         enemy_card_name = model.enemy_name
+        if not layout["wide"]:
+            # Narrow cards prioritize blood plus tactical read over exact stamina/fatigue meters.
+            enemy_resources = enemy_resources[:1]
+        if model.enemy_visible:
+            condition = model.enemy_condition.removeprefix("Visible condition: ").rstrip(".")
+            if condition == "No obvious visible injury or posture impairment":
+                condition = "No visible impairment"
+            card_width = max(18, int((cw-20)/small.getlength("M")))
+            condition = textwrap.shorten(condition, width=card_width, placeholder="…")
+            action_name = ("Ready" if model.enemy_action == "IDLE" else
+                           model.enemy_action.replace("_", " ").title())
+            threat_rows = [textwrap.shorten(f"Now: {action_name}", width=card_width, placeholder="…"),
+                           textwrap.shorten(f"Next: {model.enemy_response_summary}",
+                                            width=card_width, placeholder="…"),
+                           textwrap.shorten(f"Condition: {condition}", width=card_width, placeholder="…")]
+            if model.enemy_injury_rows:
+                wound = next((row for row in model.enemy_injury_rows
+                              if not row.startswith(("Weapon:", "Permanent injury:"))), None)
+                if wound:
+                    injury = compact_injury_row(wound, card_width)
+                    threat_rows = [injury, *threat_rows[1:]]
+        else:
+            threat_rows = ["No current visual contact."]
+    player_detail_rows = []
+    if width > 960:
+        visible_injuries = [row for row in model.player_injury_rows
+                            if not row.startswith(("Weapon:", "Permanent injury:"))]
+        if visible_injuries:
+            player_detail_rows.append(compact_injury_row(
+                visible_injuries[0], int((cw-20)/small.getlength("M"))))
+        else:
+            player_detail_rows.append("No current wounds")
+        player_detail_rows.extend(model.functional_alerts[:1])
+        player_detail_rows.extend(model.player_emotion_rows[:1])
+        player_detail_rows.extend(model.player_status_rows[:1])
+    else:
+        active_wounds = [row for row in model.player_injury_rows
+                         if not row.startswith(("Weapon:", "Permanent injury:"))]
+        if active_wounds:
+            player_detail_rows = [compact_injury_row(
+                active_wounds[0], int((cw-20)/small.getlength("M")))]
+        else:
+            player_detail_rows.append("No current wounds")
+    own_resources = [("Blood", *pools["BLD"], (153, 40, 46)),
+                     ("Stamina", *pools["STA"], (57, 115, 77))]
+    if width > 960:
+        own_resources.append(("Fatigue", *pools["FAT"], (137, 101, 36)))
+    own_resources.append((f"Stability (bal {model.player_balance:.0f})",
+                          model.player_stability, 100, (174, 135, 61)))
     for x, name, level, mood, resources, wounds, color in (
             (12, "YOU", model.player_level, model.player_state,
-              [("Blood", *pools["BLD"], (153, 40, 46)), ("Stamina", *pools["STA"], (57, 115, 77)),
-               ("Fatigue", *pools["FAT"], (137, 101, 36)),
-               (f"Stability (bal {model.player_balance:.0f})", model.player_stability, 100, (174, 135, 61))],
-             [*model.player_emotion_rows[:1], *model.functional_alerts[:1], *model.player_status_rows[:1],
-                *(model.player_injury_rows or ("No bleeding wounds",))], GREEN),
+              own_resources,
+              player_detail_rows, GREEN),
              (enemy_x, enemy_card_name, model.enemy_level, model.enemy_mood,
                enemy_resources,
-                  (threat_rows if model.group_combat else
-                   [*model.enemy_tell[:1], *model.enemy_status_rows[:1], *(model.enemy_injury_rows or
-                   ["Next action unknown" if model.enemy_action == "IDLE" else model.enemy_action.replace("_", " ")])]
-                   if model.enemy_visible else ["No current visual contact."]), RED)):
+                   (threat_rows if model.group_combat else
+                    threat_rows if model.enemy_visible else ["No current visual contact."]), RED)):
         panel((x, 76, cw, ch), color)
         text(x+10, 84, f"{name[:16]}" if model.group_combat and x == enemy_x
              else f"{name[:16]}  Lv{level}", color)
@@ -418,19 +488,29 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
         else:
             content = [row for row in rows if not row.startswith("PgUp/PgDn")]
         if labels[0] in {"Head", "Eye"}:
+            lane_text = ("Blade lines: Head/Eye high; Torso/Arm/Hand mid; Leg low. "
+                         "Intersecting same-line attacks clash within 1 tick; a 2+ tick lead may land first."
+                         if model.zone_attack_kind else "")
             content = [rows[0],
                        *(rows[1:2] if rows[0].startswith("DASH + LIGHT") else []),
-                       f"Accuracy varies ±{dict(model.combat_rules).get('jitter', 0):g}; amber targets may drift. Final choice commits." if round_mode else "Choose a target to preview.",
-                       *(f"{z.zone.value.title()}: Accuracy {z.accuracy:.1f} / {z.difficulty:g} needed. "
-                         + dict(model.target_effects).get(z.zone.value, '') for z in model.zones),
+                         *([lane_text] if lane_text else []),
+                         "Aim dispersion may drift or miss; forecasts assume clean contact, not a guarantee. No hidden choice or future RNG is used." if round_mode else "Choose a target to preview.",
+                         *(f"{z.zone.value.title()}: aim difficulty {z.difficulty:g}; Accuracy {z.accuracy:.1f} influences clean contact. "
+                          + dict(model.target_effects).get(z.zone.value, '')
+                          + (f" {z.forecast}" if z.forecast else "") for z in model.zones),
                        "Hand needs exposure at the strike. Guard can block head/torso/arm; no outcome is guaranteed."]
     else:
         result = getattr(display, "round_summary", ())
         message = getattr(display, "message", "Choose an action below.")
         if result:
-            content = ["LATEST EXCHANGE", *result]
+            if len(result) >= 4:
+                content = ["LATEST EXCHANGE", *result[:2], f"Why: {result[3]}", *result[2:3]]
+            else:
+                content = ["LATEST EXCHANGE", *result]
         else:
-            content = ["READY", message, *(model.log or ("No strikes exchanged yet.",))]
+            content = ["READY", message,
+                       "+ favorable · ? conditional · ! exposed · x unavailable",
+                       *(model.log or ("No strikes exchanged yet.",))]
         if ended and not result:
             content = [model.player_state, model.instructions, *(result or model.log)]
         if getattr(display, 'coach_enabled', False) and coach_hint and not result:
@@ -455,7 +535,7 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
     columns = layout["columns"]
     bw = (cwidth-20-(columns-1)*6)//columns
     options = {a.label: a for a in model.actions}
-    keys = {"Light": "Space", "Heavy": "F", "Guard": "G", "Dash": "D", "Move": "M", "Wait": ".", "Tactics": "T", "More": "C", "Help": "H",
+    keys = {"Light": "Space", "Heavy": "F", "Guard": "G", "Dash": "D", "Move": "M", "Wait": ".", "Tactics": "T", "More": "C", "Help": "H", "Dash+Light": "J",
             "Rise": "U", "Crawl": "C", "Cover": "G",
             "Head": "H", "Torso": "T", "Arm": "A", "Hand": "X", "Leg": "L", "Back": "Esc"}
     for index, label in enumerate(labels):
@@ -464,14 +544,26 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
         enabled = label == "Skip" if display.animating else option is None or option.enabled
         selected = display.hover_action == label or label == getattr(display, "selected_distance", "")
         target = next((z for z in model.zones if z.zone.value == label.upper()), None)
-        aim_risk = target and (target.accuracy-dict(model.combat_rules).get('jitter', 0) < target.difficulty or not target.exposed)
+        aim_risk = target and not target.exposed
+        assessment = option.assessment if option is not None else "conditional"
+        assessment_mark = {"favorable": "+", "conditional": "?", "exposed": "!",
+                           "unavailable": "x"}.get(assessment, "?")
         draw.rounded_rectangle((bx, by, bx+bw-1, by+41), radius=5,
                                fill=(40, 34, 42, 255) if selected else (29, 26, 35, 255),
-                               outline=(*GOLD, 255) if selected or aim_risk or coach_hint and coach_hint.action == label else (*LINE, 255))
+                               outline=({"favorable": (*GREEN, 255), "conditional": (*AMBER, 255),
+                                         "exposed": (*RED, 255), "unavailable": (*LINE, 255)}.get(
+                                             assessment, (*LINE, 255))
+                                         if option is not None else (*LINE, 255))
+                               if not (selected or aim_risk or coach_hint and coach_hint.action == label)
+                               else (*GOLD, 255))
         key = keys.get(label)
         caption = f"{label} [{key}]" if key else label
-        text(bx+6, by+3, caption + (' ?' if aim_risk else ''), GOLD if aim_risk else GREEN if enabled else DIM, small)
-        hint = "choose target" if label in {"Light", "Heavy", "Thrust"} else "choose direction" if label in {"Move", "Run", "Dash", "Dash+Light", "Crawl", "Disengage"} else "resolve exchange" if label in {"Guard", "Cover", "Wait", "Rise", "Bandage", "Eat", "Drink", "Pickup", "Feint", "Shove", "Disarm", "Adrenaline"} else "open" if label in {"More", "Tactics", "Sheet", "Help", "Log", "Notebook", "Strategy"} else "select"
+        marker = f" {assessment_mark}" if option is not None else ""
+        state_color = {"favorable": GREEN, "conditional": AMBER, "exposed": RED,
+                       "unavailable": DIM}.get(assessment, GREEN) if enabled else DIM
+        text(bx+6, by+3, caption + marker + (' ·?' if aim_risk else ''),
+             GOLD if aim_risk else state_color, small)
+        hint = "choose target" if label in {"Light", "Heavy", "Thrust", "Dash+Light"} else "choose direction" if label in {"Move", "Run", "Dash", "Crawl", "Disengage"} else "resolve exchange" if label in {"Guard", "Cover", "Wait", "Rise", "Bandage", "Eat", "Drink", "Pickup", "Feint", "Shove", "Disarm", "Adrenaline"} else "open" if label in {"More", "Tactics", "Sheet", "Help", "Log", "Notebook", "Strategy"} else "select"
         if label in {"NW", "N", "NE", "W", "E", "SW", "S", "SE"}:
             hint = "move here"
         if label == "Skip":
@@ -479,13 +571,15 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
         elif option is not None and not option.enabled:
             hint = "locked · hover for reason"
         if option:
-            cost = re.search(r"Costs ([\d.]+) stamina", option.details)
-            if cost:
-                hint = f"{cost.group(1)} stamina"
+            if option.stamina is not None and option.time_ticks is not None:
+                stamina_label = f"{option.stamina:.1f}".rstrip("0").rstrip(".")
+                hint = f"{stamina_label} STA · {option.time_ticks}t"
+            elif option.stamina is not None:
+                hint = f"{option.stamina:g} STA"
         if display.animating and label != "Skip":
             hint = "locked"
         if label in {'Head', 'Torso', 'Arm', 'Hand', 'Leg'}:
-            hint = {'Head': 'hurt accuracy', 'Torso': 'bleed', 'Arm': 'weaken force', 'Hand': 'weaken grip', 'Leg': 'slow movement'}[label]
+            hint = {'Head': 'concussion risk', 'Torso': 'bleed', 'Arm': 'weaken force', 'Hand': 'weaken grip', 'Leg': 'slow movement'}[label]
         text(bx+6, by+22, hint, DIM, small)
         # Keep unavailable controls hoverable so their legality reason can be
         # read. DuelUI rejects clicks on disabled ActionOptions without advancing time.

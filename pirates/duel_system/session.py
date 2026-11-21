@@ -310,13 +310,13 @@ class DuelSession:
         events = self.state.event_log[self._exchange_cursor:]
         if len(self.state.fighters) <= 2:
             ticks = {event.tick for event in events
-                     if event.type in {EventType.HIT, EventType.BLOCK, EventType.PARRY}}
+                     if event.type in {EventType.HIT, EventType.CLASH, EventType.BLOCK, EventType.PARRY}}
             for _ in ticks:
                 self.notebook.record_exchange(self.enemy.id)
         else:
             contacts = {}
             for event in events:
-                if (event.type not in {EventType.HIT, EventType.BLOCK, EventType.PARRY}
+                if (event.type not in {EventType.HIT, EventType.CLASH, EventType.BLOCK, EventType.PARRY}
                         or self.player.id not in event.witnesses):
                     continue
                 observed_id = event.target if event.actor == self.player.id else event.actor
@@ -389,8 +389,11 @@ class DuelSession:
         if carry and (not self.state.end_reason or self.player.blood <= self.state.config["blood"]["collapse"]
                       or self.player.unconscious or self.player.decapitated):
             raise ValueError("Finish this fight conscious before starting the next duel")
+        archetype = None if carry else (
+            self.enemy.personality.archetype if self.enemy.personality else None)
         replacement = self.new(config=self.state.config, seed=self.state.rng_seed + int(carry),
-                               guide_mode=self.guide_mode, notebook=self.notebook)
+                               guide_mode=self.guide_mode, notebook=self.notebook,
+                               archetype=archetype)
         replacement.player.level, replacement.player.xp = self.player.level, self.player.xp
         if not carry:
             from .stats import max_stamina
@@ -422,7 +425,7 @@ class DuelSession:
                 resolve_adrenaline_expiry(replacement.state)
         return replacement
 
-    def render_model(self, *, timeline=True, include_advice=True):
+    def render_model(self, *, timeline=True, include_advice=True, zone_kind=None):
         from .render_model import build_render_model
         advice = None
         if include_advice and self.guide_mode != "off" and self.ready and len(self.state.fighters) <= 2:
@@ -434,7 +437,8 @@ class DuelSession:
             else:
                 advice = self._guide_cache[1]
         return build_render_model(self.state, self.notebook.public_view(), self.selected, advice,
-                                   timeline=timeline, guide_mode=self.guide_mode)
+                                   timeline=timeline, guide_mode=self.guide_mode,
+                                   zone_kind=zone_kind)
 
     def to_data(self):
         return _plain({"version": self.state.config["schema_version"], "state": self.state.to_data(),
@@ -449,7 +453,7 @@ class DuelSession:
     def from_data(cls, data):
         data = deepcopy(data)
         current_version = load_config()["schema_version"]
-        if data.get("version") in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+        if data.get("version") in set(range(1, 27)):
             data["version"] = current_version
             data["notebook"]["version"] = current_version
         elif data.get("version") != current_version:

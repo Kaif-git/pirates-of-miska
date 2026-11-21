@@ -27,15 +27,199 @@ def test_read_only_model_and_formatter_are_40_columns_with_persistent_state():
         model.player_state = "anything"
 
 
+def test_action_options_label_conditional_and_unavailable_states_instead_of_all_green():
+    session = DuelSession.new(guide_mode="off")
+    model = session.render_model()
+    options = {option.label: option for option in model.actions}
+
+    assert options["Light"].enabled
+    assert options["Light"].assessment == "conditional"
+    assert "CONDITIONAL" in options["Light"].details
+    assert not options["Shove"].enabled
+    assert options["Shove"].assessment == "unavailable"
+    assert "close contact" in options["Shove"].details
+    assert not options["Adrenaline"].enabled
+    assert options["Adrenaline"].assessment == "unavailable"
+    assert len({option.assessment for option in options.values()}) > 1
+
+
+def test_action_assessment_uses_observed_control_window_and_incoming_threat_timing():
+    session = DuelSession.new(guide_mode="off")
+    player, enemy = session.player, session.enemy
+    player.pos, enemy.pos = (4, 3), (5, 3)
+    enemy.stagger_until = session.state.tick + 6
+    options = {option.label: option for option in session.render_model().actions}
+    assert options["Light"].assessment == "favorable"
+    assert "fits before recovery" in options["Light"].details
+    assert options["Heavy"].assessment == "conditional"
+    assert "opening may expire first" in options["Heavy"].details
+
+    enemy.stagger_until = session.state.tick
+    commit_action(session.state, enemy.id, Choice(ActionKind.HEAVY, Zone.TORSO,
+                                                   target_id=player.id))
+    options = {option.label: option for option in session.render_model().actions}
+    assert options["Wait"].assessment == "exposed"
+    assert "Visible attack can reach you" in options["Wait"].details
+
+
+def test_action_buttons_pair_cost_with_effect_time_and_enemy_response_deadline():
+    session = DuelSession.new(guide_mode="off")
+    session.enemy.pos = (session.player.pos[0] + 1, session.player.pos[1])
+    before = session.state.to_data()
+    model = session.render_model()
+    options = {option.label: option for option in model.actions}
+
+    assert options["Light"].stamina > 0
+    assert options["Light"].time_ticks == 3
+    assert options["Move"].stamina > 0
+    assert options["Move"].time_ticks > 0
+    assert options["Defend"].stamina == pytest.approx(
+        session.state.config["guard"]["defend_setup_cost"]
+        * (1 + session.state.config["gear"]["stamina_per_weight"]
+           * session.player.equipment.total_weight))
+    assert "Can choose now" in model.enemy_opportunity
+    assert "step 3t (dash)" in model.enemy_opportunity
+    assert "Light strike 4t" in model.enemy_opportunity
+    assert "Opponent timing:" in options["Light"].details
+    assert session.state.to_data() == before
+
+
+def test_defend_button_reports_the_selected_response_cost_and_deadline():
+    session = DuelSession.new(guide_mode="off")
+    session.player.pos, session.enemy.pos = (4, 3), (5, 3)
+    commit_action(session.state, session.enemy.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO,
+                         target_id=session.player.id))
+    model = session.render_model()
+    defend = next(option for option in model.actions if option.label == "Defend")
+
+    assert "Defend → walk " in defend.details or "Defend → run " in defend.details \
+        or "Defend → dash " in defend.details
+    movement_kind = defend.details.split("Defend → ", 1)[1].split(" ", 1)[0].upper()
+    expected_cost = (session.state.config["actions"][movement_kind]["stamina"]
+                     * (1 + session.state.config["gear"]["stamina_per_weight"]
+                        * session.player.equipment.total_weight))
+    assert defend.stamina == pytest.approx(expected_cost)
+    assert defend.time_ticks == int(
+        defend.details.split("Leaves every visible attack line at t", 1)[1].split(",", 1)[0])
+    assert defend.assessment == "favorable"
+    assert "least stamina cost" in defend.details
+
+
+def test_every_selectable_combat_and_recovery_action_has_cost_and_time_preview():
+    session = DuelSession.new(guide_mode="off")
+    options = {option.label: option for option in session.render_model().actions}
+    actions = {"Light", "Heavy", "Thrust", "Defend", "Dash", "Move", "Run",
+               "Dash+Light", "Feint", "Shove", "Disarm", "Disengage", "Wait",
+               "Bandage", "Eat", "Drink", "Pickup"}
+
+    assert actions <= set(options)
+    for label in actions:
+        option = options[label]
+        if option.enabled:
+            assert option.stamina is not None, label
+            assert option.time_ticks is not None, label
+            assert "Opponent timing:" in option.details, label
+        else:
+            assert option.assessment == "unavailable", label
+            assert option.details, label
+
+
+def test_opponent_earliest_response_slows_with_current_effective_condition():
+    from pirates.duel_system.render_model import _opponent_read
+
+    session = DuelSession.new(guide_mode="off")
+    enemy = session.enemy
+    _, fresh, _ = _opponent_read(session.state, enemy, visible=True, group_combat=False)
+    enemy.fatigue = 95
+    enemy.pain = 75
+    enemy.blood = 45
+    _, impaired, _ = _opponent_read(session.state, enemy, visible=True, group_combat=False)
+
+    def step_ticks(text):
+        return int(text.split("step ", 1)[1].split("t", 1)[0])
+
+    assert step_ticks(impaired) > step_ticks(fresh)
+    assert "condition-adjusted effective Speed" in impaired
+
+
+def test_known_stagger_response_countdown_is_not_described_as_ready_now():
+    session = DuelSession.new(guide_mode="off")
+    session.enemy.stagger_until = session.state.tick + 5
+    model = session.render_model()
+    assert "Cannot voluntarily act for 5 more ticks" in model.enemy_opportunity
+    assert "then step " in model.enemy_opportunity
+    assert "next action unknown" not in model.enemy_opportunity.lower()
+
+
+def test_held_guard_response_deadline_never_points_into_the_past():
+    from pirates.duel_system.render_model import _opponent_read
+
+    session = DuelSession.new(guide_mode="off")
+    enemy = session.enemy
+    guard = commit_action(session.state, enemy.id, Choice(ActionKind.GUARD))
+    session.state.tick = guard.guard_ready_tick + guard.parry_window + 2
+    _, opportunity, _ = _opponent_read(
+        session.state, enemy, visible=True, group_combat=False)
+
+    assert "earliest next choice no sooner than t" in opportunity
+    deadline = int(opportunity.split("no sooner than t", 1)[1].split(",", 1)[0])
+    assert deadline >= session.state.tick
+
+
+def test_held_guard_deadline_includes_witnessed_heavy_window_extension():
+    from pirates.duel_system.render_model import _opponent_read, _opponent_response_summary
+
+    session = DuelSession.new(guide_mode="off")
+    session.player.pos, session.enemy.pos = (4, 3), (5, 3)
+    commit_action(session.state, session.enemy.id, Choice(ActionKind.GUARD))
+    commit_action(session.state, session.player.id,
+                  Choice(ActionKind.HEAVY, Zone.TORSO, target_id=session.enemy.id))
+    _, opportunity, _ = _opponent_read(
+        session.state, session.enemy, visible=True, group_combat=False)
+    summary = _opponent_response_summary(
+        session.state, session.enemy, visible=True, group_combat=False)
+
+    detailed_tick = int(opportunity.split("no sooner than t", 1)[1].split(",", 1)[0])
+    relative_tick = int(summary.split("+", 1)[1].split("t", 1)[0])
+    assert detailed_tick == session.state.tick + relative_tick
+
+
+def test_parry_riposte_is_actionable_and_consumed_by_followup_copy():
+    session = DuelSession.new(guide_mode="off")
+    session.player.pos, session.enemy.pos = (4, 3), (5, 3)
+    session.player.riposte = True
+    session.enemy.stagger_until = session.state.tick + 5
+    options = {option.label: option for option in session.render_model().actions}
+
+    assert "Parry riposte: this attack's windup is shortened" in options["Light"].details
+    assert "commits the riposte" in options["Disarm"].details
+    assert "Observed parry opening until t5" in options["Disarm"].details
+
+
+def test_unsteady_opponent_condition_and_shove_advantage_are_explained():
+    session = DuelSession.new(guide_mode="off")
+    session.player.pos, session.enemy.pos = (4, 3), (5, 3)
+    session.enemy.stability = 60
+    model = session.render_model()
+    shove = next(option for option in model.actions if option.label == "Shove")
+
+    assert "unsteady stance" in model.enemy_condition
+    assert shove.enabled and shove.assessment == "conditional"
+    assert "contact costs stability" in shove.details.lower()
+    assert "off-balance interrupts a winding heavy" in shove.details.lower()
+    assert "observed unsteady stance favors your contest" in shove.details.lower()
+
+
 def test_player_bleed_readout_reports_capped_ten_tick_rate_and_treatment_by_wound():
     session = DuelSession.new(guide_mode="off")
     session.player.wounds = [Wound(Zone.TORSO, Severity.DEEP, 19),
                              Wound(Zone.ARM, Severity.CUT, 4, bandaged=True)]
     model = session.render_model()
     assert any("Bleeding 20 blood per turn (10 ticks)" in alert for alert in model.functional_alerts)
-    assert any("torso" in line.lower() and "bleed 19/turn (untreated)" in line
+    assert any("torso" in line.lower() and "continuing bleed 19/turn (untreated)" in line
                for line in model.player_injury_rows)
-    assert any("arm" in line.lower() and "bleed 1.6/turn (partially bandaged)" in line
+    assert any("arm" in line.lower() and "continuing bleed 1.6/turn (partially bandaged)" in line
                for line in model.player_injury_rows)
 
 
@@ -58,6 +242,48 @@ def test_grounded_readout_restricts_controls_and_explains_stability_and_rise():
     assert "Exposed" in rise.details and "interrupt" in rise.details
     assert context_labels(rows, model) == ["Rise", "Crawl", "Cover", "Sheet", "Help"]
     assert session.state.to_data() == before
+
+
+def test_attack_action_explains_committed_aim_lane_and_clash_window():
+    model = DuelSession.new(guide_mode="off").render_model()
+    light = next(option for option in model.actions if option.label == "Light")
+    assert "aim commits to the mid blade line" in light.details.lower()
+    assert "intersecting weapon path" in light.details.lower()
+    assert "within 1 tick" in light.details.lower()
+
+
+def test_zone_forecast_is_conditional_numeric_and_render_pure():
+    session = DuelSession.new(guide_mode="off")
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    before = session.state.to_data()
+
+    model = session.render_model(zone_kind=ActionKind.LIGHT)
+
+    forecast_options = [option for option in model.zones if option.forecast]
+    forecasts = [option.forecast for option in forecast_options]
+    assert len(forecasts) >= 5
+    assert all("If line/reach holds and contact is clean" in forecast for forecast in forecasts)
+    assert all("wound force" in forecast and "zone-protection points" in forecast
+               for forecast in forecasts)
+    assert all("clean " in forecast and "Defense/next choice unknown" in forecast
+               for forecast in forecasts)
+    assert any("Strength ×" in forecast or "Speed ×" in forecast or "bleed" in forecast
+               for forecast in forecasts)
+    eye = next(option.forecast for option in forecast_options if option.zone == Zone.EYE)
+    assert "Eye-trauma track" in eye and "/24 points" in eye
+    assert "permanently impair" in eye
+    assert session.state.to_data() == before
+
+
+def test_observed_guard_forecast_shows_a_conditional_zero_body_injury_branch():
+    session = DuelSession.new(guide_mode="off")
+    session.enemy.pos = (session.player.pos[0]+1, session.player.pos[1])
+    commit_action(session.state, session.enemy.id, Choice(ActionKind.GUARD))
+
+    model = session.render_model(zone_kind=ActionKind.LIGHT)
+
+    assert all("Observed Guard succeeds: 0 impact, no wound" in option.forecast
+               for option in model.zones if option.forecast)
 
 
 def test_stability_meter_help_uses_stable_stat_key_and_tactical_actions_are_reachable():
@@ -92,7 +318,7 @@ def test_stability_meter_help_uses_stable_stat_key_and_tactical_actions_are_reac
     assert {"Feint", "Shove", "Disengage", "Thrust", "Disarm", "Adrenaline"} <= options
 
 
-def test_accuracy_help_and_wound_rows_do_not_claim_condition_reduces_accuracy():
+def test_accuracy_help_explains_fear_and_anger_debuffs_without_claiming_raw_skill_changes():
     from pirates.duel_stat_help import stat_rows
     from pirates.duel_system.model import Status
 
@@ -105,11 +331,12 @@ def test_accuracy_help_and_wound_rows_do_not_claim_condition_reduces_accuracy():
     player.permanent_injuries.eyes_damaged = 2
     player.statuses.append(Status("concussed", until_tick=20, accuracy_mult=0.1))
     model = session.render_model()
-    assert dict(model.player_sheet)["Accuracy"] == f"{authored:.1f} (base {authored:g})"
+    assert dict(model.player_sheet)["Accuracy"] == f"{authored * (1 - session.state.config['anger']['acc_penalty'] * .9):.1f} (base {authored:g})"
     text = " ".join(stat_rows(model, "Accuracy")).lower()
-    assert "permanent authored skill" in text
-    assert "do not modify your accuracy" in text
-    assert "accuracy reduced" not in " ".join(model.player_injury_rows).lower()
+    assert "authored skill stays fixed" in text
+    assert "fear and anger" in text
+    assert "authored accuracy is permanent" in text
+    assert "fear lowers speed/accuracy" in " ".join(model.player_emotion_rows).lower()
 
 
 def test_fall_cause_and_fallen_state_are_visible_without_mutating_during_render():

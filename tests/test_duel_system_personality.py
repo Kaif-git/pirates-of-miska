@@ -6,7 +6,7 @@ import pytest
 from pirates.duel_system.ai import (
     adaptation_penalty, choose_action, decision_control, record_ai_decision, score_actions,
 )
-from pirates.duel_system.config import load_config, validate_config
+from pirates.duel_system.config import load_config, upgrade_config, validate_config
 from pirates.duel_system.engine import Choice, commit_action, legality
 from pirates.duel_system.model import ActionKind, EventType, Personality, Zone
 from pirates.duel_system.session import DuelSession
@@ -40,6 +40,54 @@ def test_personality_traits_are_bounded_and_profiles_are_authored_and_selectable
     invalid_config["ai_profiles"]["brute"]["traits"]["discipline"] = 1.1
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         validate_config(invalid_config)
+    invalid_susceptibility = load_config()
+    invalid_susceptibility["ai_profiles"]["brute"]["fear_gain_susceptibility"] = 1.51
+    with pytest.raises(ValueError, match="fear_gain_susceptibility"):
+        validate_config(invalid_susceptibility)
+
+
+def test_schema25_config_and_fighter_migration_maps_confidence_to_fear_susceptibility():
+    old_config = load_config()
+    old_config["schema_version"] = 25
+    old_config["ai_profiles"]["recruit"]["traits"]["confidence"] = 0.1
+    old_config["ai_profiles"]["recruit"].pop("fear_gain_susceptibility")
+    old_config["ronin"].pop("fear_gain_susceptibility")
+    for profile in old_config["ai_profiles"].values():
+        profile.pop("fear_gain_susceptibility", None)
+    old_config["ai_profiles"]["brute"]["score_bias"]["LIGHT"] = 77
+
+    migrated = upgrade_config(old_config)
+    assert migrated["schema_version"] == 27
+    assert migrated["ai_profiles"]["recruit"]["fear_gain_susceptibility"] == 1.2
+    assert migrated["ai_profiles"]["brute"]["fear_gain_susceptibility"] == 0.9
+    assert migrated["ai_profiles"]["brute"]["score_bias"]["LIGHT"] == 77
+    assert migrated["ronin"]["fear_gain_susceptibility"] == 0.9
+
+    session = DuelSession.new(archetype="recruit", guide_mode="off")
+    data = session.to_data()
+    data["version"] = data["state"]["schema_version"] = 25
+    data["state"]["config"] = deepcopy(old_config)
+    data["notebook"]["version"] = 25
+    data["state"]["fighters"] = [row for row in data["state"]["fighters"]]
+    for fighter in data["state"]["fighters"]:
+        if fighter["personality"]:
+            fighter["personality"].pop("fear_gain_susceptibility", None)
+    restored = DuelSession.from_data(data)
+    assert restored.state.config["schema_version"] == 27
+    assert restored.enemy.personality.fear_gain_susceptibility == 1.15
+
+
+def test_schema_23_adds_dash_slash_without_rewriting_dash_light():
+    prior = load_config()
+    prior["schema_version"] = 23
+    dash_light = deepcopy(prior["actions"]["DASH_LIGHT"])
+    prior["actions"].pop("DASH_SLASH")
+
+    migrated = upgrade_config(prior)
+
+    assert migrated["schema_version"] == 27
+    assert migrated["actions"]["DASH_LIGHT"] == dash_light
+    assert migrated["actions"]["DASH_SLASH"]["max_tiles"] == 1
 
 
 def test_traits_condition_scores_and_derived_composure_tracks_fear_pain_and_nerves():
@@ -112,8 +160,67 @@ def test_paired_opening_distributions_are_legal_repeatable_and_profile_distinct(
     assert calm["veteran"].count("WALK_IN") >= 36
     assert calm["counterfighter"].count("GUARD") >= 30
     assert len(set(calm["recruit"])) >= 2
-    assert calm["brute"].count("DASH_LIGHT") >= 36
+    assert calm["brute"].count("WALK_IN") >= 36
     assert calm["aggressor"].count("DASH_LIGHT") >= 36
+    assert calm["bully"].count("WALK_IN") >= 36
+
+
+def test_retry_keeps_the_selected_npc_profile():
+    session = DuelSession.new(seed=8, archetype="counterfighter", guide_mode="off")
+    retry = session.restart()
+    assert retry.enemy.personality.archetype == "counterfighter"
+
+
+def test_schema19_config_migrates_shove_timing_tuning_and_measured_profile_biases():
+    old = load_config()
+    old["schema_version"] = 19
+    old["tactics"].pop("shove_committed_heavy_bonus")
+    old["ai_profiles"]["brute"]["score_bias"]["DASH_LIGHT"] = 0
+    old["ai_profiles"]["bully"]["score_bias"]["DASH_LIGHT"] = 2
+    migrated = upgrade_config(old)
+    assert migrated["schema_version"] == 27
+    assert migrated["tactics"]["shove_committed_heavy_bonus"] == 5
+    assert migrated["ai_profiles"]["brute"]["score_bias"]["DASH_LIGHT"] == -30
+    assert migrated["ai_profiles"]["bully"]["score_bias"]["DASH_LIGHT"] == -30
+
+
+def test_schema21_config_migration_adds_tolerance_defaults_without_losing_traits():
+    old = load_config()
+    old["schema_version"] = 21
+    old["stats"]["fear_accuracy"] = 0
+    old["anger"]["acc_penalty"] = 0
+    for key in ("confidence", "anger_tolerance", "pain_tolerance"):
+        old["defaults"].pop(key)
+    for profile in old["ai_profiles"].values():
+        profile.pop("anger_tolerance")
+        profile.pop("pain_tolerance")
+    old["ronin"].pop("anger_tolerance")
+    old["ronin"].pop("pain_tolerance")
+
+    migrated = upgrade_config(old)
+
+    assert migrated["schema_version"] == 27
+    assert migrated["ai_profiles"]["veteran"]["traits"] == load_config()["ai_profiles"]["veteran"]["traits"]
+    assert migrated["ai_profiles"]["veteran"]["pain_tolerance"] == 0.9
+    assert migrated["ai_profiles"]["recruit"]["anger_tolerance"] == 0.25
+    assert migrated["defaults"]["confidence"] == load_config()["defaults"]["confidence"]
+    assert migrated["stats"]["fear_accuracy"] == load_config()["stats"]["fear_accuracy"]
+    assert migrated["anger"]["acc_penalty"] == load_config()["anger"]["acc_penalty"]
+
+
+def test_schema22_bleed_migration_updates_shipped_defaults_but_preserves_custom_tuning():
+    old = load_config()
+    old["schema_version"] = 22
+    old["wounds"]["TORSO"]["CUT"]["bleed"] = 3
+    old["wounds"]["TORSO"]["DEEP"]["bleed"] = 17
+    old["wounds"]["HAND"]["SEVERED"]["bleed"] = 8
+
+    migrated = upgrade_config(old)
+
+    assert migrated["schema_version"] == 27
+    assert migrated["wounds"]["TORSO"]["CUT"]["bleed"] == 0.5
+    assert migrated["wounds"]["TORSO"]["DEEP"]["bleed"] == 17
+    assert migrated["wounds"]["HAND"]["SEVERED"]["bleed"] == 12
 
 
 def test_only_resolved_countered_outcomes_adapt_and_success_decays_penalty():
@@ -200,7 +307,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     old_path = deepcopy(state["fighters"][0]["action"]["path"])
     old_deadline = state["fighters"][0]["action"]["end_tick"]
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 18
+    assert restored.to_data()["version"] == 27
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_deadline
     assert restored.enemy.ai_experience == []
@@ -218,7 +325,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     old_config_path = tmp_path / "duel-config-v1.json"
     old_config_path.write_text(json.dumps(old_config), encoding="utf-8")
     migrated_config = load_config(old_config_path)
-    assert migrated_config["schema_version"] == 18
+    assert migrated_config["schema_version"] == 27
     assert migrated_config["actions"]["DASH"]["per_tile"] == old_config["actions"]["DASH"]["per_tile"]
     assert migrated_config["ronin"]["base"] == old_config["ronin"]["base"]
     assert migrated_config["ronin"]["traits"] == migrated_config["ai_profiles"]["brute"]["traits"]
@@ -230,7 +337,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     world.save(save_path)
     loaded = World.load(save_path)
     resumed = DuelSession.from_data(loaded.duel_journal)
-    assert loaded.duel_journal["version"] == 18
+    assert loaded.duel_journal["version"] == 27
     restored.run_to_player()
     resumed.run_to_player()
     assert resumed.state.to_data() == restored.state.to_data()

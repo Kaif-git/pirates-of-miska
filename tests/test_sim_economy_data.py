@@ -23,6 +23,11 @@ def data_copy():
     return copy.deepcopy(goods), copy.deepcopy(economy)
 
 
+def provision_test_merchant(world, merchant_id: str, caused_by: str) -> str:
+    return world.crew_ships.provision_recruited_merchant(
+        world, merchant_id, caused_by=caused_by)
+
+
 def test_goods_and_island_economy_catalogs_cover_required_data():
     goods, economy = load_economy_data(GOODS_PATH, ECONOMY_PATH)
     geography = WorldMap.load()
@@ -107,6 +112,7 @@ def test_aggregate_silver_stays_conserved_through_tax_upkeep_and_market_transfer
 
     merchant_id, created_event = world.create_merchant(
         "Tomas Vale", "isle_006", silver=1000, capacity_milli=10000)
+    provision_test_merchant(world, merchant_id, created_event)
     after_endowment = total_silver()
     assert after_endowment == opening + 1000
     trade = world.trade(merchant_id, "isle_006", "grain", "buy", 1000,
@@ -201,6 +207,7 @@ def test_market_orders_transfer_finite_goods_and_silver_with_partial_fill():
         "Mara Venn", "isle_030", silver=100, capacity_milli=5000,
         travel_cost_silver_per_day=0, risk_cost_basis_points=0,
     )
+    provision_test_merchant(world, merchant_id, created_event)
     market = world.economy.islands["isle_030"]
     # Isolate this regression to finite treasury buying power; household cash
     # stays in the global ledger but belongs to another market.
@@ -221,6 +228,7 @@ def test_market_orders_transfer_finite_goods_and_silver_with_partial_fill():
         "Pella Wren", "isle_030", silver=0, capacity_milli=100000,
         cargo_milli={"grain": 100000}, travel_cost_silver_per_day=0,
         risk_cost_basis_points=0)
+    provision_test_merchant(world, second_id, second_event)
     sale = world.trade(second_id, "isle_030", "grain", "sell", 100000,
                        caused_by=purchase["id"])
     assert sale["data"]["quantity_milli"] == 80000
@@ -241,6 +249,7 @@ def test_market_trade_can_use_finite_household_cash_and_logs_account_debit():
         cargo_milli={"grain": 100000}, travel_cost_silver_per_day=0,
         risk_cost_basis_points=0,
     )
+    provision_test_merchant(world, merchant_id, created_event)
     household_cash_before = market["population_silver"]
     sale = world.trade(merchant_id, "isle_030", "grain", "sell", 100000,
                        caused_by=created_event)
@@ -269,6 +278,7 @@ def test_merchant_route_ai_uses_beliefs_and_completes_finite_trade(tmp_path):
         travel_cost_silver_per_day=0, risk_cost_basis_points=10000,
         risk_beliefs_ppm={"route_001": 900000},
     )
+    provision_test_merchant(world, merchant_id, created_event)
     source = world.economy.islands["isle_006"]
     destination = world.economy.islands["isle_012"]
     source["prices_milli"]["grain"] = 1000
@@ -296,6 +306,7 @@ def test_merchant_reposition_reuses_leg_duration_across_candidate_paths(monkeypa
     merchant_id, _ = world.create_merchant(
         "Rill Vane", "isle_006", silver=100, capacity_milli=5000,
         travel_cost_silver_per_day=0, risk_cost_basis_points=0)
+    provision_test_merchant(world, merchant_id, world.economy.merchants[merchant_id]["last_event_id"])
     world.economy.islands["isle_006"]["prices_milli"]["grain"] = 1000
     world.economy.islands["isle_012"]["prices_milli"]["grain"] = 100000
     original = world.travel._leg_hours
@@ -336,6 +347,8 @@ def test_merchant_midroute_snapshot_preserves_ledger_and_future_trades(tmp_path)
     merchant_id, _ = original.create_merchant(
         "Sela Norr", "isle_006", silver=100, capacity_milli=5000,
         travel_cost_silver_per_day=0, risk_cost_basis_points=0)
+    provision_test_merchant(
+        original, merchant_id, original.economy.merchants[merchant_id]["last_event_id"])
     origin = original.economy.islands["isle_006"]
     destination = original.economy.islands["isle_012"]
     origin["prices_milli"]["grain"] = 1000
@@ -359,6 +372,7 @@ def test_unprofitable_or_unaffordable_order_is_refused_without_mutation():
     world = WorldState.create("refused-market")
     merchant_id, created_event = world.create_merchant(
         "Pell Orin", "isle_006", silver=0, capacity_milli=1000)
+    provision_test_merchant(world, merchant_id, created_event)
     before = world.to_snapshot()
     with pytest.raises(ValueError, match="cannot fill"):
         world.trade(merchant_id, "isle_006", "grain", "buy", 1000,
@@ -372,6 +386,7 @@ def test_merchant_risk_beliefs_can_suppress_an_otherwise_profitable_route():
         "Nera Vale", "isle_006", silver=100, capacity_milli=5000,
         travel_cost_silver_per_day=0, risk_cost_basis_points=10000,
     )
+    provision_test_merchant(world, merchant_id, world.economy.merchants[merchant_id]["last_event_id"])
     source = world.economy.islands["isle_006"]
     destination = world.economy.islands["isle_012"]
     source["prices_milli"]["grain"] = 1000
@@ -382,6 +397,153 @@ def test_merchant_risk_beliefs_can_suppress_an_otherwise_profitable_route():
         route_id: 1_000_000 for route_id in world.geography.routes
     }
     assert world.economy.best_trade_route(world, merchant_id) is None
+
+
+def test_merchant_blocker_telemetry_records_real_unprofitable_state_without_forcing_activity():
+    world = WorldState.create("merchant-blocker-telemetry", director_enabled=False)
+    candidates = [merchant_id for merchant_id, merchant in world.economy.merchants.items()
+                  if merchant["ship_id"] not in world.travel.transits
+                  and world.ship_is_commandable(merchant["ship_id"])]
+    assert candidates
+    merchant_id = candidates[0]
+    for market in world.economy.islands.values():
+        for good in world.economy.goods:
+            market["prices_milli"][good] = 1000
+    for other_id, merchant in world.economy.merchants.items():
+        merchant["last_route_attempt_day"] = world.economy.last_updated_day
+    merchant = world.economy.merchants[merchant_id]
+    merchant["last_route_attempt_day"] = -7
+    before_trades = len(world.event_log.by_type("MARKET_TRADE"))
+    before_voyages = len(world.event_log.by_type("VOYAGE_STARTED"))
+
+    world.economy._make_merchant_decisions(world)
+
+    blocked = [event for event in world.event_log.by_type("MERCHANT_ACTIVITY_BLOCKED")
+               if event.data["merchant_id"] == merchant_id]
+    assert blocked
+    assert blocked[-1].data["blocker_reason"] == \
+        "no_positive_market_spread_or_buyer_liquidity"
+    assert len(world.event_log.by_type("MARKET_TRADE")) == before_trades
+    assert len(world.event_log.by_type("VOYAGE_STARTED")) == before_voyages
+    assert world.economy.merchants[merchant_id]["activity_blocker_reason"] == \
+        blocked[-1].data["blocker_reason"]
+    snapshot = world.to_snapshot()
+    assert WorldState.from_snapshot(snapshot).to_snapshot() == snapshot
+
+
+def test_underway_merchant_is_not_misreported_as_blocked_or_reviewed():
+    world = WorldState.create("merchant-underway-not-blocked", director_enabled=False)
+    merchant_id = sorted(world.economy.merchants)[0]
+    merchant = world.economy.merchants[merchant_id]
+    ship_id = merchant["ship_id"]
+    destination = next(island_id for island_id in world.economy.islands
+                       if island_id != world.entities[ship_id]["location"]["id"])
+    world.start_voyage(ship_id, destination, caused_by=merchant["last_event_id"])
+    for row in world.economy.merchants.values():
+        row["last_route_attempt_day"] = 0
+    merchant["last_route_attempt_day"] = -7
+    event_count = len(world.event_log)
+
+    world.economy._make_merchant_decisions(world)
+
+    assert len(world.event_log) == event_count
+    assert merchant["activity_blocker_reason"] is None
+    assert not world.event_log.by_type("MERCHANT_ACTIVITY_BLOCKED")
+
+
+def test_captured_merchant_vessel_closes_firm_without_transferring_or_destroying_assets():
+    world = WorldState.create("merchant-title-transfer-closes-firm", director_enabled=False)
+    merchant_id = next(
+        merchant_id for merchant_id, merchant in sorted(world.economy.merchants.items())
+        if merchant.get("status", "active") == "active"
+        and world.entities[merchant["ship_id"]].get("controller_crew_id") in world.crew_ships.crews)
+    merchant = world.economy.merchants[merchant_id]
+    ship_id = merchant["ship_id"]
+    ship = world.entities[ship_id]
+    controller = ship["controller_crew_id"]
+    island_id = world.location_of(ship_id)["id"]
+    grain_available = world.economy.islands[island_id]["stockpile_milli"]["grain"]
+    assert grain_available > 0
+    world.trade(merchant_id, island_id, "grain", "buy", min(1000, grain_available),
+                caused_by=merchant["last_event_id"])
+    previous_owner = dict(ship["legal_owner"])
+    silver_before = world.economy._total_silver()
+    goods_before = world.economy._total_goods()
+    retained_silver = merchant["silver"]
+    retained_cargo = dict(merchant["cargo_milli"])
+    assert retained_cargo["grain"] > 0
+
+    acquisition = world.event_log.append(
+        tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+        location=world.location_of(ship_id)["id"],
+        actors=[{"role": "acquiring_crew", "entity_id": controller}],
+        targets=[{"role": "acquired_ship", "entity_id": ship_id}],
+        data={"method": "capture", "previous_owner": previous_owner,
+              "previous_controller_crew_id": controller,
+              "legal_owner_kind": "crew", "legal_owner_id": controller,
+              "controller_crew_id": controller},
+        caused_by=[merchant["last_event_id"]],
+        causes_tags=["test_capture", "ownership_change"], magnitude=0.5)
+    world.assign_ship_title(
+        ship_id, owner_kind="crew", owner_id=controller,
+        controller_crew_id=controller, event_id=acquisition.id)
+
+    assert merchant["status"] == "closed"
+    closure = world.event_log.get(merchant["closed_event_id"])
+    assert closure.type == "MERCHANT_CLOSED"
+    assert closure.caused_by == (acquisition.id,)
+    assert closure.data["retained_silver"] == retained_silver
+    assert closure.data["retained_cargo_milli"] == retained_cargo
+    assert closure.data["account_disposition"] == "retained_as_unresolved_merchant_claim"
+    assert world.economy._total_silver() == silver_before
+    assert world.economy._total_goods() == goods_before
+    assert world.economy.best_trade_route(world, merchant_id) is None
+    assert world.economy.best_reposition(world, merchant_id) is None
+    with pytest.raises(ValueError, match="Closed merchant accounts"):
+        world.trade(merchant_id, world.location_of(ship_id)["id"], "grain", "sell", 1,
+                    caused_by=closure.id)
+
+    event_count = len(world.event_log)
+    for other in world.economy.merchants.values():
+        other["last_route_attempt_day"] = world.economy.last_updated_day
+    world.economy._make_merchant_decisions(world)
+    assert len(world.event_log) == event_count
+
+    world.encounters._sink_ship(world, ship_id, closure.id)
+    assert ship_id not in world.entities
+    assert world.economy.merchants[merchant_id]["status"] == "closed"
+    assert not any(event.data.get("old_ship_id") == ship_id
+                   for event in world.event_log.by_type("MERCHANT_VESSEL_REPLACED"))
+    snapshot = world.to_snapshot()
+    restored = WorldState.from_snapshot(snapshot)
+    assert restored.to_snapshot() == snapshot
+
+
+def test_sunk_merchant_vessel_closes_account_without_free_replacement_hull():
+    world = WorldState.create("merchant-sinking-is-not-free-replacement", director_enabled=False)
+    merchant_id, merchant = next(
+        (merchant_id, row) for merchant_id, row in sorted(world.economy.merchants.items())
+        if row.get("status", "active") == "active"
+        and world.entities[row["ship_id"]].get("legal_owner") == {
+            "kind": "merchant", "id": merchant_id})
+    ship_id = merchant["ship_id"]
+    vessel_count_before = sum(entity.get("kind") == "ship"
+                              for entity in world.entities.values())
+    silver_before = world.economy._total_silver()
+    goods_before = world.economy._total_goods()
+
+    world.encounters._sink_ship(world, ship_id, merchant["last_event_id"])
+
+    assert ship_id in world.archive and ship_id not in world.entities
+    assert sum(entity.get("kind") == "ship" for entity in world.entities.values()) == vessel_count_before - 1
+    assert merchant["status"] == "closed"
+    closure = world.event_log.get(merchant["closed_event_id"])
+    assert closure.data["reason"] == "vessel_sunk"
+    assert closure.caused_by == (world.archive[ship_id]["last_event_id"],)
+    assert world.economy._total_silver() == silver_before
+    assert world.economy._total_goods() == goods_before
+    assert not world.event_log.by_type("MERCHANT_VESSEL_REPLACED")
+    assert WorldState.from_snapshot(world.to_snapshot()).to_snapshot() == world.to_snapshot()
 
 
 def test_route_blockade_disrupts_trade_and_raises_destination_prices_and_unrest():
@@ -413,3 +575,213 @@ def test_route_blockade_disrupts_trade_and_raises_destination_prices_and_unrest(
     assert route.id not in blockaded.travel.closed_routes
     assert blockaded.event_log.get(lift_id).type == "ROUTE_BLOCKADE_LIFTED"
     blockaded.to_snapshot()
+
+
+def test_shortage_relief_negotiation_uses_a_finite_market_trade_once():
+    world = WorldState.create("shortage-relief-negotiation")
+    merchant = next(row for row in world.economy.merchants.values()
+                    if world.entities[row["ship_id"]]["location"]["id"]
+                    in world.politics.island_rulers)
+    merchant_id = merchant["id"]
+    island_id = world.entities[merchant["ship_id"]]["location"]["id"]
+    market = world.economy.islands[island_id]
+    buy = world.economy.trade(
+        world, merchant_id, island_id, "grain", "buy", 10_000,
+        caused_by=merchant["last_event_id"])
+    parent = world.event_log.get(buy["id"])
+    pressure = world.event_log.append(
+        tick=world.clock.tick, event_type="ISLAND_ECONOMY_UPDATED", location=island_id,
+        targets=[{"role": "island", "entity_id": island_id}],
+        data={"day": 0, "shortage_milli": {**{good: 0 for good in world.economy.goods},
+                                              "grain": 15_000}},
+        caused_by=[parent.id], causes_tags=["shortage_fixture"], magnitude=0.2,
+    )
+    stock_before = market["stockpile_milli"]["grain"]
+    cash_before = merchant["silver"]
+    cargo_before = merchant["cargo_milli"]["grain"]
+    silver_total_before = world.economy._total_silver()
+    result_id = world.economy.negotiate_shortage_relief(
+        world, merchant_id, island_id, "grain", 10_000,
+        pressure_event_id=pressure.id)
+    result = world.event_log.get(result_id)
+
+    assert result.type == "SHORTAGE_RELIEF_NEGOTIATED"
+    assert result.data["materially_settled"] is True
+    assert result.data["quantity_milli"] == 10_000
+    assert merchant["cargo_milli"]["grain"] == cargo_before - 10_000
+    assert market["stockpile_milli"]["grain"] == stock_before + 10_000
+    assert merchant["silver"] > cash_before
+    assert world.economy._total_silver() == silver_total_before
+    assert world.event_log.get(result.data["trade_event_id"]).caused_by == (pressure.id,)
+    snapshot_after = world.to_snapshot()
+    assert world.economy.negotiate_shortage_relief(
+        world, merchant_id, island_id, "grain", 10_000,
+        pressure_event_id=pressure.id) == result_id
+    other_merchant = next(key for key in world.economy.merchants if key != merchant_id)
+    assert world.economy.negotiate_shortage_relief(
+        world, other_merchant, island_id, "grain", 10_000,
+        pressure_event_id=pressure.id) == result_id
+    assert world.to_snapshot() == snapshot_after
+    world.economy.ledger.assert_balanced(world.economy, validate_history=False)
+
+
+def test_contraband_inspection_confiscates_goods_and_conserves_fine():
+    world = WorldState.create("contraband-enforcement")
+    merchant = world.economy.merchants["merchant_000003"]
+    ship_id = merchant["ship_id"]
+    source_island = world.entities[ship_id]["location"]["id"]
+    authority_island, authority_faction = next(iter(world.politics.island_rulers.items()))
+    bought = world.economy.trade(
+        world, merchant["id"], source_island, "contraband", "buy", 10_000,
+        caused_by=merchant["last_event_id"])
+    world.entities[ship_id]["location"] = {"kind": "island", "id": authority_island}
+    sold = world.economy.trade(
+        world, merchant["id"], authority_island, "contraband", "sell", 10_000,
+        caused_by=bought["id"])
+    trade_event = world.event_log.get(sold["id"])
+    authority = world.politics.factions[authority_faction]
+    action = world.event_log.append(
+        tick=world.clock.tick, event_type="ENFORCEMENT_ACTION", location=authority_island,
+        actors=[{"role": "enforcement_officer", "entity_id": authority["leader_id"]}],
+        targets=[{"role": "suspected_seller", "entity_id": merchant["id"]}],
+        data={"action_id": "inspect_contraband", "authority_faction_id": authority_faction,
+              "trade_event_id": trade_event.id},
+        caused_by=[trade_event.id], causes_tags=["lawful_market_inspection"], magnitude=0.05,
+    )
+    market = world.economy.islands[authority_island]
+    stock_before = market["stockpile_milli"]["contraband"]
+    crew_id = world.entities[ship_id]["controller_crew_id"]
+    crew = world.crew_ships.crews[crew_id]
+    crew_silver_before = crew["treasury_silver"]
+    market_silver_before = market["treasury_silver"]
+    total_silver_before = world.economy._total_silver()
+    total_goods_before = world.economy._total_goods()
+
+    seized_id = world.economy.enforce_contraband_trade(
+        world, trade_event.id, authority_faction, caused_by=action.id)
+    seized = world.event_log.get(seized_id)
+
+    assert seized.type == "CONTRABAND_SEIZED"
+    assert seized.data["quantity_milli"] == 10_000
+    assert seized.data["fine_silver"] == 10
+    assert market["stockpile_milli"]["contraband"] == stock_before - 10_000
+    assert crew["treasury_silver"] == crew_silver_before - 10
+    assert market["treasury_silver"] == market_silver_before + 10
+    assert world.economy._total_silver() == total_silver_before
+    total_goods_after = world.economy._total_goods()
+    assert total_goods_after["contraband"] == total_goods_before["contraband"] - 10_000
+    assert all(total_goods_after[good] == total_goods_before[good]
+               for good in total_goods_before if good != "contraband")
+    assert world.economy.ledger.goods_sinks["contraband"] == 10_000
+    snapshot_after = world.to_snapshot()
+    assert world.economy.enforce_contraband_trade(
+        world, trade_event.id, authority_faction, caused_by=action.id) == seized_id
+    assert world.to_snapshot() == snapshot_after
+    assert WorldState.from_snapshot(snapshot_after).to_snapshot() == snapshot_after
+    world.economy.validate_world(world)
+
+
+def test_two_profitable_market_sellers_create_one_causal_rivalry_record():
+    world = WorldState.create("profitable-market-rivalry")
+    first = world.economy.merchants["merchant_000001"]
+    second_id, created = world.create_merchant(
+        "Second Isle Company", "isle_002", silver=100,
+        capacity_milli=5_000, travel_cost_silver_per_day=0,
+        risk_cost_basis_points=0)
+    merchant_crew_id = provision_test_merchant(world, second_id, created)
+    pirate_ship_id, pirate_created = world.create_vessel("Rival Coalition Ship", "isle_002")
+    pirate_crew_id = world.crew_ships.provision_recruited_vessel(
+        world, pirate_ship_id, "pirate", caused_by=pirate_created)
+    founder = world.entities[world.crew_ships.crews[pirate_crew_id]["captain_id"]]
+    founder["traits"]["ambition"] = max(
+        founder["traits"]["ambition"],
+        world.politics.data["rules"]["faction_founder_min_ambition"])
+    founder["stats"]["leadership"] = max(
+        founder["stats"]["leadership"],
+        world.politics.data["rules"]["faction_founder_min_leadership"])
+    for crew_id in (merchant_crew_id, pirate_crew_id):
+        world.crew_ships.crews[crew_id]["ideology_tags"] = ["profit"]
+    world.politics.found_faction(
+        world, member_crew_ids=[merchant_crew_id, pirate_crew_id],
+        founder_id=founder["id"], anchorage_island_id="isle_002",
+        purpose="lawful profitable trade", name=f"{founder['display_name']} Company",
+        kind="merchant_coalition",
+        caused_by=[world.crew_ships.crews[merchant_crew_id]["last_event_id"],
+                   world.crew_ships.crews[pirate_crew_id]["last_event_id"]])
+    source_ids, destination_id = ("isle_001", "isle_002"), "isle_003"
+    world.economy.islands[source_ids[0]]["prices_milli"]["grain"] = 1_000
+    world.economy.islands[source_ids[1]]["prices_milli"]["grain"] = 1_000
+    world.economy.islands[destination_id]["prices_milli"]["grain"] = 100_000
+    first_buy = world.economy.trade(
+        world, first["id"], source_ids[0], "grain", "buy", 5_000,
+        caused_by=first["last_event_id"])
+    second = world.economy.merchants[second_id]
+    second_buy = world.economy.trade(
+        world, second_id, source_ids[1], "grain", "buy", 5_000,
+        caused_by=created)
+    for merchant in (first, second):
+        world.entities[merchant["ship_id"]]["location"] = {
+            "kind": "island", "id": destination_id}
+    before_silver = world.economy._total_silver()
+    before_goods = world.economy._total_goods()
+    captain_ids = [world.crew_ships.crews[
+        world.entities[merchant["ship_id"]]["controller_crew_id"]]["captain_id"]
+        for merchant in (first, second)]
+    stats_before = {captain_id: dict(world.entities[captain_id]["stats"])
+                    for captain_id in captain_ids}
+    first_sale = world.economy.trade(
+        world, first["id"], destination_id, "grain", "sell", 5_000,
+        caused_by=first_buy["id"])
+    second_sale = world.economy.trade(
+        world, second_id, destination_id, "grain", "sell", 5_000,
+        caused_by=second_buy["id"])
+
+    rivalries = world.event_log.by_type("PROFITABLE_TRADE_RIVALRY")
+    assert len(rivalries) == 1
+    rivalry = rivalries[0]
+    assert set(rivalry.data["trade_event_ids"]) == {first_sale["id"], second_sale["id"]}
+    assert all(value > 0 for value in rivalry.data["profits_silver"])
+    assert set(rivalry.caused_by) == {first_sale["id"], second_sale["id"]}
+    relation_event = world.event_log.by_type("TRADE_RIVALRY_RELATION_CHANGED")[-1]
+    assert relation_event.data["rivalry_event_id"] == rivalry.id
+    assert relation_event.caused_by == (rivalry.id,)
+    for merchant in (first, second):
+        captain_id = world.crew_ships.crews[
+            world.entities[merchant["ship_id"]]["controller_crew_id"]]["captain_id"]
+        assert world.entities[captain_id]["reputation"]["public_renown"] > 0
+        assert "profitable_trade" in world.entities[captain_id]["reputation"]["paths"]
+        assert world.entities[captain_id]["stats"] == stats_before[captain_id]
+    assert world.economy._total_silver() == before_silver
+    assert world.economy._total_goods() == before_goods
+    world.event_log.validate_causality()
+    world.to_snapshot()
+
+
+def test_profitable_trade_reroutes_around_a_blockaded_route():
+    world = WorldState.create("blockade-profitable-reroute")
+    merchant_id, created = world.create_merchant(
+        "Reroute Company", "isle_001", silver=100,
+        capacity_milli=5_000, travel_cost_silver_per_day=0,
+        risk_cost_basis_points=0)
+    provision_test_merchant(world, merchant_id, created)
+    for market in world.economy.islands.values():
+        for goods_id in world.economy.goods:
+            market["prices_milli"][goods_id] = 1_000
+    world.economy.islands["isle_002"]["prices_milli"]["grain"] = 100_000
+    plan = world.economy.best_trade_route(world, merchant_id)
+    assert plan is not None and plan["destination"] == "isle_002"
+    assert "route_001" in plan["route_ids"]
+    cause = world.event_log.by_type("WORLD_GENERATED")[0].id
+    blockade = world.economy.blockade_route(
+        world, "route_001", "isle_001", True, caused_by=cause)
+
+    rerouted = world.economy.best_trade_route(world, merchant_id)
+    assert rerouted is not None and rerouted["destination"] == "isle_002"
+    assert "route_001" not in rerouted["route_ids"]
+    voyage_id = world.economy.dispatch_trade_route(
+        world, merchant_id, rerouted, caused_by=blockade)
+    transit = world.travel.transits[world.economy.merchants[merchant_id]["ship_id"]]
+    assert transit["voyage_event_id"] == voyage_id
+    assert "route_001" not in transit["route_ids"]
+    assert world.economy.ledger.assert_balanced(world.economy, validate_history=False) is None
+    world.event_log.validate_causality()

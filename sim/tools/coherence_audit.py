@@ -253,6 +253,9 @@ def audit_crew_membership_transitions(rows: list[dict[str, Any]]) -> dict[str, A
         elif event_type in {"CREW_MEMBER_TRANSFERRED", "CREW_MEMBER_DEFECTED",
                             "PRISONER_CAPTURED"}:
             person_id = data.get("character_id")
+            if person_id is None and event_type == "CREW_MEMBER_DEFECTED":
+                person_id = next((part.get("entity_id") for part in row.get("actors", ())
+                                  if part.get("role") == "defector"), None)
             source_crew = data.get("from_crew_id") or data.get("crew_id")
             target_crew = data.get("to_crew_id")
             if remove(row, person_id, source_crew):
@@ -769,16 +772,49 @@ def audit_event_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
                      for a, b in zip(pair_rows, pair_rows[1:])]
         if len(pair_rows) >= 3:
             interval_counts = Counter(intervals)
+            locations = [row.get("location") for row in pair_rows]
+            outcome_sequence = [row.get("data", {}).get("outcome", "unknown")
+                                for row in pair_rows]
+            stance_signatures = [tuple(sorted((row.get("data", {}).get("stances") or {}).items()))
+                                 for row in pair_rows]
+            dominant_interval, dominant_count = interval_counts.most_common(1)[0]
+            regularity_permille = dominant_count * 1000 // max(1, len(intervals))
+            same_location = len(set(map(repr, locations))) == 1
+            if all(isinstance(location, str) and location.startswith("isle_")
+                   for location in locations) and same_location:
+                cadence_context = "repeated_island_co_location_observed"
+            elif all(isinstance(location, str) and location.startswith("route_")
+                     for location in locations) and same_location:
+                cadence_context = "repeated_route_encounter_location_observed"
+            elif all(location is None for location in locations):
+                cadence_context = "spatial_context_missing"
+            else:
+                cadence_context = "spatial_context_varies"
+            unexplained_periodicity = (
+                regularity_permille >= 800 and cadence_context == "spatial_context_missing"
+                and len(set(outcome_sequence)) == 1 and len(set(stance_signatures)) == 1)
+            cadence_assessment = (
+                "unexplained_periodicity_candidate" if unexplained_periodicity else
+                "contextual_repeat_not_flagged")
             cadence_pairs.append({
                 "ships": [left, right], "encounters": len(pair_rows),
                 "days": [row.get("tick", 0) // 24 for row in pair_rows],
                 "interval_days": intervals,
-                "most_common_interval_days": interval_counts.most_common(1)[0][0],
-                "most_common_interval_count": interval_counts.most_common(1)[0][1],
-                "outcomes": dict(Counter(row.get("data", {}).get("outcome", "unknown")
-                                          for row in pair_rows)),
+                "most_common_interval_days": dominant_interval,
+                "most_common_interval_count": dominant_count,
+                "regularity_permille": regularity_permille,
+                "locations": locations,
+                "cadence_context": cadence_context,
+                "outcome_sequence": outcome_sequence,
+                "repeated_outcome_share_permille": max(Counter(outcome_sequence).values())
+                * 1000 // len(outcome_sequence),
+                "stance_sequence": [dict(signature) for signature in stance_signatures],
+                "cadence_assessment": cadence_assessment,
+                "outcomes": dict(Counter(outcome_sequence)),
             })
     cadence_pairs.sort(key=lambda row: (-row["encounters"], row["ships"]))
+    cadence_flags = [row for row in cadence_pairs
+                     if row["cadence_assessment"] == "unexplained_periodicity_candidate"]
 
     target_events = [row for row in rows if row.get("type") == "RAIDER_TARGET_SELECTED"]
     target_groups: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
@@ -817,6 +853,89 @@ def audit_event_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "later_encounter_count_proxy": len(future_encounters),
             "limitation": "Proxy only: event log does not link a selected raider to a specific later encounter.",
         })
+
+    pursuit_commits = [row for row in rows if row.get("type") == "RAIDER_PURSUIT_COMMITTED"]
+    pursuit_resolutions = [row for row in rows if row.get("type") == "RAIDER_PURSUIT_RESOLVED"]
+    resolutions_by_selection: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for resolution in pursuit_resolutions:
+        selected_id = resolution.get("data", {}).get("selected_event_id")
+        if selected_id:
+            resolutions_by_selection[selected_id].append(resolution)
+    pursuit_rows = []
+    unresolved_selections = []
+    uncommitted_selections = []
+    invalid_pursuit_links = []
+    resolved_counts = Counter()
+    for selection in target_events:
+        selection_id = selection["id"]
+        target_ship_id = next((part.get("entity_id") for part in selection.get("targets", ())
+                               if part.get("role") == "merchant_vessel"), None)
+        commits = [row for row in pursuit_commits
+                   if selection_id in row.get("caused_by", ())
+                   and any(part.get("entity_id") == target_ship_id
+                           for part in row.get("targets", ())) ]
+        results = resolutions_by_selection.get(selection_id, [])
+        if not commits:
+            uncommitted_selections.append(selection_id)
+        if not results:
+            unresolved_selections.append(selection_id)
+        for resolution in results:
+            commit_id = resolution.get("data", {}).get("commitment_event_id")
+            matching_commit = next((row for row in commits if row["id"] == commit_id), None)
+            valid = (matching_commit is not None
+                     and selection_id in resolution.get("caused_by", ())
+                     and commit_id in resolution.get("caused_by", ()))
+            if resolution.get("data", {}).get("reason") == "causally_linked_encounter":
+                encounter_parent = next((by_id.get(parent_id)
+                                         for parent_id in resolution.get("caused_by", ())
+                                         if by_id.get(parent_id, {}).get("type") == "ENCOUNTER_RESOLVED"),
+                                        None)
+                valid = valid and encounter_parent is not None
+            if not valid:
+                invalid_pursuit_links.append({
+                    "selection_event_id": selection_id,
+                    "resolution_event_id": resolution["id"],
+                    "commitment_event_id": commit_id,
+                })
+            outcome = resolution.get("data", {}).get("outcome", "unknown")
+            resolved_counts[outcome] += 1
+            pursuit_rows.append({
+                "selection_event_id": selection_id,
+                "commitment_event_id": commit_id,
+                "resolution_event_id": resolution["id"],
+                "target_ship_id": target_ship_id,
+                "outcome": outcome,
+                "causal_links_valid": bool(valid),
+            })
+    orphan_pursuit_resolutions = [row["id"] for row in pursuit_resolutions
+                                  if row.get("data", {}).get("selected_event_id")
+                                  not in {event["id"] for event in target_events}]
+    target_selection_count = len(target_events)
+    target_counts = Counter(
+        next((part.get("entity_id") for part in row.get("targets", ())
+              if part.get("role") == "merchant_vessel"), None)
+        for row in target_events)
+    target_counts.pop(None, None)
+    raider_pursuit = {
+        "selections": target_selection_count,
+        "commitments": len(pursuit_commits),
+        "resolutions": len(pursuit_resolutions),
+        "resolved_outcomes": dict(sorted(resolved_counts.items())),
+        "successful_interceptions": resolved_counts.get("intercepted", 0),
+        "interception_permille_of_selections": (
+            resolved_counts.get("intercepted", 0) * 1000 // target_selection_count
+            if target_selection_count else None),
+        "uncommitted_selection_event_ids": uncommitted_selections,
+        "unresolved_selection_event_ids": unresolved_selections,
+        "orphan_resolution_event_ids": orphan_pursuit_resolutions,
+        "invalid_causal_links": invalid_pursuit_links,
+        "dispositions": pursuit_rows,
+        "target_selections": dict(sorted(target_counts.items())),
+        "distinct_targets": len(target_counts),
+        "maximum_target_share_permille": (
+            max(target_counts.values()) * 1000 // target_selection_count
+            if target_selection_count else None),
+    }
 
     merchant_loss_events = []
     loss_types = {"SHIP_SUNK", "SHIP_CAPTURED", "COMBAT_LOOT_TRANSFERRED"}
@@ -974,8 +1093,17 @@ def audit_event_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "post_dissolution_org_commands": post_dissolution_org_commands,
         "encounter_outcomes": dict(sorted(encounter_outcomes.items())),
         "repeated_encounter_pairs": cadence_pairs,
+        "cadence_audit_policy": {
+            "minimum_encounters": 3,
+            "periodic_interval_share_permille": 800,
+            "flag_requires": ["missing encounter location", "same outcome sequence",
+                              "same stance sequence"],
+            "same_island_or_route_location": "reported as observed spatial opportunity, not flagged solely by frequency",
+        },
+        "unexplained_cadence_candidates": cadence_flags,
         "target_same_tick_concentration": target_same_tick,
         "target_dispositions_proxy": target_dispositions,
+        "raider_pursuit": raider_pursuit,
         "merchant_loss_events": merchant_loss_events,
         "merchant_loss_incidents": [loss_incidents[key]
                                      for key in sorted(loss_incidents)],
@@ -996,7 +1124,7 @@ def audit_event_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         ],
         "limitations": [
             "An event-only log cannot prove current ownership when no transfer event is emitted; capture-chain mismatches detect repeated stale prior-owner claims.",
-            "Target-to-encounter matching is a proxy unless the pursuing raider ship is linked to its captain at event time.",
+            "Legacy target-selection-only logs retain target-to-encounter proxy matching; explicit raider pursuit records are audited separately.",
             "Headcount conservation requires population/squad census snapshots; event counts alone cannot establish it.",
             "Historical owner-type attribution is partial where the event log omits owner type or crew-to-ship membership changes.",
         ],
@@ -1029,9 +1157,20 @@ def write_audit(records: list[dict[str, Any]], output: str | Path) -> tuple[Path
                   f"- Attributed faction/organization commands after dissolution: "
                   f"{len(report['post_dissolution_org_commands'])}",
                   f"- Encounter outcomes: `{json.dumps(report['encounter_outcomes'], sort_keys=True)}`",
-                  f"- Repeated encounter pairs (3+ meets): {len(report['repeated_encounter_pairs'])}",
-                  f"- Same-tick duplicate target groups: {len(report['target_same_tick_concentration'])}",
-                  f"- Merchant loss incidents with a linked encounter ancestor: "
+                   f"- Repeated encounter pairs (3+ meets): {len(report['repeated_encounter_pairs'])}",
+                   f"- Cadence review candidates: {len(report['unexplained_cadence_candidates'])} "
+                   "(periodic gaps + missing location + unchanged outcome/stances)",
+                   f"- Same-tick duplicate target groups: {len(report['target_same_tick_concentration'])}",
+                   f"- Raider pursuits: {report['raider_pursuit']['selections']} selected, "
+                   f"{report['raider_pursuit']['commitments']} committed, "
+                   f"{report['raider_pursuit']['resolutions']} resolved; outcomes "
+                   f"`{json.dumps(report['raider_pursuit']['resolved_outcomes'], sort_keys=True)}`; "
+                   f"causal-link errors: {len(report['raider_pursuit']['invalid_causal_links'])}",
+                   f"- Raider target distribution: {report['raider_pursuit']['distinct_targets']} distinct, "
+                   f"max share {report['raider_pursuit']['maximum_target_share_permille']}‰; "
+                   f"uncommitted {len(report['raider_pursuit']['uncommitted_selection_event_ids'])}, "
+                   f"unresolved {len(report['raider_pursuit']['unresolved_selection_event_ids'])}",
+                   f"- Merchant loss incidents with a linked encounter ancestor: "
                   f"{sum(row['cause_resolved'] for row in report['merchant_loss_incidents'])}/"
                   f"{len(report['merchant_loss_incidents'])}",
                   f"- Character deaths by cause: `{json.dumps(report['character_deaths_by_cause'], sort_keys=True)}`",

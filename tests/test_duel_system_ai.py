@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from pirates.duel_system.ai import choose_action, observe, score_actions
-from pirates.duel_system.engine import Choice, commit_action
+from pirates.duel_system.ai import choose_action, movement_choice, observe, score_actions
+from pirates.duel_system.engine import Choice, advance_one_tick, commit_action, movement_path
 from pirates.duel_system.model import (ActionKind, ActiveAction, CombatState, EventType,
                                        Phase, Personality, Severity, Wound, Zone)
 from pirates.duel_system.stats import effective_stats
@@ -126,15 +126,71 @@ def test_ai_prioritizes_shove_of_witnessed_unsteady_opponent_into_open_tile():
     assert any(name == "I5_SHOVE_SPACE" and value > 0 for name, value in shove.reasons)
 
 
-def test_zone_preference_uses_fixed_accuracy_exposure_and_phase():
+def test_opposed_closing_walkers_choose_distinct_flanks_and_both_advance():
+    state = arena()
+    player, ronin = state.fighters
+    player.pos, ronin.pos = (5, 3), (7, 3)
+    player_walk = movement_choice(state, player, ActionKind.WALK, toward=True)
+    ronin_walk = movement_choice(state, ronin, ActionKind.WALK, toward=True)
+    assert player_walk is not None and ronin_walk is not None
+    player_destination = movement_path(state, player, player_walk)[-1]
+    ronin_destination = movement_path(state, ronin, ronin_walk)[-1]
+    assert player_destination != ronin_destination
+    assert max(abs(player_destination[0] - ronin_destination[0]),
+               abs(player_destination[1] - ronin_destination[1])) == 1
+
+    commit_action(state, player.id, player_walk)
+    commit_action(state, ronin.id, ronin_walk)
+    for _ in range(10):
+        advance_one_tick(state)
+    assert player.pos == player_destination
+    assert ronin.pos == ronin_destination
+
+
+def test_accuracy_does_not_gate_ai_zone_choice_on_a_witnessed_opening():
+    low = scenario(gap=0)
+    high = low.clone()
+    low.fighter("player").stagger_until = low.tick + 20
+    high.fighter("player").stagger_until = high.tick + 20
+    low.fighter("ronin").accuracy = 10
+    high.fighter("ronin").accuracy = 16
+
+    low_light = next(item for item in score_actions(low, "ronin") if item.category == "LIGHT")
+    high_light = next(item for item in score_actions(high, "ronin") if item.category == "LIGHT")
+    assert low_light.choice.aim == high_light.choice.aim == Zone.HEAD
+    assert effective_stats(low.fighter("ronin"), low.config, low.tick).accuracy == 10
+    assert effective_stats(high.fighter("ronin"), high.config, high.tick).accuracy == 16
+
+
+def test_zone_preference_uses_exposure_and_phase_not_accuracy_thresholds():
     recovering = scenario(phase="RECOVERY", remaining=12)
     recovering.fighters[1].accuracy = 25
     assert choose_action(recovering, "ronin").choice.aim == Zone.HAND
     guarding = scenario(phase="GUARD_HOLD", remaining=30, anger=50)
-    guarding.fighters[1].accuracy = 20  # covered hand's extra requirement still blocks that target
+    guarding.fighters[1].accuracy = 20  # Accuracy does not turn the covered hand into a legal target.
     assert choose_action(guarding, "ronin").choice.aim == Zone.LEG
     idle = scenario()
     assert choose_action(idle, "ronin").choice.aim == Zone.TORSO
+
+
+def test_authored_profiles_choose_distinct_responses_to_a_visible_light_commitment():
+    state = scenario(phase="WINDUP_L", remaining=8)
+    fighter = state.fighter("ronin")
+    base = deepcopy(state.config["ronin"])
+    observed = {}
+
+    for profile_name in ("brute", "aggressor", "veteran", "counterfighter", "recruit", "bully"):
+        profile = deepcopy(base)
+        profile.update(deepcopy(state.config["ai_profiles"][profile_name]))
+        fighter.personality = Personality(**profile)
+        observed[profile_name] = choose_action(state, fighter.id).category
+
+    assert observed["veteran"] == "GUARD"
+    assert observed["counterfighter"] == "GUARD"
+    assert observed["recruit"] == "GUARD"
+    assert observed["aggressor"] == "LIGHT"
+    assert observed["brute"] == "LIGHT"
+    assert observed["bully"] == "HEAVY"
 
 
 def test_candidates_never_dash_when_exhausted_or_plan_into_walls():

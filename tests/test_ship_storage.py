@@ -3,7 +3,8 @@ import json
 import pytest
 
 from pirates.game import World
-from pirates.ship_storage import HAUL_CAPACITY_KG, bundle_mass, queue_transfer
+from pirates.ship_storage import (HAUL_CAPACITY_KG, RESOURCES, STOCK_FILTER_PROFILES,
+                                  bundle_mass, queue_transfer)
 from pirates.management import storage_menu
 
 
@@ -150,6 +151,122 @@ def test_transfer_capacity_and_weight_limits():
     assert bundle_mass({"shot": 2}) == 10
 
 
+def test_transfer_source_reservations_reduce_the_quantity_available_for_new_orders():
+    world, _, destination = storage_world()
+    storage = world.ship.storage
+    source = storage.piles["hold"]
+    source.contents["shot"] = 10
+    available_before = storage.available_quantity("hold", "shot", world.ship.jobs)
+    first = queue_transfer(world, "hold", destination.id, {"shot": 1})
+    assert storage.available_quantity("hold", "shot", world.ship.jobs) == available_before - 1
+    with pytest.raises(ValueError, match="unreserved"):
+        queue_transfer(world, "hold", destination.id, {"shot": available_before})
+    assert first.state == "pending"
+    assert source.contents["shot"] == available_before
+
+
+def test_transfer_reserves_room_for_a_cancelled_job_to_return_its_carried_stock():
+    world, sailor, source = storage_world()
+    job = world.ship.add_job("test:return", "repair", world.ship.stations["repair"], work=100)
+    until(world, lambda: bool(sailor.cargo))
+    assert sailor.cargo == {"planks": 1}
+    world.ship.cancel(job.id)
+    assert job.state == "returning"
+
+    hold = world.ship.storage.piles["hold"]
+    hold.capacity_kg = bundle_mass(hold.contents) + 20
+    source.contents["shot"] = 1
+    with pytest.raises(ValueError, match="capacity"):
+        queue_transfer(world, source.id, "hold", {"shot": 1})
+    assert not any(j.transfer and j.transfer["destination"] == "hold"
+                   for j in world.ship.jobs)
+    assert world.ship.check_orders() == []
+
+
+def test_legacy_overbooked_return_waits_without_losing_carried_stock():
+    world, sailor, _ = storage_world()
+    original = world.ship.storage.piles["hold"].contents.copy()
+    job = world.ship.add_job("test:return", "repair", world.ship.stations["repair"], work=100)
+    until(world, lambda: bool(sailor.cargo))
+    world.ship.cancel(job.id)
+    hold = world.ship.storage.piles["hold"]
+    hold.capacity_kg = bundle_mass(hold.contents) + 19
+    world.advance(100)
+    assert job.state == "returning"
+    assert sailor.cargo == {"planks": 1}
+    available = original.copy()
+    available["planks"] -= 1
+    assert hold.contents == available
+    assert "return capacity" in job.reason
+
+    hold.capacity_kg += 1
+    until(world, lambda: job.state == "cancelled")
+    assert hold.contents == original
+    assert not sailor.cargo
+
+
+def test_filters_priorities_and_policy_survive_save_and_load(tmp_path):
+    world, sailor, pile = storage_world()
+    storage = world.ship.storage
+    storage.configure(pile.id, filters=STOCK_FILTER_PROFILES["Construction materials"],
+                      priority=1, jobs=world.ship.jobs)
+    path = tmp_path / "filtered-stock.json"
+    world.save(path)
+    restored = World.load(path)
+    restored_pile = restored.ship.storage.piles[pile.id]
+    assert restored_pile.filters == ["planks"]
+    assert restored_pile.priority == 1
+    with pytest.raises(ValueError, match="filter rejects"):
+        queue_transfer(restored, "hold", pile.id, {"shot": 1})
+    job = queue_transfer(restored, "hold", pile.id, {"planks": 1})
+    path = tmp_path / "filtered-transfer.json"
+    restored.save(path)
+    restored = World.load(path)
+    job = restored.ship.job(job.id)
+    with pytest.raises(ValueError, match="active transfer"):
+        restored.ship.storage.configure(pile.id, filters=["shot"], jobs=restored.ship.jobs)
+    assert job.state == "pending"
+    until(restored, lambda: job.state == "done")
+    assert restored.ship.storage.piles[pile.id].contents == {"planks": 1}
+
+
+def test_high_priority_reachable_pile_is_used_before_a_nearer_lower_priority_pile():
+    world, sailor, pile = storage_world()
+    pile.contents["planks"] = 1
+    hold = world.ship.storage.piles["hold"]
+    hold.contents["planks"] = 1
+    world.ship.storage.configure(pile.id, priority=5, jobs=world.ship.jobs)
+    world.ship.storage.configure("hold", priority=1, jobs=world.ship.jobs)
+    floor_route = world.ship.path(world, sailor, world.ship.storage.position(pile.id, world.fixtures))
+    hold_route = world.ship.path(world, sailor, world.ship.storage.position("hold", world.fixtures))
+    assert floor_route is not None and hold_route is not None
+    assert len(hold_route) > len(floor_route)
+    plan = world.ship.storage.plan(world, sailor, {"planks": 1})
+    assert plan == [{"pile": "hold", "bundle": {"planks": 1},
+                     "collected": False, "returned": False}]
+    job = world.ship.add_job("test:priority", "repair", world.ship.stations["repair"], work=100)
+    world.ship.claim(world, sailor)
+    assert job.supply_plan[0]["pile"] == "hold"
+    until(world, lambda: job.phase == "work")
+    assert sailor.cargo == {"planks": 1}
+    assert world.ship.storage.piles[pile.id].contents["planks"] == 1
+
+
+def test_pre_filter_stockpile_save_migrates_to_all_resources_and_normal_priority(tmp_path):
+    world, _, pile = storage_world()
+    path = tmp_path / "old-pile-schema.json"
+    world.save(path)
+    data = json.loads(path.read_text())
+    for row in data["ship"]["stockpiles"]:
+        row.pop("filters", None)
+        row.pop("priority", None)
+    path.write_text(json.dumps(data))
+    restored = World.load(path)
+    migrated = restored.ship.storage.piles[pile.id]
+    assert migrated.filters == list(RESOURCES)
+    assert migrated.priority == 3
+
+
 def test_designation_and_removal_validate_contents_and_reservations():
     world, _, pile = storage_world()
     world.ship.storage.und_designate(pile.id, world.ship.jobs)
@@ -220,7 +337,7 @@ def test_storage_menu_designates_and_transfer_ui_is_paused():
     world.player.x, world.player.y = 77, 27
 
     class Renderer:
-        choices = iter([1, 0, None])
+        choices = iter([1, 0, 3, None])
 
         def render_list(self, *args, **kwargs):
             pass
@@ -234,4 +351,107 @@ def test_storage_menu_designates_and_transfer_ui_is_paused():
     ticks = world.clock.total_ticks
     storage_menu(Renderer(), world)
     assert "pile:8,14" in world.ship.storage.piles
+    assert world.ship.storage.piles["pile:8,14"].capacity_kg == 1000
     assert world.clock.total_ticks == ticks
+
+
+def test_storage_menu_configures_filter_without_advancing_time():
+    world, _, pile = storage_world()
+
+    class Renderer:
+        choices = iter([9, 2, 0, 2, None])
+
+        def render_list(self, *args, **kwargs):
+            pass
+
+        def choose(self, count):
+            return next(self.choices)
+
+        def wait_any(self):
+            pass
+
+    ticks = world.clock.total_ticks
+    storage_menu(Renderer(), world)
+    assert pile.filters == ["planks"]
+    assert world.clock.total_ticks == ticks
+
+
+def test_storage_menu_configures_capacity_and_source_priority_without_ticking():
+    world, _, pile = storage_world()
+
+    class Renderer:
+        def __init__(self, choices):
+            self.choices = iter(choices)
+
+        def render_list(self, *args, **kwargs):
+            pass
+
+        def choose(self, count):
+            return next(self.choices)
+
+        def wait_any(self):
+            pass
+
+    ticks = world.clock.total_ticks
+    storage_menu(Renderer([9, 2, 2, 0, None]), world)
+    assert pile.capacity_kg == 100
+    storage_menu(Renderer([9, 2, 1, 0, None]), world)
+    assert pile.priority == 1
+    assert world.clock.total_ticks == ticks
+
+
+@pytest.mark.parametrize("commit", [False, True])
+def test_transfer_menu_reviews_source_destination_capacity_and_allows_free_cancel(commit):
+    world, _, pile = storage_world()
+
+    class Renderer:
+        def __init__(self):
+            self.last = None
+            self.frames = []
+            self.main_opened = False
+
+        def render_list(self, world, title, rows, footer="", **kwargs):
+            self.last = title, list(rows)
+            self.frames.append(self.last)
+
+        def choose(self, count):
+            title, rows = self.last
+            if title == "Spatial storage — location and contents matter":
+                if self.main_opened:
+                    return None
+                self.main_opened = True
+                return 3
+            if title == "Choose supply source":
+                return 0  # starter hold
+            if title == "Choose destination":
+                return 2  # designated floor pile
+            if title == "Choose resource":
+                return next(i for i, row in enumerate(rows) if row.startswith("planks:"))
+            if title == "Choose quantity":
+                return 0
+            if title == "Commit physical transfer?":
+                return 0 if commit else 1
+            raise AssertionError(f"Unexpected transfer menu: {title}")
+
+        def wait_any(self):
+            pass
+
+    renderer = Renderer()
+    ticks = world.clock.total_ticks
+    contents = {pid: dict(row.contents) for pid, row in world.ship.storage.piles.items()}
+    storage_menu(renderer, world)
+
+    review = next(rows for title, rows in renderer.frames if title == "Review physical transfer")
+    assert any(row.startswith("Source: hold | ") and " bundles unreserved" in row for row in review)
+    assert any(row.startswith(f"Destination: {pile.id} | accepts All resources") for row in review)
+    assert any("Capacity:" in row and "/ 1000 kg" in row for row in review)
+    assert any("Nothing moves until confirmed" in row for row in review)
+    assert world.clock.total_ticks == ticks
+
+    transfers = [job for job in world.ship.jobs if job.transfer and job.state not in ("done", "cancelled")]
+    if commit:
+        assert len(transfers) == 1
+        assert transfers[0].transfer["bundle"] == {"planks": 1}
+    else:
+        assert not transfers
+        assert {pid: dict(row.contents) for pid, row in world.ship.storage.piles.items()} == contents

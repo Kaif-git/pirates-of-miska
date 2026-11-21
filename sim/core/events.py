@@ -46,6 +46,66 @@ EVENT_CLASS_POLICY = {
         "class": "routine",
         "reason": "target selection is planning, not contact or loss",
     },
+    "RAIDER_INTEL_OBSERVED": {
+        "class": "routine",
+        "reason": "private observation updates an estimate; it is not a pursuit outcome",
+    },
+    "RAIDER_CHART_REVIEWED": {
+        "class": "routine",
+        "reason": "consulting a route chart updates knowledge but is not a consequence",
+    },
+    "RAIDER_PURSUIT_COMMITTED": {
+        "class": "routine",
+        "reason": "a persisted pursuit plan is intent, not contact or material loss",
+    },
+    "RAIDER_PURSUIT_RESOLVED": {
+        "class": "outcome-dependent",
+        "reason": "pursuit closure reports a terminal state; encounter consequences are classified separately",
+    },
+    "ACTOR_FORCE_SEEDED": {
+        "class": "routine",
+        "reason": "opening-force provenance records initial availability, not a simulated consequence",
+    },
+    "INJURY_RECOVERY": {
+        "class": "outcome-dependent",
+        "reason": "incremental healing is routine; documented full recovery is a persistent consequence",
+    },
+    "PRISONER_PROVISIONS_CONSUMED": {
+        "class": "routine",
+        "reason": "daily captive rations are conserved logistics, not a fate outcome",
+    },
+    "PRISONER_REVIEWED": {
+        "class": "routine",
+        "reason": "bounded custody review records obligation status without forcing a fate",
+    },
+    "RANSOM_DEMANDED": {
+        "class": "routine",
+        "reason": "a demand is an unresolved offer/obligation, not a completed transfer or release",
+    },
+    "PRISONER_ESCAPE_ATTEMPT": {
+        "class": "outcome-dependent",
+        "reason": "failed escape attempts are routine; successful custody termination is narrative",
+    },
+    "SHIP_SUPPLIES_LOST": {
+        "class": "narrative",
+        "reason": "weather removes finite provisions and records the conserved goods sink",
+    },
+    "DISEASE_CASE": {
+        "class": "narrative",
+        "reason": "an outbreak causes a named person-level illness with an injury follow-up",
+    },
+    "MERCHANT_ACTIVITY_BLOCKED": {
+        "class": "routine",
+        "reason": "bounded route review records an unresolved economic blocker without inventing trade",
+    },
+    "MERCHANT_CLOSED": {
+        "class": "structural",
+        "reason": "a causal title transfer terminates the firm while its assets remain accounted",
+    },
+    "PUBLIC_RENOWN_EARNED": {
+        "class": "narrative",
+        "reason": "a verified deed receives bounded public recognition without changing ability",
+    },
     "RUMOR_SHARED": {
         "class": "outcome-dependent",
         "reason": "undistorted confidence propagation is routine; actual distortion is narrative",
@@ -74,6 +134,12 @@ def classify_event(event_type: str, data: Mapping[str, Any],
                             and data.get("value") != data.get("original_value"))
         return (("narrative", None) if actual_distortion
                 else ("routine", "undistorted_rumor"))
+    if event_type == "RAIDER_PURSUIT_RESOLVED":
+        return "routine", "pursuit_terminal_status"
+    if event_type == "INJURY_RECOVERY":
+        return ("narrative", None) if data.get("recovered") else ("routine", "injury_healing_step")
+    if event_type == "PRISONER_ESCAPE_ATTEMPT":
+        return ("narrative", None) if data.get("escaped") else ("routine", "escape_attempt_failed")
     policy = EVENT_CLASS_POLICY.get(event_type)
     if policy is not None and policy["class"] in _EVENT_CLASSES:
         return policy["class"], event_type

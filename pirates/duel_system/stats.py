@@ -31,9 +31,24 @@ def weapon_edge(fighter, config):
 
 
 def fear(fighter, config):
+    """Current fight fear pool, seeded from confidence and changed by lived events."""
+    return clamp(fighter.fear_meter, 0, config["defaults"]["pool_max"])
+
+
+def legacy_fear_pressure(fighter, config):
+    """Old morale-derived fear retained only for unchanged NPC choice thresholds."""
     rule = config["fear"]
     return clamp((rule["morale_center"] - fighter.morale) * rule["morale_scale"]
                  - rule["anger_offset"] * fighter.anger, 0, config["defaults"]["pool_max"])
+
+
+def pain_burden(fighter, config, *, tolerance=None):
+    """Pain after authored tolerance; raw pain remains intact for wounds/UI."""
+    if tolerance is None:
+        tolerance = (fighter.personality.pain_tolerance if fighter.personality
+                     else config["defaults"]["pain_tolerance"])
+    suppression = config["stats"]["pain_tolerance_suppression"]
+    return fighter.pain * (1 - tolerance * suppression)
 
 
 def fatigue_penalty(fighter, config):
@@ -45,14 +60,13 @@ def fatigue_penalty(fighter, config):
     return clamp(x * k * rule["pen_scale"], 0, rule["pen_cap"])
 
 
-def effective_stats(fighter, config, tick=0):
+def effective_stats(fighter, config, tick=0, *, pain_tolerance=None):
     pool = config["defaults"]["pool_max"]
     rule, blood_rule, gear = config["stats"], config["blood"], config["gear"]
     lvl = level_multiplier(fighter, config)
     endurance = fighter.endurance * lvl
     fatigue = fatigue_penalty(fighter, config)
-    pain_eff = fighter.pain * (1 - min(config["anger"]["pain_suppress_cap"],
-                                     fighter.anger / rule["anger_pain_divisor"]))
+    pain_eff = pain_burden(fighter, config, tolerance=pain_tolerance)
     pain = clamp(pain_eff / pool, 0, 1) * max(rule["pain_floor"], rule["pain_base"]
                                               - endurance / config["fatigue"]["endurance_divisor"])
     if fighter.adrenaline_until_tick is not None and tick < fighter.adrenaline_until_tick:
@@ -66,6 +80,7 @@ def effective_stats(fighter, config, tick=0):
         blood = (blood_rule["penalty_first"] + (blood_rule["penalty_mid"] - fighter.blood)
                  / blood_rule["penalty_mid"] * blood_rule["penalty_last"])
     anger = fighter.anger / pool
+    fear_ratio = fear(fighter, config) / pool
     exhaustion = config["stamina"]["exhaust_mult"] if fighter.exhausted else 1
     speed_status = strength_status = 1
     for status in fighter.statuses:
@@ -75,17 +90,19 @@ def effective_stats(fighter, config, tick=0):
     gear_speed = max(gear["speed_floor"], 1 - gear["speed_per_weight"] * fighter.equipment.total_weight)
     weapon_speed = fighter.equipment.weapon.speed_mod if fighter.equipment.weapon is not None else 1
     speed = (fighter.speed * lvl * (1-rule["fatigue_speed"]*fatigue)
-             * (1-rule["pain_speed"]*pain) * (1-blood)
-             * (1+config["anger"]["spd_bonus"]*anger) * speed_status * exhaustion
+              * (1-rule["pain_speed"]*pain) * (1-blood)
+              * (1-rule["fear_speed"]*fear_ratio)
+              * (1+config["anger"]["spd_bonus"]*anger) * speed_status * exhaustion
               * gear_speed * weapon_speed)
     strength = (fighter.strength * lvl * (1-rule["fatigue_strength"]*fatigue)
-                * (1-rule["pain_strength"]*pain) * (1-blood)
-                * (1+config["anger"]["str_bonus"]*anger) * strength_status * exhaustion)
-    # Accuracy is authored permanent skill. Physical condition changes timing,
-    # force and available actions; it never rewrites this stat.
+                 * (1-rule["pain_strength"]*pain) * (1-blood)
+                 * (1+config["anger"]["str_bonus"]*anger) * strength_status * exhaustion)
+    accuracy = (fighter.accuracy
+                * (1 - rule["fear_accuracy"] * fear_ratio)
+                * (1 - config["anger"]["acc_penalty"] * anger))
     return EffStats(max(fighter.speed * rule["floor_pct"], speed),
                     max(fighter.strength * rule["floor_pct"], strength),
-                    fighter.accuracy, endurance, fatigue, pain, blood)
+                    max(fighter.accuracy * rule["floor_pct"], accuracy), endurance, fatigue, pain, blood)
 
 
 def phase_ticks(base, speed, config, *, recovery_weight=0):

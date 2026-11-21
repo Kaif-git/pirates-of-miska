@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+import tcod.event
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "engine")]
@@ -13,7 +14,14 @@ from tcod.event import KeySym
 import play
 from pirates.duel_system.engine import check_end_conditions
 from pirates.duel_system.session import DuelSession
-from pirates.duel_ui import DuelUI, GameDuelDisplay
+from pirates.duel_ui import DuelUI, GameDuelDisplay, run_sword_duel
+
+
+def force_clean_aims(config):
+    """Keep mechanics-coverage captures independent of production aim rolls."""
+    config["accuracy"]["aim_dispersion"].update(
+        clean_base=1, per_accuracy=0, difficulty_penalty=0,
+        clean_min=1, clean_max=1, drift_share=0)
 
 
 def main():
@@ -36,8 +44,7 @@ def main():
             model = ui.model()
             before = ui.session.state.to_data()
             display.rounds, display.message, display.round_result = ui.rounds, ui.message, ui.round_result
-            display.round_summary, display.round_assessment, display.stat_enemy = (
-                ui.round_summary, ui.round_assessment, ui.stat_enemy)
+            display.round_summary, display.stat_enemy = ui.round_summary, ui.stat_enemy
             display.coach_enabled = ui.coach_enabled
             display.selected_distance = f"{ui.tiles} tile" + ("s" if ui.tiles != 1 else "") if ui.panel == "direction" else ""
             display.draw(renderer, model, ui.sidebar_rows(model), present=False)
@@ -49,7 +56,9 @@ def main():
             mx, my, tw, th = display.map_rect
             if not display.reading_modal:
                 for pos in (model.player_pos, model.enemy_pos):
-                    assert display.tile_at((mx+(pos[0]+.5)*tw, my+(pos[1]+.5)*th)) == pos
+                    observed = display.tile_at((mx+(pos[0]+.5)*tw, my+(pos[1]+.5)*th))
+                    assert observed == pos, (name, pos, observed, model.player_pos,
+                                             model.enemy_pos, display.map_rect)
             Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(args.output / f"{name}.png")
             renderer.context.sdl_renderer.present()
             frames.append(dict(name=name, size=[width, height], tick=model.tick,
@@ -63,11 +72,135 @@ def main():
             display.hover_action = None
             display.scroll = 0
 
+        from pirates.duel_system.model import Severity, Wound, Zone
+        entry_npc_actions = []
         for size in ((1280, 800), (960, 700), (640, 600)):
             window.size = size
             prefix = str(size[0])
+            # Exercise the real fresh-duel launch loop with native modal input:
+            # select a distinct profile, enter the dashboard, then pause. This
+            # checks the live launch/session/journal boundary, not just the
+            # picker helper or a manually constructed DuelUI.
+            profile_index = {1280: 2, 960: 3, 640: 1}[size[0]]
+            launch_world = play.World()
+            campaign_tick = launch_world.clock.total_ticks
+            launch_events = [
+                [tcod.event.KeyDown(timestamp_ns=0, scancode=tcod.event.Scancode.DOWN,
+                                    sym=KeySym.DOWN, mod=tcod.event.Modifier.NONE)
+                 for _ in range(profile_index)]
+                + [tcod.event.KeyDown(timestamp_ns=0, scancode=tcod.event.Scancode.RETURN,
+                                      sym=KeySym.RETURN, mod=tcod.event.Modifier.NONE)],
+                [tcod.event.KeyDown(timestamp_ns=0, scancode=tcod.event.Scancode.J,
+                                    sym=KeySym.J, mod=tcod.event.Modifier.NONE)],
+                [tcod.event.KeyDown(timestamp_ns=0, scancode=tcod.event.Scancode.T,
+                                    sym=KeySym.T, mod=tcod.event.Modifier.NONE)],
+                [tcod.event.KeyDown(timestamp_ns=0, scancode=tcod.event.Scancode.RETURN,
+                                    sym=KeySym.RETURN, mod=tcod.event.Modifier.NONE)],
+                [tcod.event.KeyDown(timestamp_ns=0, scancode=tcod.event.Scancode.ESCAPE,
+                                    sym=KeySym.ESCAPE, mod=tcod.event.Modifier.NONE)],
+            ]
+            original_wait = tcod.event.wait
+            tcod.event.wait = lambda *_args, **_kwargs: launch_events.pop(0)
+            try:
+                assert run_sword_duel(renderer, launch_world) == "paused"
+            finally:
+                tcod.event.wait = original_wait
+            resumed = DuelSession.from_data(launch_world.duel_journal)
+            expected_profile = ("veteran", "counterfighter", "aggressor")[
+                {1280: 0, 960: 1, 640: 2}[size[0]]]
+            assert resumed.enemy.personality.archetype == expected_profile
+            assert launch_world.clock.total_ticks == campaign_tick
+            assert not launch_events
+            npc_commits = [event for event in resumed.state.event_log
+                           if event.type.value == "ACTION_START" and event.actor == resumed.enemy.id]
+            player_commits = [event for event in resumed.state.event_log
+                              if event.type.value == "ACTION_START" and event.actor == resumed.player.id]
+            assert len(player_commits) == len(npc_commits) == 1
+            assert player_commits[0].deltas["kind"] == "DASH_LIGHT"
+            entry_npc_actions.append(npc_commits[0].deltas["kind"])
+            Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(
+                args.output / f"{prefix}-00-played-{expected_profile}-{npc_commits[0].deltas['kind'].lower()}.png")
+
+            renderer.render_list(
+                world, "Choose your sword-duel opponent",
+                ["Brute — presses forward and attacks directly",
+                 "Aggressor — fast, assertive pressure",
+                 "Veteran — patient, disciplined choices",
+                 "Counterfighter — guards and punishes openings",
+                 "Recruit — cautious and easier to unsettle",
+                 "Bully — confident, forceful attacks"],
+                "Standalone practice duel; campaign clock pauses. Esc cancels without campaign changes.")
+            renderer._present_layers()
+            Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(
+                args.output / f"{prefix}-00-opponent-picker.png")
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            cut_rate = ui.session.state.config["wounds"]["TORSO"]["CUT"]["bleed"]
+            ui.session.player.wounds = [Wound(Zone.TORSO, Severity.CUT, cut_rate)]
+            ui.session.enemy.wounds = [Wound(Zone.EYE, Severity.GRAZE, 0)]
+            injury_model = ui.model()
+            assert f"continuing bleed {cut_rate:g}/turn" in " ".join(injury_model.player_injury_rows)
+            assert "eye" in " ".join(injury_model.enemy_injury_rows).lower()
+            capture(prefix+"-01-injury-ledger")
             ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
             capture(prefix+"-01-ready")
+            click("Dash+Light")
+            assert ui.panel == "zones" and "approach path is automatic" in ui.message.lower()
+            capture(prefix+"-01-dash-light-target-zone")
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            ui.session.player.pos, ui.session.enemy.pos = (4, 3), (5, 3)
+            ui._model_cache = None
+            slash_option = next(option for option in ui.model().actions
+                                if option.label == "Dash+Slash")
+            assert slash_option.enabled
+            capture(prefix+"-01-dash-slash-ready")
+            click("Dash+Slash")
+            assert ui.panel == "direction"
+            capture(prefix+"-01-dash-slash-direction")
+            click("N")
+            assert ui.panel == "zones" and "retreat/lateral step" in ui.message
+            capture(prefix+"-01-dash-slash-zone")
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            ui.session.player.pos, ui.session.enemy.pos = (4, 3), (5, 3)
+            ui._model_cache = None
+            display.hover_action = "Feint"
+            capture(prefix+"-01-feint-range-explanation")
+            display.hover_action = None
+            click("Disengage")
+            assert ui.panel == "direction" and "strictly increases distance" in ui.message
+            capture(prefix+"-01-disengage-direction")
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            from pirates.duel_system.engine import Choice, advance_one_tick, commit_action
+            from pirates.duel_system.exchange_log import format_exchange, summarize_exchange
+            from pirates.duel_system.model import ActionKind, EventType
+            clash_session = DuelSession.new(guide_mode="off")
+            clash_session.player.pos, clash_session.enemy.pos = (4, 3), (5, 3)
+            p_action = commit_action(
+                clash_session.state, clash_session.player.id,
+                Choice(ActionKind.LIGHT, Zone.TORSO, target_id=clash_session.enemy.id))
+            commit_action(
+                clash_session.state, clash_session.enemy.id,
+                Choice(ActionKind.LIGHT, Zone.TORSO, target_id=clash_session.player.id))
+            while (clash_session.state.tick < p_action.strike_tick
+                   and not clash_session.state.end_reason):
+                advance_one_tick(clash_session.state)
+            assert any(event.type == EventType.CLASH for event in clash_session.state.event_log)
+            ui = DuelUI(clash_session, rounds=True)
+            names = {clash_session.player.id: "You", clash_session.enemy.id: clash_session.enemy.name}
+            ui.round_result = format_exchange(clash_session.state.event_log, names)
+            ui.round_summary = summarize_exchange(clash_session.state.event_log, names)
+            assert any("weapon paths intersected" in line for line in ui.round_result)
+            capture(prefix+"-01-blade-clash")
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            ui.session.player.pos = (4, 3)
+            ui.session.enemy.pos = (5, 3)
+            ui._model_cache = None
+            shove_option = next(option for option in ui.model().actions if option.label == "Shove")
+            assert "shove contest t" in shove_option.details.lower()
+            assert "same-tick strikes land first" in shove_option.details.lower()
+            display.hover_action = "Shove"
+            capture(prefix+"-01-shove-windup-preview")
+            display.hover_action = None
+            capture(prefix+"-01-shove-preview-closed")
             anchors = {key: display.layout[key] for key in ("arena", "info", "controls")}
             builds = (display.terrain_builds, display.dashboard_builds)
             capture(prefix+"-01-cached")
@@ -81,7 +214,13 @@ def main():
             capture(prefix+'-01-strategy-closed')
             assert anchors == {key: display.layout[key] for key in anchors}
             click("Light")
+            zone_forecasts = [option.forecast for option in ui.model().zones if option.forecast]
+            assert len(zone_forecasts) >= 5 and all("wound force" in forecast and "zone-protection points" in forecast
+                                          for forecast in zone_forecasts)
             capture(prefix+"-02-target")
+            display.scroll = display.max_scroll
+            capture(prefix+"-02-target-forecast-scroll")
+            display.scroll = 0
             click("Torso")
             assert len(ui.session.inputs) == 1
             assert len([e for e in ui.session.state.event_log if e.type.value == "ACTION_START"]) == 2
@@ -89,14 +228,17 @@ def main():
             assert anchors == {key: display.layout[key] for key in anchors}, "Result moved the interface"
             assert ui.round_result[0].startswith("You chose:")
             assert ui.round_result[1].startswith("Ronin chose:")
-            assert "Why:" in " ".join(ui.round_result)
+            assert ("Why:" in " ".join(ui.round_result)
+                    or "both body strikes were stopped" in " ".join(ui.round_result)), ui.round_result
             display.scroll = 5
             capture(prefix+"-03-explained-scroll")
             display.scroll = 0
             click("Details")
             capture(prefix+"-03-details")
             assert display.reading_modal
-            assert anchors == {key: display.layout[key] for key in anchors}
+            mx, my, mw, mh = display.modal_rect
+            assert mw > 0 and mh > 0 and 0 <= mx < mx+mw <= size[0]
+            assert 0 <= my < my+mh <= size[1]
             click("Back")
             capture(prefix+"-03-details-closed")
             click("Stat:Stamina")
@@ -137,8 +279,8 @@ def main():
             display.playback = None
             ui.playback = ()
             capture(prefix+"-05-ready-again")
-            from pirates.duel_system.engine import Choice
-            from pirates.duel_system.model import ActionKind
+            from pirates.duel_system.engine import Choice, commit_action
+            from pirates.duel_system.model import ActionKind, Zone
             ui.session.enemy.pos = (ui.session.player.pos[0]+2, ui.session.player.pos[1])
             ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
             # Isolate this P0 path regression from earlier P3 shock reactions.
@@ -203,6 +345,17 @@ def main():
             ui.activate("Back")
             ui.activate("Sheet")
             capture(prefix+"-08-sheet")
+            ui.activate("Stat:Fear")
+            assert "Fear reduces effective Speed and Accuracy" in " ".join(ui.sidebar_rows(ui.model()))
+            capture(prefix+"-08-fear-stat")
+            ui.activate("Back")
+            ui.activate("Stat:Anger")
+            assert "Anger" in " ".join(ui.sidebar_rows(ui.model()))
+            capture(prefix+"-08-anger-stat")
+            ui.activate("Back")
+            ui.activate("Stat:Pain")
+            assert "Pain tolerance" in " ".join(ui.sidebar_rows(ui.model()))
+            capture(prefix+"-08-pain-stat")
             ui.activate("Back")
             display.hover_action = "Heavy"
             capture(prefix+"-09-hover")
@@ -216,6 +369,33 @@ def main():
             ui.session.player.stability = 1
             ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
             capture(prefix+"-p4-ready")
+            ui = DuelUI(DuelSession.new(seed=180 + size[0], guide_mode="off"), rounds=True)
+            ui.session.player.pos, ui.session.enemy.pos = (4, 3), (5, 3)
+            ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
+            commit_action(ui.session.state, ui.session.enemy.id,
+                          Choice(ActionKind.HEAVY, Zone.TORSO,
+                                 target_id=ui.session.player.id))
+            display.hover_action = "Defend"
+            capture(prefix+"-p4-defend-threat")
+            defend_details = next(option.details for option in ui.model().actions
+                                  if option.label == "Defend")
+            assert "Defend →" in defend_details and "Costs" in defend_details
+            display.hover_action = None
+            ui = DuelUI(DuelSession.new(seed=280 + size[0], guide_mode="off"),
+                        rounds=True)
+            ui.session.player.pos, ui.session.enemy.pos = (4, 3), (5, 3)
+            ui.session.player.speed = 40
+            commit_action(ui.session.state, ui.session.enemy.id,
+                          Choice(ActionKind.SHOVE, target_id=ui.session.player.id))
+            display.hover_action = "Defend"
+            capture(prefix+"-p4-defend-shove-dash-slash")
+            shove_defend_details = next(option.details for option in ui.model().actions
+                                        if option.label == "Defend")
+            assert "Dash+Light" in shove_defend_details and "before its t" in shove_defend_details
+            display.hover_action = None
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True, coach_enabled=True)
+            ui.session.player.stability = 1
+            ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
             click("Heavy")
             capture(prefix+"-p4-heavy-target")
             click("Torso")
@@ -228,6 +408,24 @@ def main():
             assert not ui.session.player.grounded
             assert any(event.type == EventType.RISE for event in ui.session.state.event_log)
             capture(prefix+"-p4-rise-completed")
+
+            ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            ui.session.enemy.pos = ui.session.player.pos
+            ui.session.enemy.stability = 0
+            ui.session.enemy.grounded = True
+            ui.session.enemy.grounded_since = ui.session.state.tick
+            from pirates.duel_scene import pile_visible_actor_indices
+            display.pile_blink_now = 0.1
+            assert pile_visible_actor_indices(ui.model().actors,
+                                              [actor.pos for actor in ui.model().actors],
+                                              display.pile_blink_now) == frozenset({0})
+            capture(prefix+"-p4-ground-pile-player")
+            display.pile_blink_now = 0.4
+            assert pile_visible_actor_indices(ui.model().actors,
+                                              [actor.pos for actor in ui.model().actors],
+                                              display.pile_blink_now) == frozenset({1})
+            capture(prefix+"-p4-ground-pile-opponent")
+            display.pile_blink_now = None
 
             # P5: native tactical menu, threshold disclosure, preview and the
             # complete adrenaline activate→expire lifecycle.
@@ -313,7 +511,7 @@ def main():
             ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
             ui.session.player.strength, ui.session.player.accuracy = 50, 100
             ui.session.player.equipment.weapon.damage_type = "PIERCING"
-            ui.session.state.config["accuracy"]["jitter"] = 0
+            force_clean_aims(ui.session.state.config)
             ui.session.enemy.pos = (ui.session.player.pos[0]+1, ui.session.player.pos[1])
             ui.activate("Heavy")
             capture(prefix+"-p6-eye-target")
@@ -321,17 +519,63 @@ def main():
             click("Eye")
             assert ui.session.enemy.permanent_injuries.eyes_damaged == 1
             assert any(event.type == EventType.EYE_INJURY for event in ui.session.state.event_log)
+            reflex = next(event for event in ui.session.state.event_log
+                          if event.type == EventType.INJURY_RESPONSE)
+            assert reflex.deltas["response"] in {"FLINCH", "RECOIL"}
+            assert reflex.deltas["to_pos"] != reflex.deltas["from_pos"]
+            assert "forced back 1 tile (injury reflex)" in " ".join(ui.round_summary)
+            assert any(popup.text == "Back 1 tile" and popup.big for popup in ui.model().popups)
             capture(prefix+"-p6-eye-injury")
+            if display.max_scroll:
+                display.scroll = display.max_scroll
+                capture(prefix+"-p6-eye-injury-scrolled")
+                display.scroll = 0
+            click("Details")
+            assert ui.panel == "details"
+            capture(prefix+"-p6-eye-injury-details")
+            click("Back")
+            capture(prefix+"-p6-eye-injury-details-closed")
             click("More")
             capture(prefix+"-p6-eye-more")
             click("Log")
             capture(prefix+"-p6-eye-recap")
 
-            ui = DuelUI(DuelSession.new(seed=800 + size[0], guide_mode="off"), rounds=True)
+            # Repeat the user's low-damage eye-contact loop through the real
+            # dashboard controls. Bound the arena so recoil braces at the edge
+            # and the fighters remain in range for the second chosen strike.
+            ui = DuelUI(DuelSession.new(seed=900 + size[0], guide_mode="off"), rounds=True)
+            ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
+            player, enemy = ui.session.player, ui.session.enemy
+            enemy.pos = (player.pos[0]+1, player.pos[1])
+            ui.session.state.walkable = {player.pos, enemy.pos}
+            player.accuracy = 100
+            force_clean_aims(ui.session.state.config)
+            capture(prefix+"-p6-repeat-eye-ready")
+            for attempt, expected_meter in ((1, 14), (2, 4)):
+                click("Light")
+                assert ui.panel == "zones"
+                capture(prefix+f"-p6-repeat-eye-{attempt}-target")
+                click("Eye")
+                if attempt == 1:
+                    assert enemy.permanent_injuries.eye_trauma == expected_meter
+                    assert enemy.permanent_injuries.eyes_damaged == 0
+                    assert "14/24 points" in " ".join(ui.round_summary)
+                    assert "bleeding 0.5 blood/turn" in " ".join(ui.round_summary)
+                else:
+                    assert enemy.permanent_injuries.eyes_damaged == 1
+                    assert enemy.permanent_injuries.eye_trauma == expected_meter
+                    assert any(event.type == EventType.EYE_INJURY
+                               for event in ui.session.state.event_log)
+                    assert "Eye trauma reached 24" in " ".join(ui.round_summary)
+                    assert "4 points carry toward the next eye" in " ".join(ui.round_summary)
+                capture(prefix+f"-p6-repeat-eye-{attempt}")
+
+            ui = DuelUI(DuelSession.new(seed=7, guide_mode="off"), rounds=True)
             ui.session._npc_choice = lambda: Choice(ActionKind.WAIT)
             ui.session.player.strength, ui.session.player.accuracy = 100, 100
             ui.session.player.equipment.weapon.damage_type = "CUTTING"
-            ui.session.state.config["accuracy"]["jitter"] = 0
+            force_clean_aims(ui.session.state.config)
+            ui.session.state.config["anatomy_sites"]["HEAD"] = ["NECK"]
             ui.session.enemy.pos = (ui.session.player.pos[0]+1, ui.session.player.pos[1])
             ui.activate("Heavy")
             capture(prefix+"-p6-death-target")
@@ -341,7 +585,9 @@ def main():
             labels = [popup.text for popup in ui.model().popups]
             assert labels.count("DEATH — decapitation") == 1 and len(labels) == 1, labels
             capture(prefix+"-p6-death")
-        # Controlled light/light trade: verify both impact numbers and effects.
+        assert len(set(entry_npc_actions)) >= 2, entry_npc_actions
+        # Controlled Light/Light exchange now exercises the same-line clash
+        # rule and its public recap, without damage-trade arithmetic.
         from pirates.duel_system.model import Zone
         window.size = (1280, 800)
         ui = DuelUI(DuelSession.new(guide_mode='off'), rounds=True, coach_enabled=True)
@@ -350,17 +596,20 @@ def main():
         ui.activate('Light')
         ui.activate('Torso')
         display.playback = None
-        capture('trade-light-light-recap')
-        assert 'You 14.0 cut' in ui.round_summary[3] and 'deep ≥ 16' in ui.round_summary[3]
+        capture('consequence-light-light-recap')
+        recap = " ".join(ui.round_summary).lower()
+        assert "you: light" in recap and "ronin: light" in recap
+        assert "weapon paths clashed" in recap and "effects:" in recap
+        assert not any(token in recap for token in ("net damage", "damage trade", "power"))
+        if "wound force" in recap:
+            assert "zone protection" in recap
         ui.session.player.fatigue = 75
-        capture('trade-fatigue-consequences')
+        capture('consequence-fatigue')
         ui.activate('Strategy')
-        capture('trade-strategy-condition')
+        capture('consequence-strategy-condition')
         (args.output / "verification.json").write_text(json.dumps(frames, indent=2), encoding="utf-8")
         # Exercise the actual modal dispatch: premature combat input is ignored
         # during playback, then the next normal movement action animates.
-        import tcod.event
-        from pirates.duel_ui import run_sword_duel
         window.size = (640, 600)
         original_world = (world.game_map, world.player.x, world.player.y, world.clock.total_ticks)
         world.duel_journal = DuelSession.new(guide_mode="off").to_data()

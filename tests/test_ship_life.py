@@ -85,6 +85,38 @@ def test_galley_job_explains_finite_ingredient_to_meal_conversion():
     assert "3.00 kg Grain porridge" in job_explanation(world, job)
 
 
+def test_assigned_cook_physically_hauls_finite_recipe_and_completes_real_batch():
+    world = quiet_world()
+    ship = world.ship
+    for job in list(ship.jobs):
+        ship.cancel(job.id)
+    disable_all(ship)
+    cook = ship.crew[0]
+    ship.set_labor(cook.id, "cook", 1)
+    ship.stores["grain_g"] = 2000
+    ship.stores["clean_water_ml"] = 30000
+    grain_before = ship.stores["grain_g"]
+    water_before = ship.stores["clean_water_ml"]
+    skill_before = cook.skills["cook"]
+    job = ship.queue_galley_once("grain_porridge")
+    observed_carried_recipe = False
+
+    for _ in range(3000):
+        world.advance(100)
+        observed_carried_recipe |= bool(cook.cargo)
+        if job.state == "done":
+            break
+
+    assert job.state == "done"
+    assert any(row["event"] == "completed" and row["crew"] == cook.id and row["job"] == job.id
+               for row in ship.audit)
+    assert observed_carried_recipe
+    assert ship.stores["grain_g"] == grain_before - 2000
+    assert ship.stores["clean_water_ml"] == water_before - 1000
+    assert dict(ship.cooked_food_summary())["Grain porridge"] == 3000
+    assert cook.skills["cook"] > skill_before
+
+
 def test_cooked_food_keeps_dish_identity_partial_leftovers_and_save_state(tmp_path):
     world = World()
     ship = world.ship

@@ -2,7 +2,7 @@
 import math
 
 from .model import ActionKind, EventType
-from .stats import clamp
+from .stats import clamp, pain_burden
 
 
 def balance_rating(fighter, config, tick):
@@ -17,7 +17,8 @@ def balance_rating(fighter, config, tick):
               + rule["balance_endurance_coef"] * (fighter.endurance - reference)
               - rule["balance_weight_penalty"] * fighter.equipment.total_weight
               - rule["balance_fatigue_penalty"] * fighter.fatigue
-              - rule["balance_pain_penalty"] * fighter.pain
+              - rule["balance_pain_penalty"] * pain_burden(fighter, config)
+              - config["anger"]["balance_penalty"] * fighter.anger / config["defaults"]["pool_max"]
               - leg_wounds)
     return clamp(rating, 0, 100)
 
@@ -95,7 +96,8 @@ def _turn_degrees(previous, current):
 
 def record_successful_movement(state, fighter, action):
     """Apply a turn cost only after a fast tile actually moved successfully."""
-    if action.kind not in {ActionKind.DASH, ActionKind.DASH_LIGHT, ActionKind.RUN}:
+    if action.kind not in {ActionKind.DASH, ActionKind.DASH_LIGHT, ActionKind.DASH_SLASH,
+                           ActionKind.RUN}:
         fighter.last_fast_direction = None
         fighter.last_fast_move_tick = None
         return

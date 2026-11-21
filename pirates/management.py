@@ -1,10 +1,34 @@
 """Read-only reports and explicit captain orders; browsing never advances time."""
 import time
 import tcod.event
-from pirates import sea_encounter
+from pirates import sea_encounter, sea_trade
 from pirates.ship import FOOD_RECIPES, LABORS, LABELS, TRAIT_EFFECTS
 from pirates.ship_storage import resource_quantity
+from pirates.economy import MERCHANTS, PORTS
 from pirates.voyage import SEA_NODES
+
+CONSTRUCTION_OPTIONS = (
+    "Build oak wall — 1 plank bundle, Patch hull labor",
+    "Build oak door — 1 plank bundle, Patch hull labor",
+    "Dismantle interior wall/door — Patch hull labor; no material recovery",
+    "Build connected deck floor — 1 plank bundle, Patch hull labor",
+    "Dismantle interior floor — Patch hull labor; no material recovery",
+    "Build oak beam — 1 plank bundle, Patch hull labor",
+    "Build oak pillar — 1 plank bundle, Patch hull labor",
+    "Dismantle beam/pillar — Patch hull labor; no material recovery",
+)
+CONSTRUCTION_HELP = (
+    "Uses the existing Patch hull (repair) labor. Build orders haul one plank bundle; "
+    "A manages jobs, F4 advances time."
+)
+STORAGE_OPTIONS = (
+    "Inspect stockpiles", "Designate floor stockpile beside captain",
+    "Remove empty floor stockpile beside captain", "Order physical transfer",
+    "Galley policy and emergency reserves", "Manage reusable water containers",
+    "Inspect/dispose food waste", "Bandage or wash a crew member",
+    "Light/extinguish lantern or candle", "Configure stockpile filter / priority / capacity",
+)
+STORAGE_HELP = "Reservations and carried goods are separate from available pile totals. Esc returns."
 
 
 def marks(count):
@@ -472,6 +496,8 @@ def work_rows(world):
         job = ship.job(c.job_id)
         rows += [f"{c.name}: {c.activity}", f"  Mood {c.mood_label}; energy {c.energy:.0f}; sleep debt {c.sleep_debt:.0f}",
                  f"  Claim: {'#' + str(job.id) + ' ' + ship.job_label(job) if job else 'none'}; completed {c.completed}"]
+    from pirates.provisioning import labor_coverage_rows
+    rows += ["", *labor_coverage_rows(world)]
     rows += ["", "DIRECT ORDERS / ACTIVE BOARD"]
     for job in sorted(ship.jobs, key=lambda j: (j.priority, j.id)):
         if job.state not in ("done", "cancelled"):
@@ -584,9 +610,10 @@ def sea_map_rows(world):
     voyage = world.voyages.voyage
     route = set(voyage["route"]) if voyage else set()
     sighting_reports = getattr(world.npcs, "sighting_reports", {})
-    known_ship_nodes = ({ship["id"]: ship["node"] for ship in world.npcs.ships}
-                        if world.society.mode != "generated"
-                        else {ship_id: report["node"] for ship_id, report in sighting_reports.items()})
+    authored_mvp = getattr(world, "scenario_id", None) == "lawful-trader-mvp"
+    report_only = world.society.mode == "generated" or authored_mvp
+    known_ship_nodes = ({ship_id: report["node"] for ship_id, report in sighting_reports.items()}
+                        if report_only else {ship["id"]: ship["node"] for ship in world.npcs.ships})
     visible_ships = [ship for ship in world.npcs.ships if ship["id"] in known_ship_nodes]
     fleets = set(known_ship_nodes.values())
     rows = ["SEA CHART — strategic route with provisional wind/sail force, resistance and steering.", ""]
@@ -631,7 +658,7 @@ def sea_map_rows(world):
             rows.append(f"SIGHTING: {voyage['encounter']['name']} ({voyage['encounter']['faction']}) — resume in the ship scene; combat not implemented.")
     for ship in visible_ships:
         known_node = known_ship_nodes[ship["id"]]
-        if world.society.mode == "generated":
+        if report_only:
             report = sighting_reports[ship["id"]]
             last_seen = f"last seen at {SEA_NODES[known_node]['name']} on Day {report['observed_hour'] // 24 + 1}"
         else:
@@ -650,12 +677,30 @@ def sea_map_rows(world):
             rows.append(f"  {captain['title']} {captain['name']} | {organization['name']} | {activity}")
     if world.society.mode == "generated" and not visible_ships:
         rows.append("No rival vessel positions are currently confirmed.")
-    rows += [f"Freeport captive market: {world.npcs.market['enslaved_people']} enslaved people; simulated NPC trade only."]
+    if not authored_mvp:
+        rows += [f"Freeport captive market: {world.npcs.market['enslaved_people']} enslaved people; simulated NPC trade only."]
     if world.society.mode == "generated":
         activity_rows = world.society.recent_headlines(8, public_only=True) or ["No public activity reports yet."]
         rows += ["", "RECENT PUBLIC REPORTS", *activity_rows]
     else:
         rows += ["", "RECENT RIVAL ACTIVITY", *(world.npcs.events[-8:] or ["No recorded fleet transactions yet."])]
+    if authored_mvp:
+        from tales_sim.clock import GameClock, format_duration
+
+        rows += ["", "COMMERCIAL NOTES — REMEMBERED, NOT LIVE"]
+        observations = world.economy.market_observations
+        for port_id, port in PORTS.items():
+            observed = [(mid, row) for mid, row in observations.items() if row["port"] == port_id]
+            if not observed:
+                rows.append(f"{port['name']}: no market quote observed; remote prices/stock unknown.")
+                continue
+            latest = max(row["observed_at_ticks"] for _, row in observed)
+            source_names = ", ".join(MERCHANTS[mid]["name"] for mid, row in observed
+                                      if row["observed_at_ticks"] == latest)
+            rows.append(f"{port['name']}: last inspected {source_names}, "
+                        f"{GameClock(latest).format()} "
+                        f"({format_duration(max(0, world.clock.total_ticks - latest))} ago); "
+                        "review notes for the remembered quotes.")
     rows += ["", "WORLD NEWS", *(world.society.recent_headlines(6, public_only=True)
                                    or ["No major reports yet."])]
     return rows
@@ -820,8 +865,8 @@ def crossing_request_rows(world, sighting, request):
         kind = "boarding combat handoff"
         request_id = request["request_id"]
     else:
-        outcome = ("The other captain granted permission. This is a peaceful transfer request; "
-                   "it will be honoured when the other vessel's deck can receive you.")
+        outcome = ("The other captain granted permission. This is a pending physical transfer; "
+                   "nobody moves until you confirm the reachable gangplank crossing.")
         kind = "peaceful transfer"
         request_id = request["request_id"]
     return [
@@ -830,6 +875,18 @@ def crossing_request_rows(world, sighting, request):
         outcome,
         ("Use Withdraw to cancel this peaceful transfer request." if request.get("cause") is None
          else "The handoff cannot be withdrawn here; the combat system owns the next step."),
+    ]
+
+
+def crossing_party_rows(world, deck_visit):
+    """Render the named party on the bounded peaceful NPC deck."""
+    names = {world.player.id: world.player.name}
+    names.update({sailor.id: sailor.name for sailor in world.ship.crew})
+    return [
+        "Aboard: " + ", ".join(names.get(sid, sid)
+                                  for sid in deck_visit["participants"]),
+        "Walk back across the connected gangplank, or choose Return to the Wayward.",
+        "No encounter progress resumes until every named visitor is back aboard.",
     ]
 
 
@@ -846,6 +903,9 @@ def combat_handoff_rows(world, sighting, request):
     return [
         f"Request: {request['request_id']}",
         f"Cause: {request['cause']}",
+        (f"Lawful basis: recorded evidence {request['lawful_basis_id']}"
+         if request.get("lawful_basis_id") else
+         "Lawful basis: absent (legacy requests are cancelled on load)"),
         f"Target: {sighting.get('name', request['target_id'])} ({request['target_id']}) | "
         f"range: {request['range']}",
         f"Requested action: {intent}",
@@ -941,7 +1001,9 @@ def voyage_menu(renderer, world):
             if voyage and voyage["status"] in ("underway", "encounter", "storm"):
                 panel(renderer, world, "Voyage in progress", ["Resolve or continue the current voyage first."])
                 continue
-            destinations = [key for key in SEA_NODES if key != world.voyages.position]
+            destinations = [key for key in SEA_NODES if key != world.voyages.position
+                            and (world.scenario_id != "lawful-trader-mvp"
+                                 or SEA_NODES[key].get("port") in PORTS)]
             selected = choose(renderer, world, "Choose destination; officers will review the plan", [SEA_NODES[k]["name"] for k in destinations])
             if selected is None:
                 continue
@@ -1077,8 +1139,9 @@ def voyage_menu(renderer, world):
                     world.message("No actionable event or arrival within the bounded passage horizon; the voyage remains underway.")
                 if world.voyages.voyage["status"] in ("encounter", "storm", "arrived"):
                     if world.voyages.voyage["status"] == "arrived":
-                        panel(renderer, world, "Voyage arrival report",
-                              world.voyages.arrival_report(world))
+                        if world.scenario_id != "lawful-trader-mvp":
+                            panel(renderer, world, "Voyage arrival report",
+                                  world.voyages.arrival_report(world))
                     else:
                         panel(renderer, world, "Sea chart / voyage update", sea_map_rows(world))
                 if world.voyages.voyage["status"] in ("encounter", "storm", "arrived"):
@@ -1102,16 +1165,64 @@ def voyage_menu(renderer, world):
                 panel(renderer, world, "Combat handoff pending",
                       combat_handoff_rows(world, sighting, pending_handoff))
                 continue
+            pending_trade = contact.get("trade_pending")
+            if pending_trade is not None:
+                selected = choose(
+                    renderer, world, "Pending at-sea trade quote",
+                    ["Review fixed-price quote", "Commit this transaction once",
+                     "Cancel quote without cost"],
+                    "Trade is local to this merchant/contact; commit revalidates finite stock, purse and cargo.")
+                if selected is None:
+                    continue
+                if selected == 0:
+                    panel(renderer, world, "Fixed-price quote",
+                          sea_trade.quote_rows(pending_trade))
+                elif selected == 1:
+                    try:
+                        receipt = world.voyages.commit_sea_trade(
+                            world, pending_trade["transaction_id"])
+                    except ValueError as error:
+                        panel(renderer, world, "Trade unavailable", [str(error)])
+                    else:
+                        panel(renderer, world, "Sea trade committed once", [
+                            f"Transaction {receipt['transaction_id']}",
+                            f"{'Bought' if receipt['buying'] else 'Sold'} "
+                            f"{receipt['quantity']} {receipt['item_id']} for {receipt['total']} Marks.",
+                            "Vessel stock/purse and player money/cargo were conserved; one minute passed."])
+                else:
+                    try:
+                        world.voyages.cancel_sea_trade(
+                            world, pending_trade["transaction_id"])
+                    except ValueError as error:
+                        panel(renderer, world, "Trade cancellation unavailable", [str(error)])
+                continue
             if pending_crossing:
                 selected = choose(
                     renderer, world, f"Nearby ship: {sighting.get('name', 'Unknown vessel')}",
-                    ["Review peaceful crossing request", "Withdraw the peaceful crossing request"],
-                    "A welcomed transfer awaits an NPC deck/transfer consumer; no person has moved.")
+                    ["Review peaceful crossing request",
+                     "Complete the welcomed physical crossing",
+                     "Withdraw the peaceful crossing request"],
+                    "The other captain has granted this contact's permission; review the named party before crossing.")
                 if selected is None:
                     continue
                 if selected == 0:
                     panel(renderer, world, "Peaceful crossing request",
                           crossing_request_rows(world, sighting, pending_crossing))
+                    continue
+                if selected == 1:
+                    try:
+                        visit = world.voyages.complete_peaceful_crossing(world)
+                    except ValueError as error:
+                        panel(renderer, world, "Crossing unavailable", [str(error)])
+                    else:
+                        names = {world.player.id: world.player.name}
+                        names.update({sailor.id: sailor.name for sailor in world.ship.crew})
+                        panel(renderer, world, "Crossing completed", [
+                            f"Target deck: {visit['target_id']}",
+                            "Crossed: " + ", ".join(names.get(sid, sid)
+                                                        for sid in visit["participants"]),
+                            "A reachable gangplank path was checked before moving anyone.",
+                            "Return the party to the Wayward before resuming the voyage."])
                     continue
                 try:
                     world.voyages.withdraw_crossing_request(world)
@@ -1119,12 +1230,40 @@ def voyage_menu(renderer, world):
                     panel(renderer, world, "Crossing request", [str(error)])
                 continue
 
+            deck_visit = voyage.get("deck_visit")
+            if deck_visit is not None:
+                selected = choose(
+                    renderer, world, f"Aboard {sighting.get('name', 'the other vessel')}",
+                    ["Review crossing party", "Return the visiting party to the Wayward"],
+                    "Movement is limited to the connected NPC deck and gangplank; the encounter stays reserved.")
+                if selected is None:
+                    continue
+                if selected == 0:
+                    panel(renderer, world, "Crossing party",
+                          crossing_party_rows(world, deck_visit))
+                else:
+                    try:
+                        returned = world.voyages.return_crossing_party(world)
+                    except ValueError as error:
+                        panel(renderer, world, "Return unavailable", [str(error)])
+                    else:
+                        panel(renderer, world, "Returned aboard", [
+                            f"{len(returned)} named person(s) returned to the Wayward.",
+                            "The temporary NPC deck overlay is removed when everyone is home."])
+                continue
+
             cannon_ready = any(loaded and world.ship.layout.available(key)
                                for key, loaded in world.ship.ammo.items())
-            cannon_label = ("Resume saved legacy artillery exchange"
-                            if battle and battle.get("status") == "active" else
-                            "Declare cannon-fire intent (combat handoff only)" if cannon_ready else
-                            "Cannon fire unavailable (no loaded installed cannon)")
+            if battle and battle.get("status") == "active":
+                cannon_label, cannon_action = "Resume saved legacy artillery exchange", "combat"
+            elif cannon_ready and sea_encounter.hostile_commitment_authorized(world, sighting):
+                cannon_label, cannon_action = "Declare cannon-fire intent (combat handoff only)", "combat"
+            elif cannon_ready:
+                cannon_label = "Hostile fire blocked (no witnessed attack or verified warrant)"
+                cannon_action = "hostile_blocked"
+            else:
+                cannon_label = "Cannon fire unavailable (no loaded installed cannon)"
+                cannon_action = "hostile_blocked"
             options = ["Observe the vessel and review contact state (read-only)"]
             actions = ["observe"]
             if battle and battle.get("status") == "active":
@@ -1141,15 +1280,22 @@ def voyage_menu(renderer, world):
                                 "Request to cross with named escorts",
                                 "Request to cross with everyone"]
                     actions += ["parley", "cross_alone", "cross_escorts", "cross_everyone"]
+                    if sea_encounter.threat_of(sighting) == "merchant":
+                        if contact.get("trade_offer") is None:
+                            options.append("Request a finite merchant trade offer (1 minute)")
+                            actions.append("request_trade_offer")
+                        else:
+                            options.append("Review and trade against the finite merchant offer")
+                            actions.append("sea_trade")
                 options += ["Attempt to evade and break contact (5 minutes)",
                             "Hold course and resume this route",
                             "Turn back to the nearest port",
                             cannon_label]
-                actions += ["evade", "continue", "turn_back", "combat"]
+                actions += ["evade", "continue", "turn_back", cannon_action]
             if (not (battle and battle.get("status") == "active")
                     and sighting.get("threat") != "pirates"
                     and isinstance(sighting.get("id"), str)):
-                record = world.npcs.player_contacts.get(sighting["id"])
+                record = world.npcs.contact_record_for_encounter(sighting["id"], sighting)
                 live_ship = next((ship for ship in world.npcs.ships
                                   if ship["id"] == sighting["id"]), None)
                 signaled = any(row["outcome"] == "answered" for row in contact["signals"])
@@ -1208,15 +1354,23 @@ def voyage_menu(renderer, world):
                 state = contact.get("parley") or {"topics": []}
                 available = [topic for topic in sea_encounter.PARLEY_TOPICS
                              if topic not in state["topics"]
+                             and (sea_encounter.threat_of(sighting) != "pirates"
+                                  or topic in ("warn_off", "stand_down"))
                              and (topic != "transfer_permission"
                                   or "identity" in state["topics"])]
                 if not available:
                     panel(renderer, world, "Parley exhausted",
                           ["No further close-range subjects are available."])
                     continue
+                description = (
+                    "Encounter-local only. No alliance, shared objective or lasting cooperation is created.")
+                if sea_encounter.threat_of(sighting) == "pirates":
+                    assessment = sea_encounter.pirate_risk_assessment(world, sighting)
+                    description += (
+                        f" Visible-readiness warning estimate: {assessment['warn_off_percent']}% back-down chance; "
+                        "pirate appearance never authorizes violence.")
                 selected = choose(renderer, world, "Close-range parley",
-                                  [labels[topic] for topic in available],
-                                  "Encounter-local only. No alliance, shared objective or lasting cooperation is created.")
+                                  [labels[topic] for topic in available], description)
                 if selected is None:
                     continue
                 try:
@@ -1226,6 +1380,69 @@ def voyage_menu(renderer, world):
                 else:
                     panel(renderer, world, "Parley",
                           [exchange["text"], "One minute of ship time passed."])
+            elif action == "request_trade_offer":
+                try:
+                    offer = world.voyages.request_sea_trade_offer(world)
+                except ValueError as error:
+                    panel(renderer, world, "Trade offer unavailable", [str(error)])
+                else:
+                    panel(renderer, world, "Merchant's finite offer",
+                          sea_trade.offer_rows(offer)
+                          + ["The returned offer is fixed for this contact; no other cargo is disclosed."])
+            elif action == "sea_trade":
+                offer = contact.get("trade_offer")
+                trade_choices = sea_trade.choices(offer) if offer else []
+                if not trade_choices:
+                    panel(renderer, world, "Offer exhausted",
+                          ["This contact has no remaining offered commodity quantities."])
+                    continue
+                selected = choose(
+                    renderer, world, "Finite merchant offer",
+                    [row["label"] for row in trade_choices]
+                    + ["View offer terms without trading"],
+                    "Prices and quantities are explicit; each committed order is finite and separate.")
+                if selected is None:
+                    continue
+                if selected == len(trade_choices):
+                    panel(renderer, world, "Merchant's finite offer", sea_trade.offer_rows(offer))
+                    continue
+                choice_row = trade_choices[selected]
+                quantities = list(range(1, choice_row["max_quantity"] + 1))
+                quantity_selection = choose(
+                    renderer, world, f"Quantity: {choice_row['item_id']}",
+                    [f"{quantity} × {choice_row['unit_price']} = "
+                     f"{quantity * choice_row['unit_price']} Marks" for quantity in quantities],
+                    "Choose one whole quantity; Esc cancels without a quote.")
+                if quantity_selection is None:
+                    continue
+                try:
+                    quote = world.voyages.quote_sea_trade(
+                        world, choice_row["item_id"], quantities[quantity_selection],
+                        choice_row["buying"])
+                except ValueError as error:
+                    panel(renderer, world, "Trade quote unavailable", [str(error)])
+                    continue
+                confirmed = choose(
+                    renderer, world, "Review at-sea trade before commit",
+                    ["Commit this exact transaction once", "Cancel the quote"],
+                    "Confirmation stores a retry-safe quote; no stock, money or time changes until commit.")
+                if confirmed == 0:
+                    try:
+                        receipt = world.voyages.commit_sea_trade(
+                            world, quote["transaction_id"])
+                    except ValueError as error:
+                        panel(renderer, world, "Trade unavailable", [str(error)])
+                    else:
+                        panel(renderer, world, "Sea trade committed once", [
+                            f"Transaction {receipt['transaction_id']}",
+                            f"{'Bought' if receipt['buying'] else 'Sold'} "
+                            f"{receipt['quantity']} {receipt['item_id']} for {receipt['total']} Marks.",
+                            "Vessel stock/purse and player money/cargo were conserved; one minute passed."])
+                else:
+                    try:
+                        world.voyages.cancel_sea_trade(world, quote["transaction_id"])
+                    except ValueError as error:
+                        panel(renderer, world, "Trade cancellation unavailable", [str(error)])
             elif action in ("cross_alone", "cross_everyone"):
                 mode = "alone" if action == "cross_alone" else "everyone"
                 try:
@@ -1315,6 +1532,11 @@ def voyage_menu(renderer, world):
                         f"Participants: {', '.join(request['participants'])}",
                         f"Range snapshot: {request['range']} at chart {request['position']['player_chart']}.",
                         "No shot was consumed and no damage or retaliation was resolved."])
+            elif action == "hostile_blocked":
+                panel(renderer, world, "Hostile action prohibited", [
+                    "No witnessed attack or verified warrant supports hostile commitment against this contact.",
+                    "Pirate appearance, faction colours, parley refusal and proximity are not legal evidence.",
+                    "No combat request, ammunition, cargo, crew or ship state changed."])
             elif action == "hail":
                 try:
                     world.npcs.hail_ship(world, sighting["id"])
@@ -1436,7 +1658,9 @@ def context_menu(renderer, world):
                  if abs(m.x - world.player.x) + abs(m.y - world.player.y) <= 2
                  and world.game_map.visible[m.y, m.x]]
     rows = [f"Talk with {c.name}" for c in nearby] + ["Toggle adjacent door", "Ship ledger", "Construction orders", "Room designation / report", "Relocate equipment", "Storage / hauling",
-            "Trade cargo / crew equipment", "Island guide / coastal passage"]
+            "Trade cargo / crew equipment",
+            "Island guide / sea chart" if world.scenario_id == "lawful-trader-mvp"
+            else "Island guide / coastal passage"]
     rows += [f"Talk / trade with {m.name}" for m in merchants]
     rows += ["Toggle lock on nearby door",
              "Release ship lockdown" if world.lockdown else "Engage ship lockdown"]
@@ -1493,23 +1717,42 @@ def context_menu(renderer, world):
             world.message("Traffic overlay cleared.")
 
 
+def transfer_review_rows(world, source, destination, bundle):
+    """Read-only final source, quantity and reservation disclosure before a haul is queued."""
+    from pirates.ship_storage import HAUL_CAPACITY_KG, bundle_mass, filter_profile_name
+
+    storage = world.ship.storage
+    key, quantity = next(iter(bundle.items()))
+    source_available = storage.available_quantity(source.id, key, world.ship.jobs)
+    destination_mass = bundle_mass(destination.contents)
+    inbound_reserved = storage.inbound_reserved_mass(destination.id, world.ship.jobs)
+    incoming_mass = bundle_mass(bundle)
+    free_after_reservations = max(0, destination.capacity_kg - destination_mass - inbound_reserved)
+    return [f"Source: {source.id} | {resource_quantity(key, source_available)} unreserved "
+            f"({resource_quantity(key, source.contents.get(key, 0))} physically stored)",
+            f"Destination: {destination.id} | accepts {filter_profile_name(destination.filters)}",
+            f"Transfer: {quantity} {key.replace('_g', '').replace('_ml', '').replace('_', ' ')} "
+            f"({incoming_mass:.2f} kg; crew limit {HAUL_CAPACITY_KG} kg)",
+            f"Capacity: {destination_mass:.2f} kg stored + {inbound_reserved:.2f} kg reserved "
+            f"+ {incoming_mass:.2f} kg proposed / {destination.capacity_kg} kg; "
+            f"{max(0, free_after_reservations - incoming_mass):.2f} kg remains after delivery.",
+            "Nothing moves until confirmed; cancel returns here without spending time."]
+
+
 def storage_menu(renderer, world):
     storage = world.ship.storage
     while True:
         action = choose(renderer, world, "Spatial storage — location and contents matter", [
-            "Inspect stockpiles", "Designate floor stockpile beside captain",
-            "Remove empty floor stockpile beside captain", "Order physical transfer",
-            "Galley policy and emergency reserves", "Manage reusable water containers",
-            "Inspect/dispose food waste", "Bandage or wash a crew member",
-            "Light/extinguish lantern or candle"],
-            "Reservations and carried goods are separate from available pile totals. Esc returns.")
+            *STORAGE_OPTIONS], STORAGE_HELP)
         if action is None:
             return
         if action == 0:
-            from pirates.ship_storage import bundle_mass
+            from pirates.ship_storage import bundle_mass, filter_profile_name
             rows = [f"{p.id} at {storage.position(p.id, world.fixtures)} | capacity {p.capacity_kg} kg | "
+                    f"priority P{p.priority} | accepts {filter_profile_name(p.filters)} | "
                     f"contents {', '.join(f'{key}: {resource_quantity(key, amount)}' for key, amount in p.contents.items()) or 'empty'} "
                     f"({bundle_mass(p.contents):.2f} kg) | "
+                    f"reserved incoming {storage.inbound_reserved_mass(p.id, world.ship.jobs):.2f} kg | "
                     f"available {storage.available(p.id, world.fixtures)}" for p in storage.piles.values()]
             panel(renderer, world, "Stockpile ledger", rows)
         elif action == 4:
@@ -1581,8 +1824,13 @@ def storage_menu(renderer, world):
                 if action == 1:
                     if world.ship.path(world, world.player, (*at, world.player.z)) is None:
                         raise ValueError("No reachable floor route to that deck tile")
+                    capacities = [100, 250, 500, 1000, 2500, 5000]
+                    capacity_i = choose(renderer, world, "Stockpile capacity", [f"{n} kg" for n in capacities],
+                                        "Capacity is a physical mass limit. Designation costs no time.")
+                    if capacity_i is None:
+                        continue
                     pile = storage.designate(world.ship_model, world.ship_fixtures, *at,
-                                             z=world.player.z)
+                                             capacity_kg=capacities[capacity_i], z=world.player.z)
                     world.message(f"Designated {pile.id}, capacity {pile.capacity_kg} kg. No time passed.")
                 else:
                     local_x, local_y = at[0] - 69, at[1] - 12
@@ -1595,26 +1843,36 @@ def storage_menu(renderer, world):
                 panel(renderer, world, "Stockpile blocked", [str(error)])
         elif action == 3:
             piles = list(storage.piles.values())
-            source_i = choose(renderer, world, "Choose supply source", [p.id for p in piles])
+            from pirates.ship_storage import bundle_mass, filter_profile_name
+            source_i = choose(renderer, world, "Choose supply source", [
+                f"{p.id} | P{p.priority} | {bundle_mass(p.contents):.1f}/{p.capacity_kg} kg"
+                for p in piles])
             if source_i is None:
                 continue
-            destination_i = choose(renderer, world, "Choose destination", [p.id for p in piles])
+            destination_i = choose(renderer, world, "Choose destination", [
+                f"{p.id} | accepts {filter_profile_name(p.filters)} | "
+                f"{max(0, p.capacity_kg - bundle_mass(p.contents) - storage.inbound_reserved_mass(p.id, world.ship.jobs)):.1f} kg free"
+                for p in piles])
             if destination_i is None:
                 continue
             source, destination = piles[source_i], piles[destination_i]
             if source.id == destination.id:
                 panel(renderer, world, "Transfer blocked", ["Choose two different stockpiles."])
                 continue
-            resources = [key for key, amount in source.contents.items() if amount > 0]
+            resources = [key for key, amount in source.contents.items()
+                         if storage.available_quantity(source.id, key, world.ship.jobs) > 0
+                         and destination.accepts(key)]
             if not resources:
-                panel(renderer, world, "Transfer blocked", ["Source has no unreserved supplies."])
+                panel(renderer, world, "Transfer blocked", [
+                    "No unreserved source resource is accepted by this destination filter."])
                 continue
             selected = choose(renderer, world, "Choose resource", [
-                f"{key}: {source.contents[key]} available" for key in resources])
+                f"{key}: {storage.available_quantity(source.id, key, world.ship.jobs)} unreserved"
+                for key in resources])
             if selected is None:
                 continue
             key = resources[selected]
-            maximum = source.contents[key]
+            maximum = storage.available_quantity(source.id, key, world.ship.jobs)
             from pirates.ship_storage import HAUL_CAPACITY_KG, UNIT_MASS
             maximum = min(maximum, int(HAUL_CAPACITY_KG / UNIT_MASS[key]))
             if maximum < 1:
@@ -1624,12 +1882,74 @@ def storage_menu(renderer, world):
             amount = choose(renderer, world, "Choose quantity", [str(n) for n in quantities])
             if amount is None:
                 continue
+            quantity = quantities[amount]
+            bundle = {key: quantity}
+            review = transfer_review_rows(world, source, destination, bundle)
+            panel(renderer, world, "Review physical transfer", review)
+            confirm = choose(renderer, world, "Commit physical transfer?", [
+                "Queue this physical haul", "Cancel — do not create an order"],
+                "Confirm reserves source quantity and destination capacity; the worker must carry it.")
+            if confirm != 0:
+                continue
             try:
                 from pirates.ship_storage import queue_transfer
-                job = queue_transfer(world, source.id, destination.id, {key: quantities[amount]})
+                job = queue_transfer(world, source.id, destination.id, bundle)
                 world.message(f"Queued physical haul #{job.id}: {job.transfer['bundle']} {source.id} -> {destination.id}.")
             except ValueError as error:
                 panel(renderer, world, "Transfer blocked", [str(error)])
+        elif action == 9:
+            from pirates.ship_storage import STOCK_FILTER_PROFILES, bundle_mass
+            piles = list(storage.piles.values())
+            pile_i = choose(renderer, world, "Choose stockpile to configure", [
+                f"{p.id} | {bundle_mass(p.contents):.1f}/{p.capacity_kg} kg | P{p.priority}"
+                for p in piles])
+            if pile_i is None:
+                continue
+            pile = piles[pile_i]
+            settings = ["Set hauling priority", "Set capacity"]
+            if pile.fixture_id is None:
+                settings.insert(0, "Set incoming-resource filter")
+            setting = choose(renderer, world, f"Configure {pile.id}", settings,
+                             "Lower priority number is used first for automatic job supply collection.")
+            if setting is None:
+                continue
+            if pile.fixture_id is None and setting == 0:
+                profiles = list(STOCK_FILTER_PROFILES)
+                selected = choose(renderer, world, "Incoming-resource filter", [
+                    f"{name} ({len(STOCK_FILTER_PROFILES[name])} resource types)"
+                    for name in profiles], "Filters affect incoming physical transfers; existing stock remains usable.")
+                if selected is None:
+                    continue
+                try:
+                    storage.configure(pile.id, filters=STOCK_FILTER_PROFILES[profiles[selected]],
+                                      jobs=world.ship.jobs)
+                    world.message(f"{pile.id} now accepts {profiles[selected]}.")
+                except ValueError as error:
+                    panel(renderer, world, "Stockpile configuration blocked", [str(error)])
+            elif setting == (1 if pile.fixture_id is None else 0):
+                priorities = [1, 2, 3, 4, 5]
+                selected = choose(renderer, world, "Automatic supply-source priority", [
+                    f"P{value} — {'Highest' if value == 1 else 'Lowest' if value == 5 else 'Normal'}"
+                    for value in priorities], "Higher-priority sources are chosen before shorter routes.")
+                if selected is None:
+                    continue
+                try:
+                    storage.configure(pile.id, priority=priorities[selected], jobs=world.ship.jobs)
+                    world.message(f"{pile.id} source priority set to P{priorities[selected]}.")
+                except ValueError as error:
+                    panel(renderer, world, "Stockpile configuration blocked", [str(error)])
+            else:
+                capacities = sorted({pile.capacity_kg, 100, 250, 500, 1000, 2500, 5000})
+                selected = choose(renderer, world, "Stockpile mass capacity", [
+                    f"{value} kg" for value in capacities],
+                    "Cannot reduce below current contents or reserved incoming/returning stock.")
+                if selected is None:
+                    continue
+                try:
+                    storage.configure(pile.id, capacity_kg=capacities[selected], jobs=world.ship.jobs)
+                    world.message(f"{pile.id} capacity set to {capacities[selected]} kg.")
+                except ValueError as error:
+                    panel(renderer, world, "Stockpile configuration blocked", [str(error)])
 
 
 def galley_menu(renderer, world):
@@ -1868,22 +2188,14 @@ def construction_menu(renderer, world):
     from pirates.ship_building import queue
     directions = ((0, -1), (1, 0), (0, 1), (-1, 0))
     index = choose(renderer, world, "Construction — select adjacent site",
-                   ["North", "East", "South", "West"],
-                     "Walls, floors and load-bearing supports. Esc returns; time is paused.")
+                    ["North", "East", "South", "West"],
+                      "Walls, floors and load-bearing supports. Esc returns; time is paused.")
     if index is None:
         return
     dx, dy = directions[index]
     target = world.player.x + dx, world.player.y + dy
-    choice = choose(renderer, world, f"Construction at {target}", [
-        "Build oak wall — 1 plank bundle, carpentry work",
-        "Build oak door — 1 plank bundle, carpentry work",
-        "Dismantle interior wall/door — no material recovery yet",
-        "Build connected deck floor — 1 plank bundle",
-        "Dismantle interior floor — no material recovery yet",
-        "Build oak beam — spans up to four tiles",
-        "Build oak pillar — vertical load path",
-        "Dismantle beam/pillar — no material recovery yet"],
-        "Queues physical work; A manages/cancels jobs. F4 advances time.")
+    choice = choose(renderer, world, f"Construction at {target}", CONSTRUCTION_OPTIONS,
+                    CONSTRUCTION_HELP)
     if choice is None:
         return
     try:

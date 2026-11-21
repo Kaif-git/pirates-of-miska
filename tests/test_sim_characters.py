@@ -31,11 +31,38 @@ def test_seeded_character_population_is_deterministic_and_uniquely_named():
     first = WorldState.create("character-catalog-seed")
     second = WorldState.create("character-catalog-seed")
     characters = _characters(first)
-    assert len(characters) == 112
+    assert len(characters) == 115
     assert len({row["display_name"] for row in characters.values()}) == len(characters)
     assert len({row["archetype_id"] for row in characters.values()}) > 1
     assert first.to_snapshot() == second.to_snapshot()
     first.event_log.validate_causality()
+
+
+def test_physical_attributes_are_bounded_role_aware_and_injury_adjusted():
+    world = WorldState.create("physical-attributes")
+    characters = _characters(world)
+    for character in characters.values():
+        assert all(type(character["stats"][stat]) is int
+                   and 0 <= character["stats"][stat] <= 100
+                   for stat in ("strength", "speed", "endurance", "toughness"))
+    sailors = [row["stats"]["endurance"] for row in characters.values()
+               if row["role"] == "sailor"]
+    merchants = [row["stats"]["endurance"] for row in characters.values()
+                 if row["role"] == "merchant"]
+    assert sailors and merchants
+    assert sum(sailors) / len(sailors) > sum(merchants) / len(merchants)
+
+    character_id = next(key for key, row in characters.items() if row["role"] == "gunner")
+    character = world.entities[character_id]
+    base_strength = character["stats"]["strength"]
+    event_id = world.characters.inflict_injury(
+        world, character_id, "broken_arm", caused_by=character["last_event_id"])
+    profile = world.characters.personal_combat_profile(character)
+    assert profile["stats"]["strength"] == {
+        "base": base_strength, "injury_delta": -8,
+        "effective": max(0, base_strength - 8),
+    }
+    assert world.event_log.get(event_id).type == "INJURY"
 
 
 def test_character_skill_injury_and_snapshot_resume_preserve_state(tmp_path):
@@ -59,6 +86,81 @@ def test_character_skill_injury_and_snapshot_resume_preserve_state(tmp_path):
     restored = WorldState.load(path)
     assert restored.to_snapshot() == world.to_snapshot()
     assert restored.entities[character_id]["last_event_id"] == injury_event
+
+
+def test_temporary_injury_heals_with_causal_followups_and_restores_capability():
+    world = WorldState.create("injury-natural-recovery")
+    character_id = next(key for key, row in _characters(world).items()
+                        if row["role"] == "gunner")
+    character = world.entities[character_id]
+    injury_event_id = world.characters.inflict_injury(
+        world, character_id, "broken_arm", caused_by=character["last_event_id"])
+    assert world.characters.effective_stat(character, "gunnery") == \
+        max(0, character["stats"]["gunnery"] - 10)
+
+    world.run_until(30 * 24)
+
+    recovered = world.entities[character_id]
+    injury = next(row for row in recovered["health"]["injuries"]
+                  if row["injury_id"] == "broken_arm")
+    assert injury["severity"] == 0
+    assert injury["recovery_days_elapsed"] == 30
+    assert world.characters.effective_stat(recovered, "gunnery") == recovered["stats"]["gunnery"]
+    assert recovered["health"]["hp"] > 75
+    followups = [event for event in world.event_log.by_type("INJURY_RECOVERY")
+                 if event.data.get("source_injury_event_id") == injury_event_id]
+    assert len(followups) == 30
+    assert all(list(event.caused_by) == [injury_event_id] for event in followups)
+    assert followups[-1].data["recovered"] is True
+    assert followups[-1].event_class == "narrative"
+    scar = next(row for row in recovered["health"]["injuries"]
+                if row["injury_id"] == "scar")
+    scar_event = world.event_log.get(scar["event_id"])
+    assert scar_event.caused_by == (followups[-1].id, injury_event_id)
+    assert world.characters.effective_stat(recovered, "gunnery") == recovered["stats"]["gunnery"]
+    snapshot = world.to_snapshot()
+    assert WorldState.from_snapshot(snapshot).to_snapshot() == snapshot
+    first = WorldState.from_snapshot(snapshot)
+    second = WorldState.from_snapshot(snapshot)
+    first.run_until(first.clock.tick + 24)
+    second.run_until(second.clock.tick + 24)
+    assert first.event_log.to_jsonl() == second.event_log.to_jsonl()
+    assert first.to_snapshot() == second.to_snapshot()
+
+
+def test_configured_fatal_injury_emits_causal_death_without_population_creation():
+    world = WorldState.create("fatal-injury-outcome", director_enabled=False)
+    generated = world.event_log.by_type("WORLD_GENERATED")[0].id
+    character_id = world.characters.create_character(
+        world, tier="BACKGROUND", cause_event_id=generated,
+        role="civilian", island_id="isle_001")
+    world.characters.data["injuries"]["chronic_fever"]["fatal_basis_points"] = 10_000
+
+    injury_id = world.characters.inflict_injury(
+        world, character_id, "chronic_fever", caused_by=generated)
+
+    death = next(event for event in world.event_log.by_type("CHARACTER_DIED")
+                 if event.data["cause"] == "injury_complication")
+    assert death.caused_by == (injury_id,)
+    assert character_id not in world.entities
+    assert world.archive[character_id]["cause_of_death_event"] == injury_id
+
+
+def test_permanent_injury_does_not_gain_a_synthetic_recovery_timer():
+    world = WorldState.create("injury-permanent")
+    character_id = next(key for key, row in _characters(world).items()
+                        if row["role"] == "gunner")
+    cause = world.entities[character_id]["last_event_id"]
+    injury_event_id = world.characters.inflict_injury(
+        world, character_id, "lost_eye", caused_by=cause)
+
+    world.run_until(35 * 24)
+
+    injury = world.entities[character_id]["health"]["injuries"][-1]
+    assert injury["severity"] == 80
+    assert injury["recovery_days_total"] == 0
+    assert not any(event.data.get("source_injury_event_id") == injury_event_id
+                   for event in world.event_log.by_type("INJURY_RECOVERY"))
 
 
 def test_character_generation_can_inherit_parent_traits_and_history():
@@ -103,10 +205,17 @@ def test_character_aging_death_archive_and_rookie_replacement():
         character = world.entities[character_id]
         character["age_years"] = 100
         character["birth_tick"] = world.clock.tick - 100 * system._ticks_per_year(world)
+    physical_before = {
+        character_id: {stat: world.entities[character_id]["stats"][stat]
+                       for stat in ("speed", "endurance")}
+        for character_id in majors[:5]
+    }
     world.run_until(8760)
     assert all(key in world.archive for key in majors[:5])
     assert all(world.archive[key]["death_tick"] == world.clock.tick for key in majors[:5])
     assert all(world.archive[key]["health"]["max_hp_from_age"] < 100 for key in majors[:5])
+    assert all(world.archive[key]["stats"][stat] < physical_before[key][stat]
+               for key in majors[:5] for stat in ("speed", "endurance"))
     major_plus = [row for row in _characters(world).values()
                   if row["tier"] in {"LEGEND", "MAJOR"}]
     assert len(major_plus) == 12

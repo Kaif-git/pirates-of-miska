@@ -10,11 +10,12 @@ from pirates.duel_system.engine import (
     release_guard, run_until_decision,
 )
 from test_duel_system_foundation import bare_fighter
+from duel_test_helpers import force_clean_aims
 
 
 def arena(**kwargs):
     cfg = load_config()
-    cfg["accuracy"]["jitter"] = 0
+    force_clean_aims(cfg)
     return CombatState([bare_fighter(pos=(0, 0)), bare_fighter("ronin", pos=(1, 0))],
                        config=cfg, **kwargs)
 
@@ -164,7 +165,7 @@ def test_strike_on_dash_step_tick_resolves_before_movement_and_does_not_evade():
     player.pos, enemy.pos = (0, 0), (1, 0)
     player.speed, enemy.speed = 20, 30
     enemy.accuracy = 100
-    state.config["accuracy"]["jitter"] = 0
+    force_clean_aims(state.config)
     dash = commit_action(state, player.id, Choice(ActionKind.DASH, direction=(-1, 0), tiles=1))
     attack = commit_action(state, enemy.id, Choice(ActionKind.LIGHT, Zone.TORSO))
     assert dash.path[0][0] == attack.strike_tick == 1
@@ -245,22 +246,48 @@ def test_runtime_occupied_step_names_blocker_and_cancels_remaining_route():
     assert state.fighters[0].pos == (0, 0)
     blocked = next(event for event in state.event_log if "MOVEMENT_BLOCKED" in event.cause_tags)
     assert blocked.actor == "player" and blocked.target == "ronin"
-    assert blocked.deltas == {"status": "movement_blocked", "position": (1, 0), "kind": "DASH"}
+    assert blocked.deltas == {"status": "movement_blocked", "position": (1, 0), "kind": "DASH",
+                              "reason": "OCCUPIED"}
     assert event_line(blocked, {"player": "You", "ronin": "Ronin"}) == "You: movement blocked at (1, 0) by Ronin"
     state.fighters[1].pos = (4, 0)
     advance_to(state, 8)
     assert state.fighters[0].pos == (0, 0), "A later path deadline must not skip the blocked tile"
 
 
+def test_simultaneous_movement_claim_collision_explains_no_winner():
+    from pirates.duel_system.exchange_log import format_exchange, summarize_exchange
+
+    state = arena()
+    state.fighters[0].pos, state.fighters[1].pos = (0, 0), (2, 0)
+    commit_action(state, "player", Choice(ActionKind.WALK, direction=(1, 0)))
+    commit_action(state, "ronin", Choice(ActionKind.WALK, direction=(-1, 0)))
+    advance_to(state, max(f.action.path[0][0] for f in state.fighters))
+
+    conflicts = [event for event in state.event_log if "MOVEMENT_CONFLICT" in event.cause_tags]
+    assert {event.actor for event in conflicts} == {"player", "ronin"}
+    for event in conflicts:
+        assert event.deltas["reason"] == "DESTINATION_CONFLICT"
+        assert event.deltas["contenders"] == (("player", "WALK"), ("ronin", "WALK"))
+    text = "\n".join(format_exchange(state.event_log, {"player": "You", "ronin": "Ronin"}))
+    assert "simultaneous routes claimed the same tile" in text
+    assert "Neither action won the tile" in text
+    summary = summarize_exchange(state.event_log, {"player": "You", "ronin": "Ronin"})
+    assert "no fighter won the tile" in summary[3]
+
+
 def test_committed_dash_interrupted_by_landed_cut_before_first_step_is_logged():
     state = arena()
+    from duel_test_helpers import force_clean_aims
+    force_clean_aims(state.config)
     state.fighters[0].pos, state.fighters[1].pos = (0, 0), (1, 0)
     state.fighters[1].speed = 40  # land a cut before the first dash step
     state.fighters[1].strength = 20
     commit_action(state, "player", Choice(ActionKind.DASH, direction=(-1, 0), tiles=1))
     commit_action(state, "ronin", Choice(ActionKind.LIGHT, Zone.TORSO))
     advance_to(state, 1)
-    assert state.fighters[0].pos == (0, 0)
+    forced_moves = [event for event in state.event_log
+                    if event.type == EventType.MOVE and event.actor == "player"]
+    assert len(forced_moves) == 1 and "INJURY_REFLEX" in forced_moves[0].cause_tags
     interrupted = next(event for event in state.event_log if event.type == EventType.INTERRUPT)
     from pirates.duel_system.render_model import event_line
     assert event_line(interrupted, {"player": "You", "ronin": "Ronin"}) == "You: dash interrupted"
@@ -278,7 +305,7 @@ def test_guard_release_does_not_teleport_to_ready():
     assert state.fighters[0].action is None
 
 
-def test_light_interrupts_heavy_and_both_same_tick_strikes_trade():
+def test_light_interrupts_heavy_while_same_line_same_tick_attacks_clash():
     state = arena()
     decide_batch(state, lambda snapshot, fid: Choice(
         ActionKind.LIGHT if fid == "player" else ActionKind.HEAVY, Zone.TORSO))
@@ -289,8 +316,10 @@ def test_light_interrupts_heavy_and_both_same_tick_strikes_trade():
     decide_batch(state, lambda snapshot, fid: Choice(ActionKind.LIGHT, Zone.TORSO))
     advance_to(state, 4)
     hits = [e for e in state.event_log if e.type == EventType.HIT]
-    assert {e.actor for e in hits} == {"player", "ronin"}
-    assert all(fighter.wounds for fighter in state.fighters)
+    assert not hits
+    clashes = [e for e in state.event_log if e.type == EventType.CLASH]
+    assert len(clashes) == 1
+    assert clashes[0].deltas["participants"] == ("player", "ronin")
 
 
 def test_active_action_snapshot_preserves_timing_paths_and_replay_100_runs():
@@ -315,6 +344,6 @@ def test_npc_free_before_player_is_a_decision_not_silent_time_skip():
     decide_batch(state, lambda snapshot, fid: Choice(ActionKind.LIGHT, Zone.TORSO)
                  if fid == "player" else Choice(ActionKind.WAIT))
     free = run_until_decision(state)
-    assert state.tick == 5
+    assert state.tick == 3
     assert [fighter.id for fighter in free] == ["ronin"]
     assert state.fighters[0].action is not None

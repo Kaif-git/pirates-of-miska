@@ -102,8 +102,9 @@ def choose_bot(state, fighter_id, bot, rng):
     phase = visible_action.phase_at(state.tick) if visible_action else "UNSEEN" if action else "IDLE"
     exposed = phase in {"WINDUP", "RECOVERY", "ACTIVE", "GUARD_RAISE", "GUARD_HOLD"} or other.stagger_until > state.tick
     # Against an idle target, the lower leg is a safe, useful slowdown target;
-    # against a committed/exposed target, punish the open hand when accuracy allows.
-    aim = (Zone.HAND if own.accuracy >= cfg["zones"]["difficulty"]["HAND"] else Zone.TORSO) if exposed else Zone.LEG
+    # against a committed/exposed target, pressure the open hand; Accuracy shapes
+    # clean-contact odds but never gates a legal target.
+    aim = Zone.HAND if exposed else Zone.LEG
     if gap >= cfg["ai"]["rest_gap"]:
         if fighter.wounds and fighter.bandages > 0 and not legality(state, fighter.id, Choice(ActionKind.BANDAGE)):
             return Choice(ActionKind.BANDAGE)
@@ -131,12 +132,11 @@ def choose_bot(state, fighter_id, bot, rng):
             return _fallback(state, fighter, Choice(ActionKind.HEAVY, Zone.LEG))
         remaining = visible_action.end_tick-state.tick if visible_action and visible_action.end_tick is not None else other.stagger_until-state.tick
         if remaining >= heavy:
-            heavy_aim = (Zone.HAND if exposed and own.accuracy >=
-                         cfg["zones"]["difficulty"]["HAND"] + cfg["zones"]["heavy_acc_mod"] else Zone.LEG)
+            heavy_aim = Zone.HAND if exposed else Zone.LEG
             return _fallback(state, fighter, Choice(ActionKind.HEAVY, heavy_aim))
         return Choice(ActionKind.LIGHT, aim)
     if visible_action and visible_action.kind in {ActionKind.HEAVY, ActionKind.DASH_LIGHT, ActionKind.DASH}:
-        dash = move(state, fighter, ActionKind.DASH_LIGHT, True, aim=Zone.HAND if own.accuracy >= cfg["zones"]["difficulty"]["HAND"] else Zone.TORSO)
+        dash = move(state, fighter, ActionKind.DASH_LIGHT, True, aim=Zone.HAND)
         if dash:
             return dash
     if gap <= cfg["ai"]["close_gap"]:

@@ -23,10 +23,13 @@ from pirates.ship_blueprint import ShipBlueprint
 from pirates.economy import Economy, PORTS, MERCHANTS, build_port
 from pirates.voyage import VoyageSystem, NpcFleetSystem
 from pirates.society import NpcSocietySystem
+from pirates.scenario import load_scenario
 from pirates.combat import CombatArena
 
 ROOT = Path(__file__).resolve().parents[1]
 SAVE_PATH = ROOT / "saves" / "captain.json"
+MVP_SAVE_PATH = ROOT / "saves" / "lawful-trader-mvp.json"
+MVP_SCENARIO_ID = "lawful-trader-mvp"
 POCKETS = [{"id": "satchel", "name": "Captain's satchel",
             "max_weight_g": 12000, "max_bulk_ml": 18000}]
 
@@ -47,6 +50,9 @@ class Captain:
 
 class World:
     def __init__(self):
+        self.scenario_id = None
+        self.scenario_version = None
+        self.save_path = SAVE_PATH
         # Walkable port, a connected pier, and a moored starter vessel.
         tiles = np.full((64, 100), T.WATER, dtype=np.int8)
         tiles[8:56, 8:45] = T.GRASS
@@ -106,6 +112,7 @@ class World:
         self.npcs = NpcFleetSystem()
         initial_npc_hour = self.clock.total_ticks // 360000
         self.npcs.hour = initial_npc_hour
+        self.npcs._seed_motion(self.clock.total_ticks)
         self.society = NpcSocietySystem(self.npcs, initial_npc_hour)
         self.combat = CombatArena()
         self.duel_journal = None  # New sword-duel session, learning and between-fight carry.
@@ -123,9 +130,33 @@ class World:
         world.generation_manifest = manifest
         world.npcs = NpcFleetSystem.from_generated(generated)
         world.npcs.hour = world.clock.total_ticks // 360000
+        world.npcs._seed_motion(world.clock.total_ticks)
         world.society = NpcSocietySystem.from_generated(
             generated, world.npcs, world.clock.total_ticks // 360000)
         run_prehistory(world)
+        world.refresh()
+        return world
+
+    @classmethod
+    def new_authored_mvp(cls):
+        """Create the fixed lawful-trader sample without generated history."""
+        from pirates.voyage import SEA_NODES
+        scenario = load_scenario(MVP_SCENARIO_ID, ports=PORTS, sea_nodes=SEA_NODES)
+        if scenario["entry_port"] not in PORTS:
+            raise ValueError("Authored scenario entry port is unavailable")
+        world = cls()
+        world.scenario_id = scenario["id"]
+        world.scenario_version = scenario["version"]
+        world.save_path = MVP_SAVE_PATH
+        world.economy.port = scenario["entry_port"]
+        build_port(world)
+
+        # The legacy authored roster contains a captive market. The lawful MVP
+        # keeps the named crew/vessels but starts without that feature or ledger.
+        world.npcs.market["enslaved_people"] = 0
+        for ship in world.npcs.ships:
+            ship["captives"] = 0
+        world.npcs.population_total = sum(ship["crew"] for ship in world.npcs.ships)
         world.refresh()
         return world
 
@@ -208,7 +239,11 @@ class World:
         if not self.at_sea and not preserve_harbor:
             self.economy.harbors[self.economy.port] = self.economy.remember_harbor(self)
         self.at_sea = True
-        if self.player.x < 69:
+        active_transfer = bool(
+            getattr(self, "voyages", None)
+            and self.voyages.voyage
+            and self.voyages.voyage.get("deck_visit") is not None)
+        if self.player.x < 69 and not active_transfer:
             self.player.x, self.player.y = 76, 25
         self.game_map.tiles[:, :69] = T.WATER
         self.game_map.doors[:, :69] = False
@@ -216,6 +251,8 @@ class World:
             self.objects_at[at] = [o for o in self.objects_at[at] if not o.get("port_object")]
             if not self.objects_at[at]:
                 del self.objects_at[at]
+        if hasattr(self, "voyages"):
+            self.voyages.rebuild_transfer_deck(self)
         self.refresh()
 
     def restore_harbor(self, port):
@@ -229,7 +266,9 @@ class World:
         self.refresh()
 
     def on_ship_second(self):
-        underway = bool(self.voyages.voyage and self.voyages.voyage["status"] == "underway")
+        self.voyages.refresh_transfer_state(self)
+        voyage_status = self.voyages.voyage.get("status") if self.voyages.voyage else None
+        underway = voyage_status == "underway"
         encounter = self.voyages.voyage.get("encounter") if self.voyages.voyage else None
         naval_combat = bool(encounter and encounter.get("combat", {}).get("status") == "active")
         if naval_combat:
@@ -239,12 +278,19 @@ class World:
             previous_npc_events = list(self.npcs.events[-80:])
             reserved = ({encounter["id"]} if encounter and isinstance(encounter.get("id"), str)
                         and self.voyages.voyage.get("status") == "encounter" else set())
+            eligible_for_lookout = bool(
+                underway and self.voyages.voyage.get("elapsed_seconds", 0) >= 1800)
             sighting = self.npcs.advance_second(
-                self, self.voyages.map_coordinate(), sighting_enabled=underway,
+                self, self.voyages.map_coordinate(), sighting_enabled=eligible_for_lookout,
                 reserved_ship_ids=reserved)
-            self.society.advance(self, previous_npc_events)
-        if sighting:
-            sighting = next((deepcopy(ship) for ship in self.npcs.ships if ship["id"] == sighting["id"]), sighting)
+            if self.scenario_id == "lawful-trader-mvp":
+                # Keep the shared persisted clock aligned without advancing the
+                # strategic society state in this authored sample.
+                self.society.hour = self.npcs.hour
+            else:
+                self.society.advance(self, previous_npc_events)
+        if voyage_status not in ("underway", "storm", "encounter"):
+            self.npcs.clear_active_contacts(self.clock.total_ticks)
         if underway:
             self.voyages.step_second(self, sighting)
 
@@ -278,6 +324,15 @@ class World:
 
     def room_name(self, x, y, z=0):
         if self.at_sea and x < 69:
+            visit = (self.voyages.voyage.get("deck_visit")
+                     if self.voyages.voyage else None)
+            if visit and visit.get("target_id"):
+                from pirates.sea_transfer import GANGPLANK, in_deck
+                if (x, y) == GANGPLANK:
+                    return "Gangplank"
+                if in_deck(x, y):
+                    encounter = self.voyages.voyage.get("encounter")
+                    return f"{encounter.get('name', 'Other vessel')} deck" if encounter else "Other vessel deck"
             return "Open sea"
         if x < 45:
             return PORTS[self.economy.port]["name"]
@@ -431,10 +486,10 @@ class World:
         self.advance(TICKS_PER_SECOND)
         self.message(f"Dropped {item['name']}.")
 
-    def save(self, path=SAVE_PATH):
+    def save(self, path=None):
         if self.combat.active:
             raise ValueError("Leave the combat arena before saving the ship.")
-        data = {"version": 3, "player": [self.player.x, self.player.y], "player_z": self.player.z,
+        data = {"version": 4, "player": [self.player.x, self.player.y], "player_z": self.player.z,
                 "ticks": self.clock.total_ticks, "inventory": self.inventory.items,
                 "ground": {",".join(map(str, at)): items for at, items in self.ground_items.items()},
                 "doors": self.game_map.doors.tolist(),
@@ -449,10 +504,12 @@ class World:
                   "generation_manifest": deepcopy(self.generation_manifest),
                     "combat_progression": self.combat.progression_snapshot(),
                     "duel_journal": deepcopy(self.duel_journal),
-                   "ship_hazards": self.hazards.snapshot(),
-                   "locked_doors": [list(at) for at in sorted(self.locked_doors)],
-                   "lockdown": self.lockdown}
-        path = Path(path)
+                    "ship_hazards": self.hazards.snapshot(),
+                    "locked_doors": [list(at) for at in sorted(self.locked_doors)],
+                    "lockdown": self.lockdown}
+        if self.scenario_id is not None:
+            data["scenario"] = {"id": self.scenario_id, "version": self.scenario_version}
+        path = Path(path or self.save_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -460,13 +517,34 @@ class World:
         self.message(f"Saved {path.name}.")
 
     @classmethod
-    def load(cls, path=SAVE_PATH):
+    def load(cls, path=SAVE_PATH, *, expected_scenario_id=...):
         # Construct/validate a replacement world; never partially mutate live state.
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        path = Path(path)
+        data = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(data, dict) or type(data.get("version")) is not int
-                or data.get("version") not in (1, 2, 3)):
+                or data.get("version") not in (1, 2, 3, 4)):
             raise ValueError("Unsupported save version")
-        world = cls()
+        scenario_data = data.get("scenario")
+        scenario_id = None
+        scenario_version = None
+        if scenario_data is not None:
+            if (data["version"] < 4 or not isinstance(scenario_data, dict)
+                    or set(scenario_data) != {"id", "version"}
+                    or not isinstance(scenario_data.get("id"), str)
+                    or type(scenario_data.get("version")) is not int):
+                raise ValueError("Invalid scenario save metadata")
+            scenario = load_scenario(scenario_data["id"])
+            if scenario_data["version"] != scenario["version"]:
+                raise ValueError("Unsupported authored scenario version")
+            scenario_id, scenario_version = scenario["id"], scenario["version"]
+        if expected_scenario_id is not ... and scenario_id != expected_scenario_id:
+            raise ValueError("Save belongs to a different scenario or legacy mode")
+        if scenario_id == MVP_SCENARIO_ID:
+            world = cls.new_authored_mvp()
+            world.scenario_version = scenario_version
+        else:
+            world = cls()
+        world.save_path = path
         if "combat_progression" in data:
             world.combat.restore_progression(data["combat_progression"])
         if data.get("duel_journal") is not None:
@@ -485,7 +563,7 @@ class World:
                 raise ValueError("Invalid economy / island")
             world.economy.port = data["economy"]["port"]
             build_port(world)
-        if data["version"] == 3:
+        if data["version"] >= 3:
             world.ship_model = ShipModel.restore(data["ship_model"])
             active_deck = data.get("player_z", 0)
             if (type(active_deck) is not int or not 0 <= active_deck <= 8
@@ -577,7 +655,19 @@ class World:
                         return at
             return px, py
         x, y = migrate_old_deck_position(x, y, {(c.x, c.y) for c in world.ship.crew})
-        if not gm.is_walkable(x, y):
+        saved_transfer = None
+        voyage_snapshot = data.get("voyage")
+        if isinstance(voyage_snapshot, dict):
+            saved_voyage = voyage_snapshot.get("voyage")
+            if isinstance(saved_voyage, dict):
+                saved_transfer = saved_voyage.get("deck_visit")
+        from pirates.sea_transfer import in_deck
+        visiting_captain = (
+            isinstance(saved_transfer, dict)
+            and isinstance(saved_transfer.get("participants"), list)
+            and world.player.id in saved_transfer["participants"]
+            and in_deck(x, y))
+        if not gm.is_walkable(x, y) and not visiting_captain:
             raise ValueError("Captain is not on a walkable tile")
         ticks = data["ticks"]
         if type(ticks) is not int or ticks < 0:
@@ -628,11 +718,14 @@ class World:
         world.ground_items = ground
         world.player.x, world.player.y = x, y
         world.clock = GameClock(ticks)
-        if data["version"] in (2, 3):
+        if data["version"] >= 2:
+            world._restore_deck_visit = saved_transfer
             try:
                 world.ship = ShipLife.restore(world, data["ship"])
             except (KeyError, TypeError, AttributeError, OverflowError) as error:
                 raise ValueError(f"Invalid ship save: {error}") from error
+            finally:
+                del world._restore_deck_visit
         else:
             # Old saves have no crew state. Retain captain/cargo/time, add new crew.
             for sailor in world.ship.crew:
@@ -666,7 +759,9 @@ class World:
                 raise ValueError(f"Invalid NPC generation manifest: {error}") from error
         world.generation_manifest = deepcopy(generation_manifest)
         try:
-            world.npcs = NpcFleetSystem.restore(data.get("npcs"), generation_manifest)
+            world.npcs = NpcFleetSystem.restore(
+                data.get("npcs"), generation_manifest, scenario_id=scenario_id,
+                current_tick=world.clock.total_ticks)
         except (KeyError, TypeError, AttributeError, OverflowError) as error:
             raise ValueError(f"Invalid NPC fleet save: {error}") from error
         sighting = (world.voyages.voyage or {}).get("encounter")

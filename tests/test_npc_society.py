@@ -458,6 +458,7 @@ def test_society_news_and_relations_roundtrip_and_old_v3_fleet_state_migrates(tm
     world = quiet_world()
     first, second = world.npcs.ships[0], world.npcs.ships[1]
     first["node"] = second["node"] = "navy_lane"
+    first["motion"] = second["motion"] = None
     world.society._resolve_meetings(world, world.society.hour)
     path = tmp_path / "society.json"
     world.save(path)

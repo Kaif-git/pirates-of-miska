@@ -159,7 +159,145 @@ class EncounterSystem:
                     else:
                         locations.pop(participant_id, None)
         self.last_updated_day = day
+        world.crew_ships.resolve_raider_plans(world, day, emitted)
+        self._review_prisoners(day, world)
         return emitted
+
+    def update_prisoner_provisions(self, day: int, world) -> list[str]:
+        """Consume a captive's ration before the economy closes the day's flow ledger."""
+        events = []
+        per_person = world.crew_ships.data["rules"]
+        for character_id, prisoner in sorted(self.prisoners.items()):
+            if prisoner["status"] != "held" or character_id not in world.entities:
+                continue
+            capture_day = prisoner.get("capture_day", day)
+            if day <= capture_day:
+                continue
+            ship_id = prisoner["captor_ship_id"]
+            ship = world.entities.get(ship_id)
+            if not ship or ship.get("kind") != "ship" or ship_id not in world.economy.ship_supplies:
+                continue
+            crew_id = ship.get("crew_id")
+            if crew_id not in world.crew_ships.crews:
+                continue
+            event_id = world.economy.consume_prisoner_supplies(
+                world, ship_id, crew_id, [character_id], {
+                    "grain": per_person["daily_food_milli_per_member"],
+                    "water": per_person["daily_water_milli_per_member"],
+                    "rum": per_person["daily_rum_milli_per_member"],
+                }, caused_by=prisoner.get("last_custody_event_id",
+                                          prisoner["capture_event_id"]), day=day)
+            prisoner["last_custody_event_id"] = event_id
+            shortage = world.event_log.get(event_id).data["shortage_milli"]
+            prisoner["provision_shortage_days"] += bool(any(shortage.values()))
+            events.append(event_id)
+        return events
+
+    @staticmethod
+    def _ticks_per_day(world) -> int:
+        return world.config["time"]["hours_per_day"] // world.config["time"]["hours_per_tick"]
+
+    def _new_prisoner_record(self, world, character_id: str, captor_ship_id: str,
+                             capture_event_id: str, former_crew_id: str | None) -> dict[str, Any]:
+        capture_day = world.clock.tick // self._ticks_per_day(world)
+        return {
+            "character_id": character_id, "captor_ship_id": captor_ship_id,
+            "capture_event_id": capture_event_id, "status": "held", "fate_event_id": None,
+            "former_crew_id": former_crew_id, "capture_day": capture_day,
+            "next_review_day": capture_day + 7,
+            "last_custody_event_id": capture_event_id,
+            "provision_shortage_days": 0, "ransom_demand_event_id": None,
+            "ransom_demand_silver": None, "escape_attempts": 0,
+        }
+
+    def attempt_prisoner_escape(self, world, character_id: str, *, caused_by: str) -> str:
+        """Resolve one explicit escape attempt; failure preserves custody, success changes location."""
+        prisoner = self.prisoners.get(character_id)
+        character = world.entities.get(character_id)
+        if (not prisoner or prisoner["status"] != "held" or not character
+                or character.get("kind") != "character"):
+            raise ValueError("Character is not an active held prisoner")
+        world.event_log.get(caused_by)
+        ship_id = prisoner["captor_ship_id"]
+        ship = world.entities.get(ship_id)
+        if not ship or ship.get("kind") != "ship":
+            raise ValueError("Prisoner escape requires an active captor vessel")
+        location = world.location_of(ship_id)
+        mobility = (world.characters.effective_stat(character, "cunning")
+                    + world.characters.effective_stat(character, "willpower")) // 2
+        chance = min(10_000, max(0, self.data["rules"]["escape_base_basis_points"]
+                                 + mobility * self.data["rules"][
+                                     "escape_mobility_basis_points_per_point"]))
+        attempt = prisoner["escape_attempts"] + 1
+        rng = world.rng.stream(f"prisoner-escape:{character_id}:{attempt}")
+        escaped = rng.randbelow(10_000) < chance
+        event = world.event_log.append(
+            tick=world.clock.tick, event_type="PRISONER_ESCAPE_ATTEMPT", location=location["id"],
+            actors=[{"role": "prisoner", "entity_id": character_id}],
+            targets=[{"role": "captor_ship", "entity_id": ship_id}],
+            data={"character_id": character_id, "captor_ship_id": ship_id,
+                  "attempt": attempt, "escape_basis_points": chance,
+                  "escaped": escaped, "location": location},
+            caused_by=list(dict.fromkeys((prisoner.get("last_custody_event_id",
+                                                        prisoner["capture_event_id"]),
+                                          caused_by))),
+            causes_tags=["prisoner_custody", "escape_attempt",
+                         "escape_succeeded" if escaped else "escape_failed"],
+            magnitude=0.5 if escaped else 0.1)
+        prisoner["escape_attempts"] = attempt
+        prisoner["last_custody_event_id"] = event.id
+        if escaped:
+            character.update({"crew_id": None, "ship_id": None, "location": location,
+                              "last_event_id": event.id})
+            prisoner["status"] = "escaped"
+            prisoner["fate_event_id"] = event.id
+        return event.id
+
+    def _review_prisoners(self, day: int, world) -> None:
+        for character_id, prisoner in sorted(self.prisoners.items()):
+            if (prisoner["status"] != "held" or character_id not in world.entities
+                    or day < prisoner.get("next_review_day", day + 7)):
+                continue
+            ship_id = prisoner["captor_ship_id"]
+            ship = world.entities.get(ship_id)
+            if not ship:
+                continue
+            captor_crew_id = ship.get("crew_id")
+            payer_crew_id = prisoner.get("former_crew_id")
+            demand_silver = self.data["rules"]["ransom_base_silver"]
+            review = world.event_log.append(
+                tick=world.clock.tick, event_type="PRISONER_REVIEWED",
+                location=world.location_of(ship_id)["id"],
+                actors=[{"role": "captor_crew", "entity_id": captor_crew_id}],
+                targets=[{"role": "prisoner", "entity_id": character_id}],
+                data={"character_id": character_id, "capture_event_id": prisoner["capture_event_id"],
+                      "provision_shortage_days": prisoner["provision_shortage_days"],
+                      "payer_crew_id": payer_crew_id,
+                      "available_silver": (world.economy.crew_accounts.get(
+                          payer_crew_id, {}).get("treasury_silver", 0)),
+                      "demand_silver": demand_silver,
+                      "next_review_day": day + 30},
+                caused_by=[prisoner.get("last_custody_event_id",
+                                        prisoner["capture_event_id"])],
+                causes_tags=["prisoner_custody", "bounded_review"], magnitude=0.2)
+            if prisoner.get("ransom_demand_event_id") is None:
+                demand = world.event_log.append(
+                    tick=world.clock.tick, event_type="RANSOM_DEMANDED",
+                    location=world.location_of(ship_id)["id"],
+                    actors=[{"role": "captor_crew", "entity_id": captor_crew_id}],
+                    targets=[{"role": "prisoner", "entity_id": character_id},
+                             *([{"role": "payer_crew", "entity_id": payer_crew_id}]
+                               if payer_crew_id else [])],
+                    data={"character_id": character_id, "silver": demand_silver,
+                          "capture_event_id": prisoner["capture_event_id"],
+                          "review_event_id": review.id},
+                    caused_by=[review.id], causes_tags=["ransom", "demand"], magnitude=0.3)
+                prisoner["ransom_demand_event_id"] = demand.id
+                prisoner["ransom_demand_silver"] = demand_silver
+                prisoner["last_custody_event_id"] = demand.id
+            else:
+                prisoner["last_custody_event_id"] = review.id
+            prisoner["next_review_day"] = day + 30
 
     def resolve(self, world, first_ship_id: str, second_ship_id: str, *, caused_by: list[str],
                 location: str | None = None, stances: dict[str, str] | None = None,
@@ -315,6 +453,49 @@ class EncounterSystem:
                 crew["morale"] = max(0, crew["morale"] - (10 if index == loser_index else 3))
             phases.append({"phase": "boarding", "outcome": "engaged",
                            "rigging_damage": rules["boarding_damage_base"]})
+        boarding_personal = None
+        if boarding:
+            captains = [world.crew_ships.crews[world.entities[ship_id]["crew_id"]]["captain_id"]
+                        for ship_id in ship_ids]
+            boarding_personal = world.battles.resolve_personal_combat(
+                world, captains, caused_by=[encounter.id], location=location,
+                context="boarding", context_id=encounter.id)
+            winner_side = boarding_personal["winner_side"]
+            if winner_side is not None:
+                shift = world.characters.data["combat_equipment"]["rules"][
+                    "boarding_morale_shift"]
+                morale_before = []
+                morale_after = []
+                for side, ship_id in enumerate(ship_ids):
+                    crew = world.crew_ships.crews[world.entities[ship_id]["crew_id"]]
+                    morale_before.append(crew["morale"])
+                    delta = shift if side == winner_side else -shift
+                    crew["morale"] = max(0, min(100, crew["morale"] + delta))
+                    morale_after.append(crew["morale"])
+                edge = world.event_log.append(
+                    tick=world.clock.tick, event_type="BOARDING_PERSONAL_EDGE",
+                    location=location,
+                    actors=[{"role": "winning_combatant", "entity_id": captains[winner_side]}],
+                    targets=[{"role": "opposed_combatant", "entity_id": captains[1 - winner_side]}],
+                    data={"encounter_event_id": encounter.id,
+                          "personal_combat_started_event_id":
+                              boarding_personal["started_event_id"],
+                          "impact_scores": boarding_personal["impact_scores"],
+                          "winner_side": winner_side,
+                          "morale_before": morale_before, "morale_after": morale_after},
+                    caused_by=list(dict.fromkeys([
+                        boarding_personal["started_event_id"],
+                        *boarding_personal["child_event_ids"],
+                    ])),
+                    causes_tags=["boarding", "personal_combat_edge", "morale_shift"],
+                    magnitude=min(1.0, shift / 100),
+                )
+                for ship_id in ship_ids:
+                    world.crew_ships.crews[world.entities[ship_id]["crew_id"]][
+                        "last_event_id"] = edge.id
+                phases.append({"phase": "boarding_personal_combat",
+                               "outcome": "personal_edge", "winner_side": winner_side,
+                               "event_id": edge.id})
         strengths_after = [world.crew_ships.combat_power(world, ship_id) for ship_id in ship_ids]
         decisive = ["gunnery_exchange"]
         if failed_fleeing_ship is not None:
@@ -334,7 +515,13 @@ class EncounterSystem:
             world, encounter, outcome, strengths_before, stances,
             phases, damage_events, decisive, strengths_after=strengths_after,
             beliefs_before=beliefs_before, gunnery_damage=gunnery_damage, boarding=boarding,
-            outcome_details={**details, "belief_upset": upset},
+            outcome_details={**details, "belief_upset": upset,
+                             "boarding_personal_combat": (
+                                 {"started_event_id": boarding_personal["started_event_id"],
+                                  "exchange_event_ids": boarding_personal["exchange_event_ids"],
+                                  "impact_scores": boarding_personal["impact_scores"],
+                                  "winner_side": boarding_personal["winner_side"]}
+                                 if boarding_personal else None)},
             outcome_event_ids=[*(outcome_event_ids or []),
                                *([failed_escape_event_id] if failed_escape_event_id else [])])
         self._apply_combat_consequences(world, world.event_log.get(resolved_id))
@@ -398,11 +585,11 @@ class EncounterSystem:
                                          "to_crew_id": winner_crew["id"]}, []
         if boarding and rng.randbelow(10000) < rules["captain_capture_basis_points"]:
             captain_id = loser_crew["captain_id"]
-            self.prisoners[captain_id] = {
-                "character_id": captain_id, "captor_ship_id": ship_ids[winner_index],
-                "capture_event_id": encounter.id, "status": "held", "fate_event_id": None,
-                "former_crew_id": loser_crew["id"],
-            }
+            self.prisoners[captain_id] = self._new_prisoner_record(
+                world, captain_id, ship_ids[winner_index], encounter.id, loser_crew["id"])
+            world.decisions.on_agent_inaccessible(
+                world, captain_id, cause_id=encounter.id,
+                reason="captured_before_objective_completion")
             return "captain_captured", {"captured_character_id": captain_id,
                                          "captor_ship_id": ship_ids[winner_index]}, []
         casualty_candidates = [index for index, damage in enumerate(gunnery_damage) if damage > 0]
@@ -437,6 +624,20 @@ class EncounterSystem:
         character = world.entities.get(character_id)
         if not character or character.get("kind") != "character":
             raise ValueError("Held prisoner is not an active character")
+        ransom_accounts = None
+        if fate == "ransom":
+            payer_crew_id = prisoner.get("former_crew_id") or character.get("crew_id")
+            captor_ship = world.entities.get(prisoner["captor_ship_id"])
+            captor_crew_id = captor_ship.get("crew_id") if captor_ship else None
+            if (payer_crew_id not in world.economy.crew_accounts
+                    or captor_crew_id not in world.economy.crew_accounts):
+                raise ValueError("Ransom requires active payer and captor crew accounts")
+            ransom_amount = prisoner.get("ransom_demand_silver")
+            if ransom_amount is None:
+                ransom_amount = self.data["rules"]["ransom_base_silver"]
+            if world.economy.crew_accounts[payer_crew_id]["treasury_silver"] < ransom_amount:
+                raise ValueError("Payer cannot meet the demanded ransom")
+            ransom_accounts = (payer_crew_id, captor_crew_id, ransom_amount)
         event = world.event_log.append(
             tick=world.clock.tick, event_type="PRISONER_FATE",
             location=world.location_of(prisoner["captor_ship_id"])["id"],
@@ -454,27 +655,24 @@ class EncounterSystem:
             prisoner["fate_event_id"] = death_event
             return death_event
         if fate == "ransom":
-            character_crew_id = (prisoner.get("former_crew_id")
-                                 or character.get("crew_id"))
-            captor_crew_id = world.entities[prisoner["captor_ship_id"]].get("crew_id")
-            if character_crew_id in world.economy.crew_accounts and captor_crew_id in world.economy.crew_accounts:
-                payer = world.economy.crew_accounts[character_crew_id]
-                receiver = world.economy.crew_accounts[captor_crew_id]
-                amount = min(self.data["rules"]["ransom_base_silver"], payer["treasury_silver"])
-                payer["treasury_silver"] -= amount
-                receiver["treasury_silver"] += amount
-                world.crew_ships.crews[character_crew_id]["treasury_silver"] = payer["treasury_silver"]
-                world.crew_ships.crews[captor_crew_id]["treasury_silver"] = receiver["treasury_silver"]
-                transfer = world.event_log.append(
-                    tick=world.clock.tick, event_type="RANSOM_PAID",
-                    location=world.location_of(prisoner["captor_ship_id"])["id"],
-                    actors=[{"role": "payer_crew", "entity_id": character_crew_id}],
-                    targets=[{"role": "captor_crew", "entity_id": captor_crew_id}],
-                    data={"silver": amount, "prisoner_id": character_id},
-                    caused_by=[event.id], causes_tags=["ransom", "silver_transfer"], magnitude=0.4)
-                ransom_event_id = transfer.id
-            else:
-                ransom_event_id = None
+            character_crew_id, captor_crew_id, amount = ransom_accounts
+            payer = world.economy.crew_accounts[character_crew_id]
+            receiver = world.economy.crew_accounts[captor_crew_id]
+            payer["treasury_silver"] -= amount
+            receiver["treasury_silver"] += amount
+            world.crew_ships.crews[character_crew_id]["treasury_silver"] = payer["treasury_silver"]
+            world.crew_ships.crews[captor_crew_id]["treasury_silver"] = receiver["treasury_silver"]
+            transfer = world.event_log.append(
+                tick=world.clock.tick, event_type="RANSOM_PAID",
+                location=world.location_of(prisoner["captor_ship_id"])["id"],
+                actors=[{"role": "payer_crew", "entity_id": character_crew_id}],
+                targets=[{"role": "captor_crew", "entity_id": captor_crew_id}],
+                data={"silver": amount, "prisoner_id": character_id,
+                      "demand_event_id": prisoner.get("ransom_demand_event_id")},
+                caused_by=[event.id, *([prisoner["ransom_demand_event_id"]]
+                                       if prisoner.get("ransom_demand_event_id") else [])],
+                causes_tags=["ransom", "silver_transfer"], magnitude=0.4)
+            ransom_event_id = transfer.id
         else:
             ransom_event_id = None
         location = world.location_of(prisoner["captor_ship_id"])
@@ -722,11 +920,8 @@ class EncounterSystem:
         old_captain.update({"crew_id": None, "ship_id": captor_ship_id,
                             "location": captor_location, "last_event_id": event.id})
         new_captain["last_event_id"] = event.id
-        self.prisoners[former_captain_id] = {
-            "character_id": former_captain_id, "captor_ship_id": captor_ship_id,
-            "capture_event_id": event.id, "status": "held", "fate_event_id": None,
-            "former_crew_id": crew_id,
-        }
+        self.prisoners[former_captain_id] = self._new_prisoner_record(
+            world, former_captain_id, captor_ship_id, event.id, crew_id)
         captured_ship = world.entities[captured_ship_id]
         captured_ship["last_event_id"] = event.id
         captured_ship.setdefault("history", []).append(event.id)
@@ -757,6 +952,85 @@ class EncounterSystem:
                 faction["council"].sort()
             faction["last_event_id"] = faction_event.id
         return event.id
+
+    def install_pending_prize_crews(self, world, arriving_ship_id: str,
+                                    arrival_event_id: str) -> list[str]:
+        """Use a real co-location arrival to staff a captured hull if a lawful candidate exists."""
+        if not ship_is_commandable(world, arriving_ship_id):
+            return []
+        world.event_log.get(arrival_event_id)
+        arrival_location = world.location_of(arriving_ship_id)
+        if arrival_location.get("kind") != "island":
+            return []
+        controller_crew_id = world.entities[arriving_ship_id]["crew_id"]
+        installed = []
+        for captured_ship_id, captured_ship in sorted(world.entities.items()):
+            if (captured_ship_id == arriving_ship_id or captured_ship.get("kind") != "ship"
+                    or captured_ship.get("captured_by_crew_id") != controller_crew_id
+                    or captured_ship.get("controller_crew_id") != controller_crew_id
+                    or captured_ship.get("location") != arrival_location
+                    or captured_ship_id in world.travel.transits):
+                continue
+            legal_owner = captured_ship.get("legal_owner")
+            if (not isinstance(legal_owner, dict)
+                    or legal_owner.get("kind") not in {"crew", "merchant"}
+                    or not isinstance(legal_owner.get("id"), str)):
+                continue
+            prize_crew_id = captured_ship.get("crew_id")
+            prize_crew = world.crew_ships.crews.get(prize_crew_id)
+            if (prize_crew is None or captured_ship_id not in prize_crew.get("ship_ids", ())
+                    or prize_crew.get("captain_id") not in world.entities):
+                continue
+            former_captain_id = prize_crew["captain_id"]
+            source_crew_id = None
+            prize_captain_id = self._prize_captain_candidate(world, prize_crew)
+            if prize_captain_id is None:
+                controller_crew = world.crew_ships.crews[controller_crew_id]
+                # _install_prize_crew transfers a controller-crew member only
+                # from that crew's primary vessel. A secondary vessel's arrival
+                # is still a real opportunity for captured-crew/local candidates,
+                # but must not select a source candidate that installation will
+                # reject as stale authority.
+                primary_controller_ship = next(iter(controller_crew.get("ship_ids", ())), None)
+                if primary_controller_ship == arriving_ship_id:
+                    prize_captain_id = self._prize_captain_candidate(
+                        world, controller_crew)
+                if prize_captain_id is not None:
+                    source_crew_id = controller_crew_id
+            local_recruit = False
+            if prize_captain_id is None:
+                prize_captain_id = self._local_prize_captain_candidate(world, captured_ship_id)
+                local_recruit = prize_captain_id is not None
+            if prize_captain_id is None:
+                continue
+
+            prize_event_id = self._install_prize_crew(
+                world, captured_ship_id, arriving_ship_id, prize_crew_id,
+                former_captain_id, prize_captain_id, arrival_event_id,
+                source_crew_id=source_crew_id, local_recruit=local_recruit)
+            legal_owner = dict(legal_owner)
+            previous_controller = captured_ship.get("controller_crew_id")
+            control_event = world.event_log.append(
+                tick=world.clock.tick, event_type="SHIP_ACQUIRED",
+                location=arrival_location["id"],
+                actors=[{"role": "controlling_crew", "entity_id": prize_crew_id}],
+                targets=[{"role": "controlled_ship", "entity_id": captured_ship_id}],
+                data={"method": "pending_prize_crew_installed",
+                      "previous_owner": legal_owner, "new_owner": legal_owner,
+                      "previous_controller_crew_id": previous_controller,
+                      "controller_crew_id": prize_crew_id,
+                      "legal_owner_kind": legal_owner.get("kind"),
+                      "legal_owner_id": legal_owner.get("id")},
+                caused_by=[arrival_event_id, prize_event_id],
+                causes_tags=["ship_control_assignment", "prize_crew_recovery"],
+                magnitude=0.45)
+            world.assign_ship_title(
+                captured_ship_id, owner_kind=legal_owner["kind"], owner_id=legal_owner["id"],
+                controller_crew_id=prize_crew_id, event_id=control_event.id)
+            captured_ship["last_event_id"] = control_event.id
+            captured_ship.setdefault("history", []).append(control_event.id)
+            installed.append(control_event.id)
+        return installed
 
     def _apply_combat_consequences(self, world, resolved) -> None:
         outcome = resolved.data["outcome"]
@@ -881,6 +1155,7 @@ class EncounterSystem:
                 new_captor_location = world.location_of(winner_ship_id)
                 for prisoner_id in custody_transfers:
                     self.prisoners[prisoner_id]["captor_ship_id"] = winner_ship_id
+                    self.prisoners[prisoner_id]["last_custody_event_id"] = custody.id
                     world.entities[prisoner_id].update({
                         "ship_id": winner_ship_id,
                         "location": dict(new_captor_location),
@@ -949,8 +1224,11 @@ class EncounterSystem:
                       "bounty_total_silver": self.bounty_silver.get(winner_crew_id, 0)},
                 caused_by=list(dict.fromkeys(consequence_causes)),
                 causes_tags=["reputation", "combat_reputation"], magnitude=0.35)
+            winner_captain = world.crew_ships.crews.get(winner_crew_id, {}).get("captain_id")
+            if winner_captain:
+                world.politics.record_public_deed(
+                    world, winner_captain, resolved.id, deed_kind="combat_victory")
             if winner_crew_id and loser_crew_id:
-                winner_captain = world.crew_ships.crews.get(winner_crew_id, {}).get("captain_id")
                 loser_captain = world.crew_ships.crews.get(loser_crew_id, {}).get("captain_id")
                 response_event = world.politics.on_combat_resolved(
                     world, winner_crew_id=winner_crew_id, loser_crew_id=loser_crew_id,
@@ -1244,49 +1522,8 @@ class EncounterSystem:
         ship["last_event_id"] = event.id
         world.archive[ship_id] = ship
         del world.entities[ship_id]
-        merchant = next((row for row in world.economy.merchants.values()
-                         if row["ship_id"] == ship_id), None)
-        if merchant:
-            salvage_island = (location["id"] if location["kind"] == "island" else
-                              world.geography.routes[location["id"]].origin)
-            replacement_id, replacement_created = world.create_vessel(
-                merchant["name"] + "'s ship", salvage_island,
-                navigation=ship.get("navigation", 55),
-                successor_of=ship_id,
-            )
-            replacement = world.entities[replacement_id]
-            replacement["cargo"] = dict(merchant["cargo_milli"])
-            replacement["cargo_capacity_milli"] = merchant["capacity_milli"]
-            acquired = world.event_log.append(
-                tick=world.clock.tick, event_type="SHIP_ACQUIRED", location=salvage_island,
-                actors=[{"role": "merchant", "entity_id": merchant["id"]}],
-                targets=[{"role": "acquired_ship", "entity_id": replacement_id}],
-                data={"method": "replacement", "successor_of": ship_id,
-                      "ship_created_event_id": replacement_created,
-                      "legal_owner_kind": "merchant", "legal_owner_id": merchant["id"],
-                      "controller_crew_id": None},
-                caused_by=[event.id, replacement_created],
-                causes_tags=["ship_acquisition", "merchant_replacement"], magnitude=0.35,
-            )
-            merchant["ship_id"] = replacement_id
-            world.assign_ship_title(
-                replacement_id, owner_kind="merchant", owner_id=merchant["id"],
-                controller_crew_id=None, event_id=acquired.id)
-            replaced = world.event_log.append(
-                tick=world.clock.tick, event_type="MERCHANT_VESSEL_REPLACED",
-                location=salvage_island,
-                actors=[{"role": "merchant", "entity_id": merchant["id"]}],
-                targets=[{"role": "lost_vessel", "entity_id": ship_id},
-                         {"role": "replacement_vessel", "entity_id": replacement_id}],
-                data={"merchant_id": merchant["id"], "old_ship_id": ship_id,
-                      "new_ship_id": replacement_id,
-                      "silver_carried": merchant["silver"],
-                      "cargo_milli": dict(merchant["cargo_milli"])},
-                caused_by=[event.id, replacement_created, acquired.id],
-                causes_tags=["merchant_continuity", "replacement_vessel", "finite_assets_retained"],
-                magnitude=0.5,
-            )
-            merchant["last_event_id"] = replaced.id
+        world.economy.close_merchant_for_vessel_loss(
+            world, ship_id, event.id, location=location)
         return event.id
 
     def _finish(self, world, encounter, outcome: str,
@@ -1450,7 +1687,10 @@ class EncounterSystem:
             if (not isinstance(character_id, str) or not character_id
                     or not isinstance(prisoner, dict)
                     or set(prisoner) - {"character_id", "captor_ship_id", "capture_event_id",
-                                        "status", "fate_event_id", "former_crew_id"}
+                                        "status", "fate_event_id", "former_crew_id",
+                                        "capture_day", "next_review_day", "last_custody_event_id",
+                                        "provision_shortage_days", "ransom_demand_event_id",
+                                        "ransom_demand_silver", "escape_attempts"}
                     or not {"character_id", "captor_ship_id", "capture_event_id",
                             "status", "fate_event_id"}.issubset(prisoner)
                     or prisoner["character_id"] != character_id
@@ -1459,10 +1699,21 @@ class EncounterSystem:
                     or prisoner.get("former_crew_id") is not None
                     and not isinstance(prisoner["former_crew_id"], str)
                     or prisoner["status"] not in {"held", "ransomed", "executed", "deceased", "recruited",
-                                                   "released", "traded"}
+                                                    "released", "traded", "escaped"}
                     or prisoner["fate_event_id"] is not None
-                    and not isinstance(prisoner["fate_event_id"], str)):
+                    and not isinstance(prisoner["fate_event_id"], str)
+                    or any(key in prisoner and (type(prisoner[key]) is not int
+                                                or prisoner[key] < 0)
+                           for key in ("capture_day", "next_review_day",
+                                       "provision_shortage_days", "escape_attempts"))
+                    or any(key in prisoner and prisoner[key] is not None
+                           and not isinstance(prisoner[key], str)
+                           for key in ("last_custody_event_id", "ransom_demand_event_id"))):
                 raise ValueError(f"Invalid prisoner record: {character_id}")
+            if (prisoner.get("ransom_demand_silver") is not None
+                    and (type(prisoner["ransom_demand_silver"]) is not int
+                         or prisoner["ransom_demand_silver"] < 0)):
+                raise ValueError(f"Invalid prisoner ransom demand: {character_id}")
 
     def validate_world(self, world) -> None:
         self.validate_state()
@@ -1481,7 +1732,9 @@ class EncounterSystem:
             if prisoner["captor_ship_id"] not in world.entities \
                     and prisoner["captor_ship_id"] not in world.archive:
                 raise ValueError("Prisoner registry references an unknown captor ship")
-            for event_id in (prisoner["capture_event_id"], prisoner["fate_event_id"]):
+            for event_id in (prisoner["capture_event_id"], prisoner["fate_event_id"],
+                             prisoner.get("last_custody_event_id"),
+                             prisoner.get("ransom_demand_event_id")):
                 if event_id is not None:
                     world.event_log.get(event_id)
             archived = character_id in world.archive

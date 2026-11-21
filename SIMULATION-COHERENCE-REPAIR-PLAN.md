@@ -120,6 +120,8 @@ Record accepted refinements in the authoritative spec before implementing confli
 
 **Gate:** `T-PROMOTION-DEEDS`, `T-RECRUIT-RESOURCES`, `T-EARLY-ACTIVITY`, `T-PAIR-CADENCE`. Include fixtures where no opportunity exists, so tests do not enforce a hidden monthly quota. Publish cadence thresholds and false-positive examples before treating the detector as acceptance evidence.
 
+**Cadence audit policy (R6):** Include pairs with at least 3 encounters; report every interval in whole days, dominant interval share, encounter location sequence, outcome sequence, and stance sequence. A pair is an unexplained-periodicity *candidate* only when at least 80% of its intervals share one duration, all encounter locations are missing, every outcome is unchanged, and every stance signature is unchanged. Repeated encounters at one island or route are reported as observed spatial opportunity and are not flagged by frequency alone. Varying locations, outcomes, or stances are contextual repeats, not detector failures. False-positive fixture: four encounters every seven days at one island, even if the outcome repeats; it remains an observed co-location opportunity. Positive fixture: four seven-day encounters with missing locations and identical outcomes/stances; it is flagged for review, not asserted to be a proven simulation defect.
+
 ### R7 — Persistent consequences and productive economy
 
 **Deliverables**

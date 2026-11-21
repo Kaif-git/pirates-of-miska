@@ -29,7 +29,7 @@ class GuideView:
     enemy_id: str
     public_key: PublicKey
     exact_stats: bool
-    jitter: bool
+    aim_dispersion: bool
 
 
 @dataclass(frozen=True)
@@ -101,9 +101,8 @@ def make_guide_view(state, player_id, notebook):
     cfg = load_config()
     for group in ("time", "defaults", "stamina", "fatigue", "stats", "blood", "anger", "morale",
                   "fear", "level", "zones", "wound_net", "wounds", "injury", "stability", "pain",
-                  "guard", "gear", "actions", "guide"):
+                  "guard", "gear", "actions", "guide", "accuracy", "anatomy_sites"):
         cfg[group] = deepcopy(state.config[group])
-    cfg["accuracy"]["jitter"] = 0
     for group in ("base", "weights"):
         cfg["ronin"][group] = dict.fromkeys(cfg["ronin"][group], 0)
     own = deepcopy(player)
@@ -139,7 +138,7 @@ def make_guide_view(state, player_id, notebook):
                          tick=state.tick, walkable=deepcopy(state.walkable), exits=deepcopy(state.exits),
                          end_reason=state.end_reason, winner=state.winner)
     return GuideView(sample, own.id, estimated.id, _public_key(sample, estimated),
-                     known, state.config["accuracy"]["jitter"] > 0)
+                      known, True)
 
 
 def legal_choices(state, fighter_id, *, affordable=True):
@@ -284,7 +283,7 @@ CAUSE_LINES = {
     "LIGHT_CATCHES_RECOVERY": "Light can punish exposed recovery.",
     "GUARD_BYPASSED": "Hand and leg strikes bypass the guard line.",
     "WALK_DEFENSELESS": "Walking in reach leaves you defenseless.",
-    "ZONE_DRIFT": "Accuracy or exposure forces the strike to a safer fallback zone.",
+    "ZONE_DRIFT": "Seeded aim dispersion or a covered site moved contact to a nearby body zone.",
     "OUT_OF_REACH": "An attack misses because its target is out of reach.",
     "OUTSIDE_LOCKED_ATTACK_GEOMETRY": "The target moved outside the attack's locked direction before impact.",
     "OVEREXTENDED_HEAVY_WHIFF": "An out-of-reach heavy overextends and costs stability.",
@@ -332,13 +331,11 @@ def guide(view, notebook, mode="full"):
     risk = []
     if not view.exact_stats:
         risk.append("Opponent stats are estimates until three observed exchanges.")
-    if view.jitter:
-        risk.append("Strike accuracy has seeded jitter; forecasts are not guarantees.")
+    if view.aim_dispersion:
+        risk.append("Seeded aim dispersion can drift to a nearby site or miss; Accuracy changes clean-contact odds, not reach or legal targeting.")
+        risk.append("Hand aim needs visible exposure; Accuracy affects clean-contact odds, not whether the hand can be targeted.")
     player = next(f for f in view.simulation.fighters if f.id == view.player_id)
     acc = effective_stats(player, view.simulation.config, view.simulation.tick).accuracy
-    difficulty = view.simulation.config["zones"]["difficulty"]["HAND"]
-    if acc < difficulty:
-        risk.append(f"Hand needs {difficulty:g} ACC; you have {acc:g}: may drift to arm. Torso is safer.")
     return GuideAdvice(best.action if mode == "full" else None,
                        best.action.aim if mode == "full" else None,
                        tuple(why), tuple(risk), confidence, alternatives if mode == "full" else (),
