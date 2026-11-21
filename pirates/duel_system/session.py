@@ -6,12 +6,12 @@ NPC choice and notebook key are captured before the player's same-tick choice.
 from copy import deepcopy
 from dataclasses import asdict
 
-from .ai import choose_action, observe, record_ai_decision, record_ai_outcomes
+from .ai import choose_action, observe
 from .config import load_config
 from .engine import (Choice, advance_one_tick, check_end_conditions, commit_action,
-                     legality, release_guard)
+                     legality, movement_path, release_guard)
 from .guide import guide, make_guide_view
-from .mental import fear_decision, initialize_fight
+from .mental import initialize_fight, refresh_behavior_modes
 from .model import ActionKind, CombatState, Equipment, EventType, Fighter, Personality, Weapon, Zone, _plain
 from .notebook import Notebook
 
@@ -25,7 +25,6 @@ class DuelSession:
         self.inputs = []
         self._guide_cache = None
         self._exchange_cursor = len(state.event_log)
-        self._ai_outcome_cursor = len(state.event_log)
         self._victory_settled = False
         self.exchange = None
 
@@ -111,7 +110,6 @@ class DuelSession:
 
     def _record_npc(self, fighter_id, category, observation):
         fighter = self.state.fighter(fighter_id)
-        record_ai_decision(fighter, category)
         witnessed = (len(self.state.fighters) <= 2 or self.state.can_see(self.player, fighter))
         if witnessed:
             if len(self.state.fighters) <= 2:
@@ -124,19 +122,49 @@ class DuelSession:
         self.state.emit(EventType.DECISION, fighter.id,
                         deltas={"category": category, "witnessed": witnessed})
 
-    def _record_ai_outcomes(self):
-        events = self.state.event_log[self._ai_outcome_cursor:]
-        record_ai_outcomes(self.state, events)
-        self._ai_outcome_cursor = len(self.state.event_log)
-
     def _npc_plan(self, snapshot, fighter_id):
         """Read one actor's legal choice from the shared, pre-commit snapshot."""
         fighter = snapshot.fighter(fighter_id)
         observation = observe(snapshot, fighter_id)
-        rule = snapshot.config["fear"]
-        count = fighter.fear_decisions + 1 if observation.fear >= rule["break_threshold"] else 0
-        if count >= rule["break_decisions"]:
-            return observation, "YIELD", None
+        if fighter.behavior_modes["pain"] == "BREAK" or fighter.behavior_modes["fear"] == "BREAK":
+            exits = snapshot.exits
+            if exits:
+                options = []
+                current_distance = min(max(abs(fighter.pos[0]-x), abs(fighter.pos[1]-y))
+                                       for x, y in exits)
+                threat = snapshot.perceived_hostile_position(fighter.id)
+                movement_kinds = (ActionKind.WALK, ActionKind.DASH, ActionKind.RUN,
+                                  ActionKind.DISENGAGE)
+                for kind in movement_kinds:
+                    for dx in (-1, 0, 1):
+                        for dy in (-1, 0, 1):
+                            if dx == dy == 0:
+                                continue
+                            max_tiles = snapshot.config["actions"][kind.value]["max_tiles"]
+                            for tiles in range(1, max_tiles + 1):
+                                choice = Choice(kind, direction=(dx, dy), tiles=tiles)
+                                if legality(snapshot, fighter.id, choice):
+                                    continue
+                                destination = movement_path(snapshot, fighter, choice)[-1]
+                                exit_distance = min(max(abs(destination[0]-x), abs(destination[1]-y))
+                                                    for x, y in exits)
+                                if exit_distance >= current_distance:
+                                    continue
+                                threat_distance = (max(abs(destination[0]-threat[1][0]),
+                                                       abs(destination[1]-threat[1][1]))
+                                                   if threat else 0)
+                                options.append((exit_distance, -threat_distance, kind.value,
+                                                dx, dy, tiles, choice))
+                if options:
+                    *_, choice = min(options, key=lambda row: row[:-1])
+                    category = ({ActionKind.DASH: "DASH_OUT", ActionKind.RUN: "RUN_OUT",
+                                 ActionKind.WALK: "WALK_OUT", ActionKind.DISENGAGE: "DISENGAGE"}
+                                [choice.kind])
+                    return observation, category, choice
+            if fighter.morale <= snapshot.config["behavior_thresholds"]["yield_morale_max"]:
+                choice = Choice(ActionKind.YIELD)
+                if not legality(snapshot, fighter.id, choice):
+                    return observation, "YIELD", choice
         decision = choose_action(snapshot, fighter_id)
         return observation, decision.category, decision.choice
 
@@ -147,9 +175,6 @@ class DuelSession:
             return None
         snapshot = self.state.clone()
         observation, category, choice = self._npc_plan(snapshot, enemy.id)
-        if fear_decision(self.state, enemy,
-                         on_break=lambda: self._record_npc(enemy.id, "YIELD", observation)):
-            return None
         self._record_npc(enemy.id, category, observation)
         return choice
 
@@ -158,6 +183,9 @@ class DuelSession:
             return False
         from .perception import refresh_contacts
         refresh_contacts(self.state)
+        for fighter in self.state.fighters:
+            if self.state.combat_active(fighter) and fighter.can_act(self.state.tick):
+                refresh_behavior_modes(self.state, fighter, "DECISION_BOUNDARY")
         event_cursor = len(self.state.event_log)
         participants = [fighter for fighter in self.state.fighters
                         if self.state.combat_active(fighter)
@@ -191,8 +219,8 @@ class DuelSession:
             "committed": [fighter.id for fighter in participants if fighter.action is not None],
             "event_cursor": event_cursor,
         }
-        # All policies saw the same snapshot. Advance fear once for every actual
-        # NPC decision, including decisions that do not yet end in a yield.
+        # All policies saw the same snapshot; modes are refreshed once at this
+        # simulation decision boundary, never by a render/observation query.
         for fighter in participants:
             if fighter.id not in plans:
                 continue
@@ -202,11 +230,7 @@ class DuelSession:
                 # its test/harness semantics rather than layering AI morale logic.
                 self._record_npc(fighter.id, category, observation)
                 continue
-            if fear_decision(self.state, fighter, on_break=lambda fid=fighter.id, obs=observation:
-                             self._record_npc(fid, "YIELD", obs)):
-                self.exchange["committed"].append(fighter.id)
-            else:
-                self._record_npc(fighter.id, category, observation)
+            self._record_npc(fighter.id, category, observation)
 
         if self.state.end_reason:
             self.exchange = None
@@ -219,6 +243,8 @@ class DuelSession:
         choices.extend((fighter.id, plans[fighter.id][2]) for fighter in participants
                        if fighter.id in plans and plans[fighter.id][2] is not None)
         for fighter_id, choice in choices:
+            if self.state.end_reason:
+                break
             commit_action(self.state, fighter_id, choice)
             self.exchange["committed"].append(fighter_id)
         if player_choice is not None:
@@ -326,7 +352,6 @@ class DuelSession:
                 for _ in ticks:
                     self.notebook.record_exchange(actor_id)
         self._exchange_cursor = len(self.state.event_log)
-        self._record_ai_outcomes()
 
     def run_to_player(self):
         while not (self.ready or self.holding_guard or self.state.end_reason):
@@ -446,14 +471,13 @@ class DuelSession:
                 "victory_settled": self._victory_settled,
                 "selected": asdict(self.selected) if self.selected else None,
                 "inputs": deepcopy(self.inputs), "exchange_cursor": self._exchange_cursor,
-                "ai_outcome_cursor": self._ai_outcome_cursor,
                 "exchange": deepcopy(self.exchange)})
 
     @classmethod
     def from_data(cls, data):
         data = deepcopy(data)
         current_version = load_config()["schema_version"]
-        if data.get("version") in set(range(1, 27)):
+        if data.get("version") in set(range(1, 30)):
             data["version"] = current_version
             data["notebook"]["version"] = current_version
         elif data.get("version") != current_version:
@@ -470,7 +494,6 @@ class DuelSession:
             session.selected = Choice(**values)
         session.inputs = deepcopy(data["inputs"])
         session._exchange_cursor = data["exchange_cursor"]
-        session._ai_outcome_cursor = data.get("ai_outcome_cursor", len(state.event_log))
         session._victory_settled = data.get("victory_settled", False)
         session.exchange = deepcopy(data.get("exchange"))
         if session.exchange is None and any(fighter.action for fighter in state.fighters):

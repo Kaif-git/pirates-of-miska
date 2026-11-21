@@ -251,7 +251,7 @@ def test_v12_active_attack_session_migrates_with_locked_bearing_and_defend_confi
                 "defend_raise", "defend_hold", "defend_lower", "defend_parry_window"):
         data["state"]["config"]["guard"].pop(key)
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.attack_bearing == (1, 0)
     assert restored.state.config["guard"]["defend_parry_window"] > 0
 
@@ -268,7 +268,7 @@ def test_v13_active_session_migrates_new_action_contracts_without_losing_commitm
     data["state"]["config"]["guard"].pop("riposte_disarm_windup_mult")
     data["state"]["config"]["tactics"].pop("feint_disrupt_ticks")
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.strike_tick == action.strike_tick
     assert restored.player.action.attack_bearing == action.attack_bearing
     assert restored.state.config["actions"]["THRUST"]["damage_type"] == "PIERCING"
@@ -296,7 +296,7 @@ def test_v14_active_session_migrates_legacy_accuracy_modifiers_and_preserves_com
     config["weapon_integrity"]["eye_accuracy_penalty_max"] = 0.35
     restored = DuelSession.from_data(data)
     migrated = restored.state.config
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.strike_tick == action.strike_tick
     assert restored.player.action.aim == action.aim
     assert restored.player.accuracy == session.player.accuracy
@@ -327,7 +327,7 @@ def test_v15_active_session_migrates_anatomical_catalogue_and_legacy_wound():
     enemy["wounds"][0].pop("side")
 
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.state.config["anatomy_sites"]["HEAD"]
     assert restored.player.action.strike_tick == action.strike_tick
     assert restored.enemy.wounds[0].site == "HAND"
@@ -351,7 +351,7 @@ def test_v16_session_migration_adds_wrist_sites_and_explicit_weapon_hand():
         fighter["permanent_injuries"].pop("severed_hands", None)
 
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.state.config["anatomy_sites"]["HAND"][-2:] == ["LEFT_WRIST", "RIGHT_WRIST"]
     assert restored.player.weapon_hand == "RIGHT"
     assert restored.player.action.strike_tick == action.strike_tick

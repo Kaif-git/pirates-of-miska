@@ -67,11 +67,8 @@ def test_coach_cannot_change_when_only_hidden_ai_or_rng_changes():
     session = DuelSession.new(guide_mode='off')
     ui = DuelUI(session, rounds=True)
     first = coach(ui.model())
-    session.enemy.personality.base['HEAVY'] = 999999
-    session.enemy.personality.traits = dict.fromkeys(session.enemy.personality.traits, 0)
-    session.enemy.personality.score_bias = dict.fromkeys(session.enemy.personality.score_bias, 999999)
-    session.enemy.ai_current_category = 'HEAVY'
-    session.enemy.ai_experience = [{'category': 'LIGHT', 'outcome': 'COUNTERED'}] * 12
+    session.enemy.personality.fear_gain_susceptibility = 1.5
+    session.enemy.personality.stress_composure = 0
     session.enemy.morale, session.enemy.pain = 0, 100
     session.state.rng_seed = 98765
     assert coach(ui.model()) == first

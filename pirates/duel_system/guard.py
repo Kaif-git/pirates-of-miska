@@ -59,7 +59,17 @@ def try_guard(state, attacker, defender, zone, snap):
     breaks = stamina_before - cost < 0 or (heavy and def_str < rule["break_str_ratio"] * att_str)
     pay_stamina(state, defender, cost)
     if heavy:
+        pain_before = defender.pain
         defender.pain = min(cap, defender.pain + rule["heavy_pain"])
+        from .mental import refresh_behavior_modes
+        from .stats import pain_burden
+        refresh_behavior_modes(state, defender, "HEAVY_GUARD_PAIN",
+                               before_values={"pain": pain_burden(defender, state.config)
+                                              - max(0, defender.pain-pain_before)
+                                              * (1 - (defender.personality.pain_tolerance
+                                                      if defender.personality else
+                                                      state.config["defaults"]["pain_tolerance"])
+                                                 * state.config["stats"]["pain_tolerance_suppression"])})
     tags = ("HEAVY_BEATS_GUARD",) if heavy else ("GUARD_BLOCK",)
     state.emit(EventType.BLOCK, defender.id, attacker.id, zone,
                deltas={"stamina_cost": cost, "stamina_before": stamina_before, **trace}, cause_tags=tags)

@@ -35,7 +35,7 @@ def _validate_shape(value, reference, location="config"):
 def validate_config(config, reference=None):
     if reference is None:
         reference = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    if config.get("schema_version") in set(range(1, 27)):
+    if config.get("schema_version") in set(range(1, 30)):
         return upgrade_config(config)
     _validate_shape(config, reference)
     if config["schema_version"] != reference["schema_version"]:
@@ -49,13 +49,20 @@ def validate_config(config, reference=None):
     if any(isinstance(config["defaults"][key], bool)
            or not isinstance(config["defaults"][key], (int, float))
            or not 0 <= config["defaults"][key] <= 1
-           for key in ("confidence", "anger_tolerance", "pain_tolerance")):
-        raise ValueError("Default confidence and mental tolerances must be in [0, 1]")
+           for key in ("anger_tolerance", "pain_tolerance")):
+        raise ValueError("Default mental tolerances must be in [0, 1]")
+    starting_fear = config["defaults"]["starting_fear"]
+    if (isinstance(starting_fear, bool) or not isinstance(starting_fear, (int, float))
+            or not math.isfinite(starting_fear)
+            or not 0 <= starting_fear <= config["defaults"]["pool_max"]):
+        raise ValueError("Default starting fear is outside the fear pool")
     thresholds = config["behavior_thresholds"]
-    if (not 0 <= thresholds["mode_exit"] < thresholds["mode_enter"]
-            < thresholds["critical_exit"] < thresholds["critical_enter"] <= 100
-            or not 0 <= thresholds["yield_morale_max"] <= 100):
-        raise ValueError("Behavior thresholds must preserve shared hysteresis ordering")
+    expected_thresholds = {"mode_enter": 50, "mode_exit": 40,
+                           "critical_enter": 100, "critical_exit": 90,
+                           "yield_morale_max": 25}
+    if (thresholds != expected_thresholds
+            or any(type(value) is not int for value in thresholds.values())):
+        raise ValueError("Behavior thresholds must match the approved shared levels")
     dispersion = config["accuracy"]["aim_dispersion"]
     if (config["accuracy"]["jitter"] != 0
             or not 0 <= dispersion["clean_min"] <= dispersion["clean_base"] <= dispersion["clean_max"] <= 1
@@ -106,6 +113,30 @@ def validate_config(config, reference=None):
                    for values in sites.values())):
         raise ValueError("Anatomical site catalogue must cover each zone with unique labels")
     _validate_profiles(config)
+    universal = config["universal_ai"]
+    expected_categories = (set(config["ai"]["tie_order"]) - {"YIELD"}
+                           | {"FEINT", "SHOVE", "DISENGAGE", "THRUST", "DISARM",
+                              "ADRENALINE", "DASH_SLASH", "RISE", "CRAWL"})
+    if set(universal["base"]) != expected_categories:
+        raise ValueError("universal_ai.base must score every supported NPC candidate category")
+    if set(universal["mode_bonus"]) != {
+            "protective_guard", "protective_exit", "cautious_guard", "cautious_exit",
+            "press_attack", "hot_attack", "break_guard", "break_exit",
+            "break_unsafe_trade"}:
+        raise ValueError("universal_ai.mode_bonus has invalid dimensions")
+    if set(universal["weights"]) != {
+            "opening", "counter", "unsafe_slow_attack", "position_per_gap", "stamina_cost",
+            "action_duration", "imminent_guard", "unsafe_bandage", "safe_bandage",
+            "wait_low_vigor", "shove_unsteady", "shove_open_space", "bleed_pressure",
+            "injury_risk", "adrenaline_trigger"}:
+        raise ValueError("universal_ai.weights has invalid dimensions")
+    if set(universal["tie_break"]) != {"margin", "amplitude"}:
+        raise ValueError("universal_ai.tie_break has invalid dimensions")
+    for section in ("base", "mode_bonus", "weights", "tie_break"):
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) or value < 0
+               for value in universal[section].values()):
+            raise ValueError(f"universal_ai.{section} values must be finite and nonnegative")
     susceptibility = config["ronin"]["fear_gain_susceptibility"]
     if (isinstance(susceptibility, bool) or not isinstance(susceptibility, (int, float))
             or not math.isfinite(susceptibility) or not 0.5 <= susceptibility <= 1.5):
@@ -142,37 +173,27 @@ def _validate_profiles(config):
     profiles = config["ai_profiles"]
     if not roster or len(set(roster)) != len(roster) or any(name not in profiles for name in roster):
         raise ValueError("personality.roster must contain unique configured profiles")
-    trait_names = {"aggression", "discipline", "confidence", "patience", "adaptability"}
-    categories = set(config["ai"]["tie_order"])
-    for name, profile in profiles.items():
-        if set(profile["traits"]) != trait_names:
-            raise ValueError(f"ai_profiles.{name}.traits has invalid dimensions")
-        if any(isinstance(value, bool) or not isinstance(value, (int, float))
-               or not math.isfinite(value) or not 0 <= value <= 1
-               for value in profile["traits"].values()):
-            raise ValueError(f"ai_profiles.{name}.trait values must be in [0, 1]")
-        if set(profile["score_bias"]) != categories:
-            raise ValueError(f"ai_profiles.{name}.score_bias must cover legal categories")
-        if (not 0 <= profile["composure"] <= 1 or profile["reaction_delay"] < 0
-                or any(isinstance(profile[key], bool)
-                       or not isinstance(profile[key], (int, float))
-                       or not math.isfinite(profile[key]) or not 0 <= profile[key] <= 1
-                       for key in ("anger_tolerance", "pain_tolerance"))):
-            raise ValueError(f"ai_profiles.{name} has invalid composure/reaction delay")
+    for name, profile in {"ronin": config["ronin"], **profiles}.items():
+        numeric = ("starting_fear", "morale_bias", "composure", "stress_composure",
+                   "anger_tolerance", "pain_tolerance")
+        if any(isinstance(profile[key], bool) or not isinstance(profile[key], (int, float))
+               or not math.isfinite(profile[key]) for key in numeric):
+            raise ValueError(f"ai_profiles.{name} numeric response fields must be finite")
+        if not 0 <= profile["starting_fear"] <= config["defaults"]["pool_max"]:
+            raise ValueError(f"ai_profiles.{name}.starting_fear is outside the fear pool")
+        if any(not 0 <= profile[key] <= 1
+               for key in ("composure", "stress_composure", "anger_tolerance", "pain_tolerance")):
+            raise ValueError(f"ai_profiles.{name} bounded response fields must be in [0, 1]")
         susceptibility = profile["fear_gain_susceptibility"]
         if (isinstance(susceptibility, bool) or not isinstance(susceptibility, (int, float))
                 or not math.isfinite(susceptibility) or not 0.5 <= susceptibility <= 1.5):
             raise ValueError(f"ai_profiles.{name}.fear_gain_susceptibility must be in [0.5, 1.5]")
-    personality = config["personality"]
-    if abs(sum(personality["pressure_weights"].values()) - 1) > 1e-9:
-        raise ValueError("personality.pressure_weights must sum to 1")
-    if personality["variation"]["margin"] < 0 or personality["variation"]["amplitude"] < 0:
-        raise ValueError("personality variation must be nonnegative")
-    adaptation = personality["adaptation"]
-    if adaptation["history"] <= 0 or adaptation["minimum_counters"] < 1:
-        raise ValueError("personality adaptation history/threshold must be positive")
-    if min(adaptation["counter_penalty"], adaptation["success_decay"], adaptation["max_penalty"]) < 0:
-        raise ValueError("personality adaptation scores must be nonnegative")
+    pressure_weights = config["personality"]["pressure_weights"]
+    if (set(pressure_weights) != {"fear", "pain", "nervousness"}
+            or abs(sum(pressure_weights.values()) - 1) > 1e-9
+            or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                   or not math.isfinite(value) or value < 0 for value in pressure_weights.values())):
+        raise ValueError("Shared injury-response pressure weights must be nonnegative and sum to 1")
 
 
 def _validate_injury(config):
@@ -209,7 +230,10 @@ def _validate_injury(config):
             or vital["organ_bleed_per_turn"] <= 0
             or not vital["qualifying_damage_types"]
             or set(vital["qualifying_damage_types"]) - set(damage_types)
-            or injury["bilateral_vision_range"] < 0):
+            or injury["bilateral_vision_range"] < 0
+            or isinstance(injury["unilateral_vision_range"], bool)
+            or not isinstance(injury["unilateral_vision_range"], int)
+            or injury["unilateral_vision_range"] <= injury["bilateral_vision_range"]):
         raise ValueError("Invalid vital-site force/contact or bilateral-vision tuning")
 
 
@@ -328,10 +352,13 @@ def upgrade_config(config):
     """Migrate persisted combat tuning while preserving compatible authored values."""
     migrated = deepcopy(config)
     version = migrated.get("schema_version")
-    if version not in set(range(1, 27)):
+    if version not in set(range(1, 30)):
         raise ValueError("Unsupported combat configuration version")
     current = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     migrated["schema_version"] = current["schema_version"]
+    if version < 30:
+        migrated.setdefault("injury", {})["unilateral_vision_range"] = current["injury"]["unilateral_vision_range"]
+        migrated.setdefault("wound_net", {})["eye_injury"] = current["wound_net"]["eye_injury"]
     if version <= 16:
         # Schema 17 adds the wrist as an anatomically eligible severe hand site.
         migrated["anatomy_sites"] = deepcopy(current["anatomy_sites"])
@@ -351,9 +378,6 @@ def upgrade_config(config):
     if version == 1:
         for key in ("ai_profiles", "personality"):
             migrated[key] = deepcopy(current[key])
-        legacy_brute = current["ai_profiles"]["brute"]
-        migrated["ronin"].setdefault("traits", deepcopy(legacy_brute["traits"]))
-        migrated["ronin"].setdefault("score_bias", deepcopy(legacy_brute["score_bias"]))
     if version < 3:
         migrated["injury"] = deepcopy(current["injury"])
     for action, values in current["actions"].items():
@@ -366,12 +390,6 @@ def upgrade_config(config):
             migrated["tactics"]["shove_max_stability_loss"] = deepcopy(value)
         elif key in migrated["tactics"]:
             migrated["tactics"][key] = deepcopy(value)
-    if version == 19:
-        # Schema 20 re-authors profile score biases after measured fight
-        # convergence; preserve other saved profile traits and weights.
-        for name, profile in current["ai_profiles"].items():
-            if name in migrated.get("ai_profiles", {}):
-                migrated["ai_profiles"][name]["score_bias"] = deepcopy(profile["score_bias"])
     if version < 22:
         # Before schema 22 fear/anger Accuracy effects were prohibited and
         # shipped neutral. Adopt the newly approved authored tuning defaults.
@@ -404,6 +422,42 @@ def upgrade_config(config):
     if isinstance(legacy_default_profile, dict) and "fear_gain_susceptibility" not in legacy_default_profile:
         legacy_default_profile["fear_gain_susceptibility"] = _legacy_fear_susceptibility(
             legacy_default_profile)
+    def clean_profile(profile, fallback):
+        traits = profile.get("traits", {}) if isinstance(profile, dict) else {}
+        confidence = traits.get("confidence", 0.5) if isinstance(traits, dict) else 0.5
+        if (isinstance(confidence, bool) or not isinstance(confidence, (int, float))
+                or not math.isfinite(confidence)):
+            confidence = 0.5
+        confidence = min(1, max(0, confidence))
+        return {
+            "fear_gain_susceptibility": profile.get("fear_gain_susceptibility",
+                                                      _legacy_fear_susceptibility(profile)),
+            "starting_fear": profile.get("starting_fear", 100 * (1 - confidence)),
+            "morale_bias": profile.get("morale_bias", profile.get(
+                "courage", fallback.get("morale_bias", 0))),
+            "composure": profile.get("composure", fallback.get("composure", 1)),
+            "stress_composure": profile.get("stress_composure", traits.get(
+                "discipline", fallback.get("stress_composure", 0.5))),
+            "anger_tolerance": profile.get("anger_tolerance", fallback.get("anger_tolerance", 0.5)),
+            "pain_tolerance": profile.get("pain_tolerance", fallback.get("pain_tolerance", 0.5)),
+        }
+    old_ronin = migrated.get("ronin", {})
+    new_ronin = clean_profile(old_ronin, current["ronin"])
+    migrated["ronin"] = {"archetype": old_ronin.get("archetype", "ronin"), **new_ronin}
+    migrated["ai_profiles"] = {
+        name: clean_profile(profile, current["ai_profiles"].get(name, new_ronin))
+        for name, profile in migrated.get("ai_profiles", {}).items()
+    }
+    legacy_default_confidence = migrated["defaults"].get("confidence", 1)
+    if (isinstance(legacy_default_confidence, bool)
+            or not isinstance(legacy_default_confidence, (int, float))
+            or not math.isfinite(legacy_default_confidence)):
+        legacy_default_confidence = 0.5
+    migrated["defaults"].setdefault(
+        "starting_fear", 100 * (1 - min(1, max(0, legacy_default_confidence))))
+    migrated["defaults"].pop("confidence", None)
+    migrated["ai"] = deepcopy(current["ai"])
+    migrated["personality"] = deepcopy(current["personality"])
     migrated["adrenaline"] = deepcopy(current["adrenaline"])
     _fill_missing(migrated, current)
     # Keep authored Accuracy permanent while only the approved fear/anger
@@ -426,6 +480,6 @@ def upgrade_config(config):
 def load_config(path=None):
     reference = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     config = json.loads(Path(path).read_text(encoding="utf-8")) if path else deepcopy(reference)
-    if config.get("schema_version") in set(range(1, 27)):
+    if config.get("schema_version") in set(range(1, 30)):
         return upgrade_config(config)
     return validate_config(config, reference)

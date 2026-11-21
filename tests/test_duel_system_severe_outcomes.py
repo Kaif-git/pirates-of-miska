@@ -228,9 +228,9 @@ def test_eye_trauma_has_no_direct_accuracy_penalty_beyond_fear_and_anger():
     from pirates.duel_system.render_model import build_render_model
     eye_rows = " ".join(build_render_model(
         state, Notebook(state.config).public_view(), timeline=False).enemy_injury_rows)
-    assert "threshold already banked" in eye_rows
-    assert "next eligible clean eye wound permanently impairs eye 2/2" in eye_rows
-    assert "/24" not in eye_rows
+    assert "one eye impaired" in eye_rows
+    assert "sight limited to 4 tile(s)" in eye_rows
+    assert "Cumulative eye trauma" not in eye_rows
     baseline = deepcopy(ronin)
     baseline.permanent_injuries.eyes_damaged = 0
     assert effective_stats(ronin, state.config, state.tick).accuracy == effective_stats(
@@ -250,7 +250,7 @@ def test_eye_trauma_has_no_direct_accuracy_penalty_beyond_fear_and_anger():
     assert hit.zone == Zone.EYE and not hit.deltas["drifted"]
 
 
-def test_repeated_clean_eye_cuts_accumulate_to_a_persistent_vision_injury():
+def test_one_clean_eye_cut_immediately_impairs_vision_and_second_hit_impairs_other_eye():
     from pirates.duel_system.wounds import apply_wound
 
     state = arena()
@@ -258,20 +258,35 @@ def test_repeated_clean_eye_cuts_accumulate_to_a_persistent_vision_injury():
     attacker.equipment.weapon.damage_type = "CUTTING"
     apply_wound(state, attacker, defender, Zone.EYE, Severity.CUT,
                 power=14, net=14, damage_type="CUTTING", site="EYE", side="RIGHT")
-    assert defender.permanent_injuries.eyes_damaged == 0
-    assert defender.permanent_injuries.eye_trauma == 14
-    assert not any(event.type == EventType.EYE_INJURY for event in state.event_log)
+    assert defender.permanent_injuries.eyes_damaged == 1
+    assert defender.permanent_injuries.eye_trauma == 0
+    assert any(event.type == EventType.EYE_INJURY for event in state.event_log)
 
     apply_wound(state, attacker, defender, Zone.EYE, Severity.CUT,
                 power=14, net=14, damage_type="CUTTING", site="EYE", side="RIGHT")
-    injury = next(event for event in state.event_log if event.type == EventType.EYE_INJURY)
-    assert defender.permanent_injuries.eyes_damaged == 1
-    assert injury.deltas["cumulative_contact"] is True
-    assert injury.deltas["eye_trauma_before"] == 14
-    assert injury.deltas["eye_trauma_threshold"] == 24
+    injury = [event for event in state.event_log if event.type == EventType.EYE_INJURY][-1]
+    assert defender.permanent_injuries.eyes_damaged == 2
+    assert injury.deltas["cumulative_contact"] is False
+    assert injury.deltas["eye_trauma_before"] == 0
+    assert injury.deltas["eye_trauma_threshold"] == 8
     restored = CombatState.from_data(state.to_data())
-    assert restored.fighter(defender.id).permanent_injuries.eyes_damaged == 1
-    assert restored.fighter(defender.id).permanent_injuries.eye_trauma == 4
+    assert restored.fighter(defender.id).permanent_injuries.eyes_damaged == 2
+    assert restored.fighter(defender.id).permanent_injuries.eye_trauma == 0
+
+
+def test_one_impaired_eye_caps_sight_at_four_tiles_and_two_at_one():
+    state = arena()
+    observer, target = state.fighters
+    observer.pos, target.pos = (0, 0), (4, 0)
+    observer.permanent_injuries.eyes_damaged = 1
+    assert state.can_see(observer, target)
+    target.pos = (5, 0)
+    assert not state.can_see(observer, target)
+    observer.permanent_injuries.eyes_damaged = 2
+    target.pos = (1, 0)
+    assert state.can_see(observer, target)
+    target.pos = (2, 0)
+    assert not state.can_see(observer, target)
 
     legacy_state = arena()
     commit_action(legacy_state, legacy_state.fighters[0].id, Choice(ActionKind.SHOVE))
@@ -653,7 +668,7 @@ def test_schema24_duel_journal_migrates_new_vital_sites_and_wound_fields():
     for fighter in data["state"]["fighters"]:
         fighter["permanent_injuries"].pop("severed_ears", None)
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 27
+    assert restored.state.config["schema_version"] == 30
     assert {"HEART", "LEFT_LUNG", "RIGHT_LUNG", "LIVER"} <= set(
         restored.state.config["anatomy_sites"]["TORSO"])
     assert restored.state.config["injury"]["bilateral_vision_range"] == 1
@@ -690,7 +705,7 @@ def test_v5_session_migration_adds_weapon_eye_and_ground_item_defaults():
     data["state"].pop("ground_weapons", None)
 
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 27
+    assert restored.state.config["schema_version"] == 30
     assert all(fighter.permanent_injuries.hand_severed for fighter in restored.state.fighters)
     assert all(fighter.equipment.weapon is None for fighter in restored.state.fighters)
     assert {item.weapon.item_id for item in restored.state.ground_weapons} == {"player:weapon", "ronin:weapon"}
@@ -721,7 +736,7 @@ def test_v5_migration_preserves_active_action_deadline_and_world_journal_continu
     loaded = World.load(save_path)
     restored = DuelSession.from_data(loaded.duel_journal)
     assert restored.player.action.end_tick == old_deadline
-    assert restored.state.config["schema_version"] == 27
+    assert restored.state.config["schema_version"] == 30
     assert restored.state.to_data()["rng_draws"] == session.state.to_data()["rng_draws"]
     replay = DuelSession.from_data(loaded.duel_journal)
     from pirates.duel_system.engine import advance_one_tick

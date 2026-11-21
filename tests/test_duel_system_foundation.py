@@ -30,7 +30,8 @@ def test_config_is_complete_isolated_and_json_serializable():
     assert cfg["actions"]["DASH_LIGHT"]["stamina"] == 12.26
     assert cfg["zones"]["difficulty"]["HAND"] == 20
     assert cfg["wounds"]["TORSO"]["CUT"]["bleed"] == 0.5
-    assert cfg["ronin"]["reaction_delay"] == 4
+    assert cfg["ai"]["reaction_delay_default"] == 4
+    assert "reaction_delay" not in cfg["ronin"]
     assert json.loads(json.dumps(cfg)) == cfg
     cfg["actions"]["LIGHT"]["windup"] = 999
     assert load_config()["actions"]["LIGHT"]["windup"] == 2.9

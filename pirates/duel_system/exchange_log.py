@@ -54,18 +54,15 @@ def injury_numbers(event, private_actor_ids=(), *, compact=False):
                 before_eyes = data.get("eyes_damaged_before", 0)
                 eyes = data.get("eyes_damaged_after")
                 if eyes is not None and eyes > before_eyes:
-                    carry = (f"{number(current)} points carry toward the next eye ("
-                             f"{number(item['net_threshold'])}-point threshold"
-                             + (" already met)" if current >= item["net_threshold"] else ")"))
-                    special_text = (f"Eye trauma reached {number(item['net_threshold'])}: permanently impaired "
-                                    f"eye {eyes}/2; {carry}")
+                    special_text = (f"Clean eye contact reached {number(item['net_threshold'])} post-armor force: "
+                                    f"eye {eyes}/2 impaired; a later clean CUT-or-worse contact can impair the other eye")
                 elif current >= item["net_threshold"] and before_eyes < 2:
                     special_text = (f"eye-trauma threshold already banked ({number(current)} points; "
                                     f"threshold {number(item['net_threshold']):g}); next eligible clean eye wound "
                                     f"permanently impairs eye {before_eyes+1}/2")
                 else:
-                    special_text = (f"eye trauma {number(current)}/{number(item['net_threshold'])} points toward "
-                                    f"next permanent eye impairment ({number(max(0, item['net_threshold']-current))} more)")
+                    special_text = (f"eye trauma {number(current)} points; a clean CUT-or-worse contact "
+                                    f"reaches the {number(item['net_threshold'])}-point impairment threshold")
                 specials.append(special_text)
             elif item["net_threshold"] > net:
                 specials.append(f"{item['label']} ≥{number(item['net_threshold'])} (+{number(item['net_threshold']-net)})")
@@ -96,6 +93,63 @@ def injury_numbers(event, private_actor_ids=(), *, compact=False):
     return "\n".join(rows)
 
 
+def action_stat_comparison(hit, choices, names, private_actor_ids=()):
+    """Explain the committed numerical matchup without inventing a stat contest."""
+    if hit.actor in private_actor_ids or hit.target in private_actor_ids:
+        return ""
+    own, other = choices.get(hit.actor), choices.get(hit.target)
+    if own is None or other is None:
+        return ""
+    own_stats, other_stats = own.deltas, other.deltas
+    actor = names.get(hit.actor, hit.actor)
+    target = names.get(hit.target, hit.target)
+    fields = []
+    for key, label in (("speed", "Speed"), ("strength", "Strength"), ("accuracy", "Accuracy")):
+        if key in own_stats and key in other_stats:
+            delta = own_stats[key] - other_stats[key]
+            fields.append(f"{label} {actor} {own_stats[key]:.1f} vs {target} {other_stats[key]:.1f} ({delta:+.1f})")
+    own_tick, other_tick = own_stats.get("strike_tick"), other_stats.get("strike_tick")
+    if own_tick is not None and other_tick is not None:
+        delta = other_tick - own_tick
+        if delta > 0:
+            fields.append(f"impact due t{own_tick} vs t{other_tick}; {actor} had a {delta}-tick timing edge; "
+                          "the later commitment can still resolve unless an INTERRUPT is recorded")
+        elif delta < 0:
+            fields.append(f"impact due t{own_tick} vs t{other_tick}; {target} was scheduled {-delta} tick(s) earlier; "
+                          "check its separate HIT/WHIFF/CLASH outcome")
+        else:
+            fields.append(f"both impacts due t{own_tick}; same-tick strike checks precede movement, "
+                          "so both can land unless a clash or interruption prevents one")
+    if not fields:
+        return ""
+    return ("Action comparison: " + "; ".join(fields)
+            + "; ordinary body contact is not a single-stat contest.")
+
+
+def condition_change_line(event, names, private_actor_ids=()):
+    if event.target in private_actor_ids:
+        return ""
+    before = event.deltas.get("target_condition_before")
+    after = event.deltas.get("target_condition_after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return ""
+    fields = []
+    for key, label in (("pain", "Pain"), ("effective_pain", "Effective pain"),
+                       ("fear", "Fear"), ("anger", "Anger"), ("morale", "Morale"),
+                       ("blood", "Blood"), ("stamina", "Stamina"), ("fatigue", "Fatigue"),
+                       ("stability", "Stability"), ("strength", "Effective Strength"),
+                       ("speed", "Effective Speed"), ("accuracy", "Effective Accuracy")):
+        start, end = before.get(key), after.get(key)
+        if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            fields.append(f"{label} {start:.1f}→{end:.1f} ({end-start:+.1f})")
+    modes_before, modes_after = before.get("behavior_modes", {}), after.get("behavior_modes", {})
+    for key, label in (("pain", "Pain mode"), ("fear", "Fear mode"), ("anger", "Anger mode")):
+        if modes_before.get(key) != modes_after.get(key):
+            fields.append(f"{label} {modes_before.get(key, '?')}→{modes_after.get(key, '?')}")
+    target = names.get(event.target, event.target)
+    return f"{target} condition from this hit: " + "; ".join(fields) + "." if fields else ""
+
+
 def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=()):
     """Compact choices, bodily outcomes and causal explanation; never score damage."""
     choices = {event.actor: event for event in events if event.type.value == "ACTION_START"}
@@ -111,7 +165,12 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
                         "S": (0, 1), "SW": (-1, 1), "W": (-1, 0), "NW": (-1, -1)}.items()}
             label += f" · {data.get('tiles', 1)} {compass.get(tuple(data['direction']), '?')}"
         return label
-    outcomes, checks = [], []
+    def stat_comparison(hit):
+        return action_stat_comparison(hit, choices, names, private_actor_ids)
+
+    def condition_delta(hit):
+        return condition_change_line(hit, names, private_actor_ids)
+    outcomes, checks, condition_changes = [], [], []
     for event in events:
         kind, data = event.type.value, event.deltas
         actor, target = who(event.actor), who(event.target)
@@ -147,6 +206,12 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
             numbers = injury_numbers(event, private_actor_ids, compact=True)
             number_text = f"; {numbers}" if numbers else ""
             outcomes.append(f"{actor} hit {possessive} {side}{site} ({event.severity.value.lower()}{number_text}).")
+            comparison = stat_comparison(event)
+            if comparison:
+                checks.append((85, comparison))
+            changes = condition_delta(event)
+            if changes:
+                condition_changes.append(changes)
             if data.get("structure"):
                 depth = data.get('depth', event.severity.value.lower()).replace('_', ' ').lower()
                 structure = data['structure'].replace('_', ' ').lower()
@@ -298,11 +363,8 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
                 outcomes.append(f"{target} lost the {side}hand ({outcome}).")
         elif kind == "EYE_INJURY":
             outcomes.append(f"{target} sustained a permanent eye injury ({data['eyes_damaged_after']} eye(s) impaired).")
-            cause = (f"clean eye contacts accumulated {data['eye_trauma_before']:.1f} + "
-                     f"{data['net_after_armor']:.1f} post-armor force to reach "
-                     f"{data['eye_trauma_threshold']:.1f}."
-                     if data.get("cumulative_contact") else
-                     "one clean contact met the post-armor eye injury threshold.")
+            cause = (f"clean eye contact reached {data['net_after_armor']:.1f} post-armor force "
+                     f"(threshold {data['eye_trauma_threshold']:.1f}); a clean CUT-or-worse hit damages one eye.")
             checks.append((95, "Eye injury: " + cause))
         elif kind == "DECAPITATION":
             outcomes.append(f"{target} died from a clean heavy cutting head strike.")
@@ -329,7 +391,7 @@ def summarize_exchange(events, names, *, deep_threshold=None, private_actor_ids=
         moving = next((choice for choice in choices.values() if choice.deltas.get('direction') and 'speed' in choice.deltas), None)
         if moving:
             checks.append((10, f"Movement: Speed {moving.deltas['speed']:.1f} set step timing."))
-    consequences = []
+    consequences = list(condition_changes)
     bleed_totals, forced_steps = {}, {}
     for event in events:
         kind, data = event.type.value, event.deltas
@@ -479,6 +541,9 @@ def format_exchange(events, names, *, before=None, fighters=(), private_actor_id
                 site = data["side"].lower() + " " + site
             rows.append(f"{actor}: hit {possessive} {zone} ({site}; {event.severity.value.lower()}). Why: "
                         + "; ".join(reason)+".")
+            comparison = action_stat_comparison(event, choices, names, private_actor_ids)
+            if comparison:
+                rows.append(comparison)
             if data.get("structure"):
                 depth = data.get('depth', event.severity.value.lower()).replace('_', ' ').lower()
                 structure = data['structure'].replace('_', ' ').lower()
@@ -490,6 +555,9 @@ def format_exchange(events, names, *, before=None, fighters=(), private_actor_id
                 rows.append(f"{target}: {zone} {event.severity.value.lower()} contact; "
                             "see current condition for resulting function and bleeding.")
             rows.extend(injury_numbers(event, private_actor_ids).splitlines())
+            changes = condition_change_line(event, names, private_actor_ids)
+            if changes:
+                rows.append(changes)
         elif kind in {"PARRY", "BLOCK", "GUARD_BREAK"}:
             if kind == "PARRY":
                 reason = (f"inside the {data['parry_window']}-tick parry window; defender Strength {data['defender_strength']:.1f} "

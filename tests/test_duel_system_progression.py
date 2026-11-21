@@ -87,7 +87,8 @@ def test_flee_or_player_defeat_never_rewards_xp():
 
 def test_fear_yield_on_automatic_tick_settles_winner_xp_once():
     session = DuelSession.new(guide_mode="hints")
-    session.enemy.morale, session.enemy.anger, session.enemy.fear_decisions = 0, 0, 2
+    session.state.exits.clear()
+    session.enemy.morale, session.enemy.fear_meter = 25, 100
     session.step()
     assert session.state.end_reason == "yield"
     assert session.player.xp == 85

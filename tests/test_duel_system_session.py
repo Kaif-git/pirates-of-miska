@@ -2,7 +2,7 @@
 import json
 from types import SimpleNamespace
 
-from pirates.duel_system.engine import Choice, check_end_conditions
+from pirates.duel_system.engine import Choice, check_end_conditions, legality
 from pirates.duel_system.model import ActionKind, EventType, Zone
 from pirates.duel_system.session import DuelSession
 
@@ -11,7 +11,7 @@ def test_select_is_free_confirm_commits_and_npc_uses_pre_choice_snapshot():
     session = DuelSession.new(guide_mode="off")
     player, enemy = session.state.fighters
     player.pos, enemy.pos = (4, 3), (5, 3)
-    enemy.personality.weights["reading"] = 3
+    enemy.personality.stress_composure = 0
     before = session.state.to_data()
     preview = session.select(Choice(ActionKind.LIGHT, Zone.TORSO))
     assert preview.valid
@@ -55,7 +55,7 @@ def test_guard_hold_is_explicit_decision_and_release_resolves_without_freeze():
 def test_npc_guard_release_does_not_peek_at_unseen_player_heavy():
     from pirates.duel_system.engine import commit_action
     session = DuelSession.new(guide_mode="off")
-    session.enemy.personality.reaction_delay = 20
+    session.state.config["ai"]["reaction_delay_default"] = 20
     commit_action(session.state, session.enemy.id, Choice(ActionKind.GUARD))
     commit_action(session.state, session.player.id, Choice(ActionKind.HEAVY, Zone.TORSO))
     session.state.tick = session.enemy.action.guard_ready_tick + session.enemy.action.parry_window
@@ -80,18 +80,34 @@ def test_previewing_and_reading_model_do_not_record_extra_npc_decisions():
 
 def test_session_roundtrip_preserves_active_replay_notebook_and_pending_preview():
     session = DuelSession.new(guide_mode="off")
-    session.enemy.ai_experience = [{"category": "LIGHT", "outcome": "COUNTERED"}]
-    session.enemy.ai_stagnant_decisions = 2
-    session.enemy.ai_current_category = "LIGHT"
     session.select(Choice(ActionKind.WALK, direction=(0, 1)))
     data = json.loads(json.dumps(session.to_data()))
     restored = DuelSession.from_data(data)
     assert restored.to_data() == data
-    assert restored.enemy.ai_experience == session.enemy.ai_experience
-    assert restored.enemy.ai_stagnant_decisions == 2
     assert restored.confirm()
     restored.run_to_player()
     assert restored.notebook.to_data() != session.notebook.to_data()
+
+
+def test_schema26_session_without_mode_latches_refreshes_on_first_decision():
+    session = DuelSession.new(guide_mode="off", seed=27)
+    session.enemy.fear_meter = 60
+    data = json.loads(json.dumps(session.to_data()))
+    data["version"] = 26
+    data["notebook"]["version"] = 26
+    data["state"]["schema_version"] = 26
+    data["state"]["config"]["schema_version"] = 26
+    data["state"]["config"].pop("behavior_thresholds")
+    for fighter in data["state"]["fighters"]:
+        fighter.pop("behavior_modes", None)
+    restored = DuelSession.from_data(data)
+    assert restored.state.config["schema_version"] == 30
+    assert restored.enemy.behavior_modes["fear"] == "NONE"
+    assert restored._start_exchange()
+    assert restored.enemy.behavior_modes["fear"] == "CAUTIOUS"
+    transition = next(event for event in restored.state.event_log
+                      if event.type == EventType.BEHAVIOR_MODE)
+    assert transition.deltas["cause"] == "DECISION_BOUNDARY"
 
 
 def test_finished_model_distinguishes_death_unconscious_and_victory():
@@ -146,31 +162,77 @@ def test_next_duel_carries_injuries_resources_and_expiring_status_deadlines():
     assert following.enemy.personality.archetype == "aggressor"
 
 
-def test_fear_break_is_recorded_as_observed_yield_before_fight_end():
+def test_critical_fear_low_morale_without_viable_exit_yields_before_fight_end():
     session = DuelSession.new(guide_mode="off")
-    session.enemy.morale, session.enemy.anger, session.enemy.fear_decisions = 0, 0, 2
+    session.state.exits.clear()
+    session.enemy.morale, session.enemy.fear_meter = 25, 100
     session.select(Choice(ActionKind.WAIT))
-    assert not session.confirm()
+    assert session.confirm()
+    assert session.state.end_reason == "yield"
     decision_index = next(index for index, event in enumerate(session.state.event_log)
                           if event.type == EventType.DECISION and event.deltas["category"] == "YIELD")
     end_index = next(index for index, event in enumerate(session.state.event_log) if event.type == EventType.FIGHT_END)
     assert decision_index < end_index
-    assert any("YIELD" in entry.counts for entry in session.notebook.archetypes["brute"].values())
+    assert any("YIELD" in entry.counts
+               for entry in session.notebook.named[session.enemy.id].values())
 
 
-def test_session_advances_fear_break_counter_on_each_npc_decision(monkeypatch):
+def test_simultaneous_critical_pain_fear_and_hot_anger_yield_once_at_low_morale():
+    session = DuelSession.new(guide_mode="off")
+    session.state.exits.clear()
+    session.enemy.personality.pain_tolerance = 0
+    session.enemy.pain = session.enemy.fear_meter = session.enemy.anger = 100
+    session.enemy.morale = 25
+    session.select(Choice(ActionKind.WAIT))
+    assert session.confirm()
+    assert session.state.end_reason == "yield"
+    assert session.enemy.yielded
+    assert session.enemy.behavior_modes == {"pain": "BREAK", "fear": "BREAK", "anger": "HOT"}
+    starts = [event for event in session.state.event_log if event.type == EventType.ACTION_START]
+    assert {fighter.id: sum(event.actor == fighter.id for event in starts)
+            for fighter in session.state.fighters} == {"player": 1, "ronin": 1}
+
+
+def test_low_morale_alone_does_not_yield_and_subcritical_fear_has_no_legacy_counter(monkeypatch):
     session = DuelSession.new(guide_mode="off", seed=804)
-    session.enemy.morale, session.enemy.anger = 0, 0
+    session.state.exits.clear()
+    session.enemy.morale, session.enemy.fear_meter = 0, 99.99
     monkeypatch.setattr("pirates.duel_system.session.choose_action",
                         lambda state, fighter_id: SimpleNamespace(
                             category="WAIT", choice=Choice(ActionKind.WAIT)))
 
     assert session.resolve_round(Choice(ActionKind.WAIT))
-    assert session.enemy.fear_decisions == 1 and not session.state.end_reason
+    assert session.enemy.fear_decisions == 0 and not session.state.end_reason
     assert session.resolve_round(Choice(ActionKind.WAIT))
-    assert session.enemy.fear_decisions == 2 and not session.state.end_reason
-    assert not session.resolve_round(Choice(ActionKind.WAIT))
-    assert session.state.end_reason == "yield" and session.enemy.fear_decisions == 3
+    assert session.enemy.fear_decisions == 0 and not session.state.end_reason
     decisions = [event for event in session.state.event_log
                  if event.type == EventType.DECISION and event.actor == session.enemy.id]
-    assert [event.deltas["category"] for event in decisions] == ["WAIT", "WAIT", "YIELD"]
+    assert [event.deltas["category"] for event in decisions] == ["WAIT", "WAIT"]
+
+
+def test_critical_fear_with_viable_exit_routes_instead_of_yielding():
+    session = DuelSession.new(guide_mode="off")
+    session.enemy.pos = (9, 3)
+    session.enemy.morale = 0
+    session.enemy.fear_meter = 100
+    session.enemy.behavior_modes["fear"] = "BREAK"
+    observation, category, choice = session._npc_plan(session.state.clone(), session.enemy.id)
+    assert observation is not None
+    assert category in {"DASH_OUT", "WALK_OUT", "RUN_OUT"}
+    from pirates.duel_system.engine import movement_path
+    destination = movement_path(session.state, session.enemy, choice)[-1]
+    assert min(max(abs(destination[0]-x), abs(destination[1]-y))
+               for x, y in session.state.exits) < min(
+                   max(abs(session.enemy.pos[0]-x), abs(session.enemy.pos[1]-y))
+                   for x, y in session.state.exits)
+
+
+def test_critical_fear_without_exit_and_above_yield_morale_falls_back_to_legal_action():
+    session = DuelSession.new(guide_mode="off")
+    session.state.exits.clear()
+    session.enemy.morale = 26
+    session.enemy.behavior_modes["fear"] = "BREAK"
+    observation, category, choice = session._npc_plan(session.state.clone(), session.enemy.id)
+    assert observation is not None
+    assert category != "YIELD"
+    assert choice is not None and not legality(session.state, session.enemy.id, choice)

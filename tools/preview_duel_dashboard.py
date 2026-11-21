@@ -77,6 +77,18 @@ def main():
         for size in ((1280, 800), (960, 700), (640, 600)):
             window.size = size
             prefix = str(size[0])
+            # Render one real threshold transition per viewport so the causal
+            # event and active own-mode readout are reviewed alongside injury UI.
+            from pirates.duel_system.mental import refresh_behavior_modes
+            threshold_ui = DuelUI(DuelSession.new(guide_mode="off"), rounds=True)
+            threshold_ui.session.player.fear_meter = 50
+            refresh_behavior_modes(threshold_ui.session.state, threshold_ui.session.player,
+                                   "PREVIEW_THRESHOLD")
+            saved_ui = ui
+            ui = threshold_ui
+            assert any("fear cautious at 50/100" in line for line in ui.model().full_log)
+            capture(prefix+"-mental-threshold")
+            ui = saved_ui
             # Exercise the real fresh-duel launch loop with native modal input:
             # select a distinct profile, enter the dashboard, then pause. This
             # checks the live launch/session/journal boundary, not just the
@@ -123,12 +135,12 @@ def main():
 
             renderer.render_list(
                 world, "Choose your sword-duel opponent",
-                ["Brute — presses forward and attacks directly",
-                 "Aggressor — fast, assertive pressure",
-                 "Veteran — patient, disciplined choices",
-                 "Counterfighter — guards and punishes openings",
-                 "Recruit — cautious and easier to unsettle",
-                 "Bully — confident, forceful attacks"],
+                 ["Brute — fear 30; morale +10; moderate pain/stress response",
+                  "Aggressor — fear 15; morale +15; low stress tolerance",
+                  "Veteran — fear 30; morale +20; high composure/tolerances",
+                  "Counterfighter — fear 35; morale +12; high composure/tolerances",
+                  "Recruit — fear 80; morale −5; low composure/tolerances",
+                  "Bully — fear 5; morale +25; low pain/anger tolerance"],
                 "Standalone practice duel; campaign clock pauses. Esc cancels without campaign changes.")
             renderer._present_layers()
             Image.fromarray(renderer.context.sdl_renderer.read_pixels()).save(
@@ -523,7 +535,7 @@ def main():
                           if event.type == EventType.INJURY_RESPONSE)
             assert reflex.deltas["response"] in {"FLINCH", "RECOIL"}
             assert reflex.deltas["to_pos"] != reflex.deltas["from_pos"]
-            assert "forced back 1 tile (injury reflex)" in " ".join(ui.round_summary)
+            assert "injury shock forced one tile away" in " ".join(ui.round_summary)
             assert any(popup.text == "Back 1 tile" and popup.big for popup in ui.model().popups)
             capture(prefix+"-p6-eye-injury")
             if display.max_scroll:
@@ -585,7 +597,10 @@ def main():
             labels = [popup.text for popup in ui.model().popups]
             assert labels.count("DEATH — decapitation") == 1 and len(labels) == 1, labels
             capture(prefix+"-p6-death")
-        assert len(set(entry_npc_actions)) >= 2, entry_npc_actions
+        assert len(entry_npc_actions) == 3
+        assert all(action in {"LIGHT", "HEAVY", "THRUST", "GUARD", "WALK", "RUN", "DASH",
+                              "DASH_LIGHT", "WAIT", "BANDAGE", "ADRENALINE"}
+                   for action in entry_npc_actions), entry_npc_actions
         # Controlled Light/Light exchange now exercises the same-line clash
         # rule and its public recap, without damage-trade arithmetic.
         from pirates.duel_system.model import Zone

@@ -267,7 +267,7 @@ def test_v3_snapshot_migration_preserves_actions_and_defaults_stable_state():
         for key in ("stability", "grounded", "grounded_since", "last_fast_direction", "last_fast_move_tick"):
             fighter.pop(key, None)
     restored = CombatState.from_data(data)
-    assert restored.config["schema_version"] == 27
+    assert restored.config["schema_version"] == 30
     assert restored.fighters[0].stability == 100
     assert not restored.fighters[0].grounded
     assert restored.fighters[0].action.path == [(tick, tuple(pos)) for tick, pos in old_path]
@@ -296,8 +296,8 @@ def test_v3_session_migration_keeps_mid_action_and_deterministic_continuation():
             fighter.pop(key, None)
     restored = DuelSession.from_data(data)
     replay = DuelSession.from_data(restored.to_data())
-    assert restored.to_data()["version"] == 27
-    assert restored.notebook.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
+    assert restored.notebook.to_data()["version"] == 30
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_deadline
     restored.run_to_player()
@@ -328,7 +328,7 @@ def test_v3_world_journal_migrates_and_resumes_with_the_same_action_schedule(tmp
     loaded = World.load(save_path)
     restored = DuelSession.from_data(loaded.duel_journal)
     replay = DuelSession.from_data(data)
-    assert loaded.duel_journal["version"] == 27
+    assert loaded.duel_journal["version"] == 30
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     restored.run_to_player()
     replay.run_to_player()

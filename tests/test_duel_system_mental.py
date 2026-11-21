@@ -8,6 +8,7 @@ from pirates.duel_system.config import load_config
 from pirates.duel_system.engine import Choice, advance_one_tick, check_end_conditions, commit_action
 from pirates.duel_system.mental import (
     change_anger, change_fear, fear_decision, initialize_fight, postfight_state,
+    refresh_behavior_modes,
 )
 from pirates.duel_system.model import (
     ActionKind, CombatState, Equipment, EventType, Personality, Severity, Weapon, Wound, Zone,
@@ -50,6 +51,113 @@ def test_exhaustion_while_angry_causes_one_crash_in_addition_to_shortfall():
     assert sum(e.type == EventType.ANGER_CRASH for e in state.event_log) == 1
     pay_stamina(state, fighter, 1)
     assert sum(e.type == EventType.ANGER_CRASH for e in state.event_log) == 1
+
+
+def test_shared_behavior_mode_edges_hysteresis_and_private_transition_events():
+    state = arena()
+    fighter = state.fighters[0]
+    fighter.personality = Personality(**deepcopy(state.config["ronin"]))
+    fighter.personality.pain_tolerance = 0
+
+    fighter.pain = 49.99
+    assert refresh_behavior_modes(state, fighter) == ()
+    fighter.pain = 50
+    assert refresh_behavior_modes(state, fighter, "TEST") == (("pain", "NONE", "PROTECTIVE"),)
+    fighter.pain = 40
+    assert refresh_behavior_modes(state, fighter, "TEST") == ()
+    fighter.pain = 39.99
+    assert refresh_behavior_modes(state, fighter, "TEST") == (("pain", "PROTECTIVE", "NONE"),)
+    fighter.fear_meter = 100
+    assert refresh_behavior_modes(state, fighter, "TEST") == (("fear", "NONE", "BREAK"),)
+    fighter.fear_meter = 90
+    assert refresh_behavior_modes(state, fighter, "TEST") == ()
+    fighter.fear_meter = 89.99
+    assert refresh_behavior_modes(state, fighter, "TEST") == (("fear", "BREAK", "CAUTIOUS"),)
+    rows = [event for event in state.event_log if event.type == EventType.BEHAVIOR_MODE]
+    assert [row.deltas["threshold"] for row in rows] == [50, 40, 100, 90]
+    assert [row.deltas["cause"] for row in rows] == ["TEST"] * 4
+    assert [row.deltas["mode_after"] for row in rows] == [
+        "PROTECTIVE", "NONE", "BREAK", "CAUTIOUS"]
+    assert all(row.witnesses == () for row in rows)
+
+
+def test_anger_mode_edges_use_shared_thresholds_and_hysteresis():
+    state = arena()
+    fighter = state.fighters[0]
+    fighter.anger = 49.99
+    assert refresh_behavior_modes(state, fighter) == ()
+    fighter.anger = 50
+    assert refresh_behavior_modes(state, fighter, "ANGER_TEST") == (("anger", "NONE", "PRESS"),)
+    fighter.anger = 40
+    assert refresh_behavior_modes(state, fighter, "ANGER_TEST") == ()
+    fighter.anger = 39.99
+    assert refresh_behavior_modes(state, fighter, "ANGER_TEST") == (("anger", "PRESS", "NONE"),)
+    fighter.anger = 100
+    assert refresh_behavior_modes(state, fighter, "ANGER_TEST") == (("anger", "NONE", "HOT"),)
+    fighter.anger = 90
+    assert refresh_behavior_modes(state, fighter, "ANGER_TEST") == ()
+    fighter.anger = 89.99
+    assert refresh_behavior_modes(state, fighter, "ANGER_TEST") == (("anger", "HOT", "PRESS"),)
+    assert [event.deltas["threshold"] for event in state.event_log
+            if event.type == EventType.BEHAVIOR_MODE] == [50, 40, 100, 90]
+
+
+def test_fear_gain_susceptibility_scales_positive_gain_only_and_latches_once():
+    state = arena()
+    fighter = state.fighters[1]
+    profile = deepcopy(state.config["ronin"])
+    profile["fear_gain_susceptibility"] = state.config["ai_profiles"]["recruit"][
+        "fear_gain_susceptibility"]
+    profile["archetype"] = "recruit"
+    fighter.personality = Personality(**profile)
+    fighter.fear_meter = 49
+    change_fear(state, fighter, 2, "TEST_GAIN")
+    assert fighter.fear_meter == pytest.approx(51.3)
+    assert fighter.behavior_modes["fear"] == "CAUTIOUS"
+    assert sum(event.type == EventType.BEHAVIOR_MODE for event in state.event_log) == 1
+    change_fear(state, fighter, -1, "TEST_DECAY")
+    assert fighter.fear_meter == pytest.approx(50.3)
+    assert sum(event.type == EventType.BEHAVIOR_MODE for event in state.event_log) == 1
+
+
+def test_group_behavior_transition_is_actor_private():
+    from pirates.duel_system.mental import refresh_behavior_modes
+
+    actors = [bare_fighter("player", pos=(1, 1), team_id="player"),
+              bare_fighter("ally", pos=(3, 1), team_id="allies"),
+              bare_fighter("opponent", pos=(4, 1), team_id="opponents")]
+    state = CombatState(actors)
+    opponent = state.fighter("opponent")
+    opponent.fear_meter = 50
+    refresh_behavior_modes(state, opponent, "TEST")
+    event = next(event for event in state.event_log if event.type == EventType.BEHAVIOR_MODE)
+    assert event.witnesses == ("opponent",)
+    assert not event.hearers
+
+
+def test_threshold_event_readout_names_meter_value_threshold_and_cause():
+    from pirates.duel_system.render_model import event_line
+
+    state = arena()
+    fighter = state.fighters[0]
+    fighter.fear_meter = 50
+    refresh_behavior_modes(state, fighter, "VISIBLE_TEST_CAUSE")
+    event = next(event for event in state.event_log if event.type == EventType.BEHAVIOR_MODE)
+    assert event_line(event, {fighter.id: "You"}) == (
+        "You: fear cautious at 50/100 (threshold 50; visible test cause)")
+
+
+def test_threshold_crossing_preserves_committed_action_and_mode_roundtrips():
+    state = arena(rng_seed=992)
+    fighter = state.fighters[1]
+    action = commit_action(state, fighter.id, Choice(ActionKind.WAIT))
+    change_fear(state, fighter, 100, "TEST_CRITICAL")
+    assert fighter.behavior_modes["fear"] == "BREAK"
+    assert fighter.action is action
+    assert not fighter.yielded
+    restored = CombatState.from_data(state.to_data())
+    assert restored.fighter(fighter.id).behavior_modes == fighter.behavior_modes
+    assert restored.fighter(fighter.id).action == action
 
 
 def test_two_hits_without_return_increase_anger_and_own_hit_resets_counter():
@@ -161,15 +269,15 @@ def test_prefight_morale_level_fear_and_postfight_carry_are_owned():
     assert not fighter.wounds[0].bandaged
 
 
-def test_fight_fear_starts_from_confidence_not_courage_or_morale():
+def test_fight_uses_numeric_starting_fear_and_separate_morale_bias():
     cfg = load_config()
     recruit_personality = Personality(**deepcopy(cfg["ronin"]))
     veteran_personality = Personality(**deepcopy(cfg["ronin"]))
-    recruit_personality.traits = deepcopy(cfg["ai_profiles"]["recruit"]["traits"])
-    veteran_personality.traits = deepcopy(cfg["ai_profiles"]["veteran"]["traits"])
+    recruit_personality.starting_fear = cfg["ai_profiles"]["recruit"]["starting_fear"]
+    veteran_personality.starting_fear = cfg["ai_profiles"]["veteran"]["starting_fear"]
     recruit = bare_fighter("recruit", personality=recruit_personality)
     veteran = bare_fighter("veteran", personality=veteran_personality)
-    recruit_personality.courage, veteran_personality.courage = 25, -20
+    recruit_personality.morale_bias, veteran_personality.morale_bias = 25, -20
     recruit.morale, veteran.morale = 100, 0
     state = initialize_fight([recruit, veteran], config=cfg, rng_seed=7)
     assert fear(state.fighters[0], cfg) == pytest.approx(80)
@@ -270,7 +378,7 @@ def test_v21_session_load_migrates_fear_and_drops_live_nervousness():
     restored = DuelSession.from_data(data)
     assert fear(restored.player, restored.state.config) == pytest.approx(40)
     assert restored.player.nervousness == 0
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
 
 
 def worked(kind, weight=0, *, tiles=3, enemy_pos=(4, 0), aim=Zone.HAND):

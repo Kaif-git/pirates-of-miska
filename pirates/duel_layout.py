@@ -400,8 +400,8 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
                 visible_injuries[0], int((cw-20)/small.getlength("M"))))
         else:
             player_detail_rows.append("No current wounds")
-        player_detail_rows.extend(model.functional_alerts[:1])
         player_detail_rows.extend(model.player_emotion_rows[:1])
+        player_detail_rows.extend(model.functional_alerts[:1])
         player_detail_rows.extend(model.player_status_rows[:1])
     else:
         active_wounds = [row for row in model.player_injury_rows
@@ -426,8 +426,15 @@ def draw_dashboard(display, renderer, model, rows, *, present=True):
                    (threat_rows if model.group_combat else
                     threat_rows if model.enemy_visible else ["No current visual contact."]), RED)):
         panel((x, 76, cw, ch), color)
-        text(x+10, 84, f"{name[:16]}" if model.group_combat and x == enemy_x
-             else f"{name[:16]}  Lv{level}", color)
+        heading = (f"{name[:16]}" if model.group_combat and x == enemy_x
+                   else f"{name[:16]}  Lv{level}")
+        if x == 12:
+            mode_labels = {"pain": "P", "fear": "F", "anger": "A"}
+            active_modes = [f"{mode_labels[meter]}:{mode.lower()}"
+                            for meter, mode in model.player_behavior_modes if mode != "NONE"]
+            if active_modes:
+                heading += " · " + " ".join(active_modes)
+        text(x+10, 84, heading, color)
         readout = (dict(model.own_readout) if x == 12 else
                    {} if model.group_combat else dict(model.enemy_readout))
         if readout:

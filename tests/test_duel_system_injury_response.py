@@ -220,7 +220,7 @@ def test_v17_active_graze_migrates_from_ongoing_bleed_to_nonbleeding_wound():
 
     restored = CombatState.from_data(data)
     migrated = restored.fighters[1].wounds[0]
-    assert restored.config["schema_version"] == 27
+    assert restored.config["schema_version"] == 30
     assert migrated.bleed_per_turn == 0
     assert migrated.initial_blood_loss == 0
 
@@ -504,7 +504,7 @@ def test_old_weapon_and_wound_json_migrate_and_mid_action_replays():
             wound.pop("structure", None)
             wound.pop("damage_type", None)
     migrated = CombatState.from_data(data)
-    assert migrated.config["schema_version"] == 27
+    assert migrated.config["schema_version"] == 30
     assert migrated.fighters[0].equipment.weapon.damage_type == "CUTTING"
     assert migrated.fighters[0].wounds[0].structure == "MUSCLE"
     expected = migrated.to_data()
@@ -528,7 +528,7 @@ def test_v2_config_file_migrates_through_the_public_loader(tmp_path):
     path = tmp_path / "combat-v2.json"
     path.write_text(json.dumps(old), encoding="utf-8")
     migrated = load_config(path)
-    assert migrated["schema_version"] == 27
+    assert migrated["schema_version"] == 30
     assert migrated["actions"]["THRUST"]["damage_type"] == "PIERCING"
     assert migrated["guard"]["riposte_disarm_windup_mult"] == 0.3
     assert migrated["tactics"]["feint_disrupt_ticks"] == 6
@@ -551,7 +551,7 @@ def test_schema15_config_and_wound_save_migrate_anatomical_sites(tmp_path):
     path = tmp_path / "duel-v15.json"
     path.write_text(json.dumps(old_config), encoding="utf-8")
     migrated_config = load_config(path)
-    assert migrated_config["schema_version"] == 27
+    assert migrated_config["schema_version"] == 30
     assert migrated_config["anatomy_sites"]["HAND"]
 
     state = arena()
@@ -562,7 +562,7 @@ def test_schema15_config_and_wound_save_migrate_anatomical_sites(tmp_path):
     data["fighters"][1]["wounds"][0].pop("site")
     data["fighters"][1]["wounds"][0].pop("side")
     restored = CombatState.from_data(data)
-    assert restored.config["schema_version"] == 27
+    assert restored.config["schema_version"] == 30
     assert restored.fighters[1].wounds[0].site == "HAND"
     assert restored.fighters[1].wounds[0].side is None
 
@@ -582,7 +582,7 @@ def test_v8_active_session_migrates_new_impact_tuning_and_preserves_action():
                 "impact_defense_mult"):
         data["state"]["config"]["injury"].pop(key)
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.path == expected_path
     assert restored.state.config["injury"]["impact_net_threshold"] == 8
 
@@ -596,7 +596,7 @@ def test_v9_session_migration_adds_bounded_stagger_refresh_rule():
     data["notebook"]["version"] = 9
     data["state"]["config"]["injury"].pop("stagger_repeat_duration_mult")
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.state.config["injury"]["stagger_repeat_duration_mult"] == 0
 
 
@@ -610,7 +610,7 @@ def test_v10_session_migration_adds_reduced_motion_preference_and_preserves_stat
     data["state"]["config"]["ui"].pop("reduced_motion")
     player_blood = session.player.blood
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.state.config["ui"]["reduced_motion"] is False
     assert restored.player.blood == player_blood
 
@@ -629,7 +629,7 @@ def test_v11_session_migration_adds_consequence_ai_tuning_and_preserves_active_s
         old_config["tactics"]["ai_scores"].pop(key)
     path_before = deepcopy(data["state"]["fighters"][0]["action"])
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.state.config["tactics"]["ai_scores"]["BANDAGE_BLEEDING"] == 120
     assert restored.to_data()["state"]["fighters"][0]["action"] == path_before
 
@@ -653,7 +653,7 @@ def test_v11_world_journal_migration_replays_active_action_deterministically(tmp
     world.save(save_path)
     restored_world = World.load(save_path)
     restored = DuelSession.from_data(restored_world.duel_journal)
-    assert restored_world.duel_journal["version"] == 27
+    assert restored_world.duel_journal["version"] == 30
     expected.run_to_player()
     restored.run_to_player()
     assert restored.state.to_data() == expected.state.to_data()
@@ -679,10 +679,10 @@ def test_v2_session_journal_migrates_config_notebook_and_active_injury_fields():
             wound.pop("structure", None)
             wound.pop("damage_type", None)
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.path == old_path
     assert restored.player.equipment.weapon.damage_type == "CUTTING"
-    assert restored.notebook.to_data()["version"] == 27
+    assert restored.notebook.to_data()["version"] == 30
 
 
 def test_render_details_and_coach_explain_wound_without_private_shock_values():

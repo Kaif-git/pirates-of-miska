@@ -67,15 +67,12 @@ def test_ai_weights_hidden_emotions_and_rng_seed_never_change_unlearned_advice()
     original = guide(make_guide_view(state, "player", book.public_view()), book.public_view())
     changed = state.clone()
     enemy = changed.fighters[1]
-    enemy.personality.weights = {key: 999 for key in enemy.personality.weights}
-    enemy.personality.base = {key: -999 for key in enemy.personality.base}
-    enemy.personality.reaction_delay = 500
     enemy.pain, enemy.morale = 90, 2  # private emotional dimensions
     enemy.anger = 24  # stays in the same public anger bucket
-    enemy.personality.traits = dict.fromkeys(enemy.personality.traits, 0)
-    enemy.personality.score_bias = dict.fromkeys(enemy.personality.score_bias, 999)
+    enemy.personality.fear_gain_susceptibility = 1.5
+    enemy.personality.stress_composure = 0
     enemy.strength, enemy.speed, enemy.accuracy = 20, 20, 20
-    changed.config["ronin"]["weights"] = {key: -999 for key in changed.config["ronin"]["weights"]}
+    changed.config["ronin"]["composure"] = 0
     changed.rng_seed = 54321
     for _ in range(10):
         changed.uniform(-1, 1)
@@ -83,14 +80,12 @@ def test_ai_weights_hidden_emotions_and_rng_seed_never_change_unlearned_advice()
     assert result == original
 
 
-def test_uncommitted_ai_category_and_adaptation_memory_do_not_enter_guide_projection():
+def test_private_actor_response_values_do_not_enter_guide_projection():
     state, book = scene()
     original = guide(make_guide_view(state, "player", book.public_view()), book.public_view())
     changed = state.clone()
     enemy = changed.fighters[1]
-    enemy.ai_current_category = "HEAVY"
-    enemy.ai_experience = [{"category": "LIGHT", "outcome": "COUNTERED"}] * 12
-    enemy.ai_stagnant_decisions = 99
+    enemy.personality.morale_bias = -20
     result = guide(make_guide_view(changed, "player", book.public_view()), book.public_view())
     assert result == original
 

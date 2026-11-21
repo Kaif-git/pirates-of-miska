@@ -10,9 +10,11 @@ import math
 
 from .engine import Choice, adrenaline_trigger_reasons, legality, movement_path
 from .model import ActionKind, EffStats, EventType, Zone
-from .stats import clamp, effective_stats, legacy_fear_pressure, max_stamina, phase_ticks, weapon_reach
+from .stats import (clamp, effective_stats, legacy_fear_pressure, max_stamina,
+                    phase_ticks, stamina_cost, weapon_reach)
 
-TACTICAL_CATEGORIES = ("FEINT", "SHOVE", "DISENGAGE", "THRUST", "DISARM", "ADRENALINE")
+TACTICAL_CATEGORIES = ("FEINT", "SHOVE", "DISENGAGE", "THRUST", "DISARM", "ADRENALINE",
+                       "DASH_SLASH")
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,9 @@ def observe(state, fighter_id):
     pct = fighter.stamina / max_stamina(fighter, cfg) * cfg["defaults"]["pool_max"]
     vigor = ("LOW" if pct < rule["vigor_low_stamina"] or fighter.fatigue > rule["vigor_low_fatigue"] or fighter.exhausted
              else "HIGH" if pct >= rule["vigor_high_stamina"] and fighter.fatigue < rule["vigor_high_fatigue"] else "MID")
-    delay = fighter.personality.reaction_delay if fighter.personality else rule["reaction_delay_default"]
+    # Reaction timing is shared; profile identity must not change what evidence is
+    # available to the otherwise universal combat policy.
+    delay = rule["reaction_delay_default"]
     action = other.action if other is not None else None
     unseen = not visible or action is not None and state.tick - action.start_tick < delay
     last = (other.previous_action_cat if unseen else other.last_action_cat) if other is not None else "UNKNOWN"
@@ -199,12 +203,6 @@ def movement_choice(state, fighter, kind, *, toward, aim=None):
                 if legality(state, fighter.id, choice):
                     continue
                 end = movement_path(state, fighter, choice)[-1]
-                profile = fighter.personality
-                discipline = (profile.traits["discipline"] if profile else 0)
-                if (toward and discipline >= state.config["group"]["coordination_discipline_threshold"]
-                        and any(other.id != fighter.id and other.pos == end and state.occupies_tile(other)
-                                for other in state.fighters)):
-                    continue
                 dist = distance(end, other_pos)
                 before = distance(fighter.pos, other_pos)
                 if (toward and dist < before) or (not toward and dist > before):
@@ -214,10 +212,24 @@ def movement_choice(state, fighter, kind, *, toward, aim=None):
                     # otherwise select the same middle tile and repeatedly block
                     # each other. Prefer distinct, deterministic flanks only when
                     # the direct endpoint is that shared center tile.
-                    fighter_order = next(i for i, item in enumerate(state.fighters) if item.id == fighter.id)
-                    target_order = next((i for i, item in enumerate(state.fighters)
-                                         if item.id == contact[0]), fighter_order)
-                    yields_center = toward and fighter_order > target_order and before == 2
+                    target_id = contact[0]
+                    locations = {item.id: item.pos for item in state.fighters}
+                    priority_key = lambda identity: hashlib.sha256(
+                        f"{state.rng_seed}:{state.tick}:approach:{locations[identity]}".encode("utf-8")).digest()
+                    approach_priority = min((fighter.id, target_id), key=priority_key)
+                    # If both sides choose this same inward movement from the
+                    # frozen snapshot, identical direct paths collide. Later
+                    # actors take the best-progressing non-conflicting route;
+                    # this is geometric and uses no hidden target statistics.
+                    target_direct_path = [
+                        (other_pos[0]-dx*step, other_pos[1]-dy*step)
+                        for step in range(1, tiles+1)]
+                    own_path = movement_path(state, fighter, choice)
+                    shared_route = (toward and fighter.id != approach_priority
+                                    and any(own_path[index] == target_direct_path[index]
+                                            for index in range(min(len(own_path),
+                                                                    len(target_direct_path)))))
+                    yields_center = toward and fighter.id != approach_priority and before == 2
                     shared_center = (yields_center and dist == 1
                                      and abs(other_pos[0] - fighter.pos[0])
                                      + abs(other_pos[1] - fighter.pos[1]) == 2
@@ -225,30 +237,20 @@ def movement_choice(state, fighter, kind, *, toward, aim=None):
                                                  (fighter.pos[1] + other_pos[1]) // 2))
                     cross = dx * (other_pos[1] - fighter.pos[1]) - dy * (other_pos[0] - fighter.pos[0])
                     flank_penalty = 0 if not yields_center or cross > 0 else 1
-                    options.append(((dist if toward else -dist, int(shared_center),
+                    options.append(((int(shared_route), dist if toward else -dist, int(shared_center),
                                      flank_penalty if before == 2 and toward else 0,
                                      deviation, tiles, dx, dy), choice))
     return min(options, key=lambda item: item[0])[1] if options else None
 
 
 def attack_zone(state, fighter, view, kind):
-    cfg = state.config
-    preferences = fighter.personality.zone_pref if fighter.personality else ["TORSO"]
-    for preference in preferences:
-        if "_IF_" in preference:
-            name, condition = preference.split("_IF_", 1)
-            if condition == "RECOVERING" and view.public_key.opp_state not in {"RECOVERING", "WHIFFED"}:
-                continue
-            if condition == "STAGGERED" and view.public_key.opp_state != "STAGGERED":
-                continue
-            if condition == "GUARDING" and view.public_key.opp_state != "GUARDING":
-                continue
-        else:
-            name = preference
-        zone = Zone(name)
-        if zone == Zone.HAND and not view.opponent_hand_exposed:
-            continue
-        return zone
+    """Choose one target zone from shared, observable tactical cues."""
+    if view.opponent_hand_exposed and view.public_key.opp_state in {"RECOVERING", "WHIFFED"}:
+        return Zone.HAND
+    if view.public_key.opp_state == "STAGGERED":
+        return Zone.HEAD
+    if view.public_key.opp_state == "GUARDING":
+        return Zone.LEG
     return Zone.TORSO
 
 
@@ -279,6 +281,9 @@ def candidates(state, fighter, view):
             toward = category.endswith("_IN")
             if not toward or view.gap > 0:
                 choice = movement_choice(state, fighter, ActionKind(category.split("_")[0]), toward=toward)
+        elif category == "DASH_SLASH" and 1 <= view.gap <= state.config["ai"]["close_gap"]:
+            choice = movement_choice(state, fighter, ActionKind.DASH_SLASH, toward=True,
+                                     aim=attack_zone(state, fighter, view, ActionKind.DASH_SLASH))
         elif category == "FEINT" and view.public_key.opp_state == "GUARDING":
             choice = Choice(ActionKind.FEINT)
         elif category == "SHOVE" and view.gap + weapon_reach(fighter, state.config) <= 1:
@@ -302,7 +307,7 @@ def candidates(state, fighter, view):
 def strike_delay(state, view, choice):
     table = state.config["actions"][choice.kind.value]
     delay = phase_ticks(table.get("windup", 0), view.stats.speed, state.config)
-    if choice.kind == ActionKind.DASH_LIGHT:
+    if choice.kind in {ActionKind.DASH_LIGHT, ActionKind.DASH_SLASH}:
         delay += choice.tiles * phase_ticks(table["per_tile"], view.stats.speed, state.config)
     return delay
 
@@ -311,82 +316,28 @@ def decision_control(state, fighter_id):
     """Derived decision control; physical effects remain governed by combat state."""
     fighter = next(item for item in state.fighters if item.id == fighter_id)
     profile = fighter.personality or state.config["ronin"]
-    traits = profile.traits if hasattr(profile, "traits") else profile["traits"]
-    weights = state.config["personality"]["pressure_weights"]
     pool = state.config["defaults"]["pool_max"]
+    composure = profile.composure if hasattr(profile, "composure") else profile["composure"]
+    stress_composure = (profile.stress_composure if hasattr(profile, "stress_composure")
+                        else profile.get("stress_composure", 0.5))
+    weights = state.config["personality"]["pressure_weights"]
     pressure = (weights["fear"] * legacy_fear_pressure(fighter, state.config) / pool
                 + weights["pain"] * fighter.pain / pool
                 + weights["nervousness"] * fighter.nervousness)
-    composure = profile.composure if hasattr(profile, "composure") else profile["composure"]
-    return clamp(composure * (1 - pressure * (1 - traits["discipline"])), 0, 1)
-
-
-def adaptation_penalty(fighter, category, config):
-    """Bounded soft penalty from recent resolved counters; never removes legality."""
-    rule = config["personality"]["adaptation"]
-    adaptability = fighter.personality.traits["adaptability"] if fighter.personality else 0
-    outcomes = [row["outcome"] for row in fighter.ai_experience if row["category"] == category]
-    counters = outcomes.count("COUNTERED")
-    if counters < rule["minimum_counters"] or adaptability <= 0:
-        return 0
-    successes = outcomes.count("SUCCESS")
-    raw = max(0, (counters - rule["minimum_counters"] + 1) * rule["counter_penalty"]
-              - successes * rule["success_decay"])
-    return min(rule["max_penalty"], raw) * adaptability
-
-
-def record_ai_decision(fighter, category):
-    """Record a committed decision after all policies have read the same snapshot."""
-    fighter.ai_current_category = category
-    if category in {"LIGHT", "HEAVY", "DASH_LIGHT", "THRUST", "DISARM", "SHOVE",
-                    "DASH_IN", "WALK_IN", "RUN_IN"}:
-        fighter.ai_stagnant_decisions = 0
-    else:
-        fighter.ai_stagnant_decisions += 1
-
-
-def record_ai_outcomes(state, events):
-    """Learn only from public resolution events, never from a queued choice."""
-    history = state.config["personality"]["adaptation"]["history"]
-    for event in events:
-        for fighter in state.fighters:
-            category = fighter.ai_current_category
-            if not category or not fighter.personality:
-                continue
-            outcome = None
-            if event.type == EventType.HIT and event.actor == fighter.id:
-                outcome = "SUCCESS"
-            elif event.type == EventType.WHIFF and event.actor == fighter.id:
-                outcome = "COUNTERED"
-            elif event.type in {EventType.PARRY, EventType.BLOCK}:
-                if event.target == fighter.id:
-                    outcome = "COUNTERED"
-                elif event.actor == fighter.id:
-                    outcome = "SUCCESS"
-            elif event.type == EventType.INTERRUPT and event.actor == fighter.id:
-                outcome = "COUNTERED"
-            elif event.type == EventType.FEINT and event.actor == fighter.id:
-                outcome = "SUCCESS" if event.deltas.get("outcome") == "GUARD_DISRUPTED" else "COUNTERED"
-            elif event.type == EventType.SHOVE and event.actor == fighter.id:
-                outcome = "SUCCESS" if event.deltas.get("outcome") == "SUCCESS" else "COUNTERED"
-            elif event.type == EventType.DISARM and event.actor == fighter.id:
-                outcome = "SUCCESS" if event.deltas.get("outcome") == "DISARMED" else "COUNTERED"
-            elif event.type == EventType.ADRENALINE and event.actor == fighter.id:
-                if event.deltas.get("outcome") == "ACTIVATED":
-                    outcome = "SUCCESS"
-                elif event.deltas.get("outcome") == "INTERRUPTED":
-                    outcome = "COUNTERED"
-            if outcome:
-                fighter.ai_experience.append({"category": category, "outcome": outcome})
-                fighter.ai_experience = fighter.ai_experience[-history:]
+    return clamp(composure * (1 - pressure * (1 - stress_composure)), 0, 1)
 
 
 def _decision_index(state, fighter_id):
     return sum(event.type.value == "DECISION" and event.actor == fighter_id for event in state.event_log)
 
 
-def _seeded_variation(state, fighter_id, category, amplitude):
-    key = f"{state.rng_seed}:{fighter_id}:{_decision_index(state, fighter_id)}:{category}".encode("utf-8")
+def _seeded_variation(state, fighter_id, category, choice, amplitude):
+    fighter = next(item for item in state.fighters if item.id == fighter_id)
+    identity = (choice.kind.value, choice.aim.value if choice.aim else None,
+                choice.direction, choice.tiles, choice.target_id)
+    # Key by public geometry rather than NPC/profile identity so equivalent
+    # actors do not get systematically different tie preferences by name.
+    key = f"{state.rng_seed}:{fighter.pos}:{_decision_index(state, fighter_id)}:{category}:{identity}".encode("utf-8")
     value = int.from_bytes(hashlib.sha256(key).digest()[:8], "big") / (2**64 - 1)
     return (2 * value - 1) * amplitude
 
@@ -394,183 +345,163 @@ def _seeded_variation(state, fighter_id, category, amplitude):
 def score_actions(state, fighter_id):
     fighter = next(item for item in state.fighters if item.id == fighter_id)
     view = observe(state, fighter_id)
-    personality = fighter.personality
-    bases = personality.base if personality else state.config["ronin"]["base"]
-    weights = personality.weights if personality else state.config["ronin"]["weights"]
-    profile_bias = personality.score_bias if personality else state.config["ronin"].get("score_bias", {})
-    traits = personality.traits if personality else state.config["ronin"]["traits"]
-    rule = state.config["ai"]
-    p2 = state.config["personality"]
-    control = decision_control(state, fighter_id)
-    pressure_weights = p2["pressure_weights"]
-    pressure = (pressure_weights["fear"] * legacy_fear_pressure(fighter, state.config) / state.config["defaults"]["pool_max"]
-                + pressure_weights["pain"] * view.pain / state.config["defaults"]["pool_max"]
-                + pressure_weights["nervousness"] * fighter.nervousness)
-    attacks = {"LIGHT", "HEAVY", "DASH_LIGHT", "THRUST", "DISARM"}
+    cfg = state.config
+    rules = cfg["universal_ai"]
+    weights = rules["weights"]
+    modes = fighter.behavior_modes
+    attacks = {"LIGHT", "HEAVY", "DASH_LIGHT", "THRUST", "DISARM", "DASH_SLASH"}
+    outward = {"DASH_OUT", "WALK_OUT", "RUN_OUT", "DISENGAGE"}
+    inward = {"DASH_IN", "WALK_IN", "RUN_IN"}
     scored = []
     for category, choice in candidates(state, fighter, view):
-        terms = [("base", bases.get(category, 0))]
-        def add(name, value, weight=None):
-            terms.append((name, value * (weights.get(weight, 1) if weight else 1)))
-        if profile_bias.get(category, 0):
-            add("P2_PROFILE_BIAS", profile_bias[category])
-        tactical_score = state.config["tactics"]["ai_scores"]
-        if category == "ADRENALINE":
-            add("P5_ADRENALINE_TRIGGER", tactical_score[category])
-        elif category == "FEINT" or category == "DISARM":
-            add("P5_TACTIC_SETUP", tactical_score[category])
-        elif category == "SHOVE" and view.public_key.opp_state in {"RECOVERING", "WHIFFED", "STAGGERED"}:
-            add("P5_SHOVE_OPENING", tactical_score[category])
-        elif category == "THRUST" and view.public_key.opp_state in {"RECOVERING", "WHIFFED"}:
-            add("P5_THRUST_OPENING", tactical_score[category])
-        elif (category == "DISENGAGE" and view.opponent_strike_delay is not None
-              and view.gap <= 1
-              and view.opponent_strike_delay > phase_ticks(
-                  state.config["actions"]["DISENGAGE"]["per_tile"], view.stats.speed, state.config)):
-            add("P5_DISENGAGE_WINDOW", tactical_score[category])
-        if category == "SHOVE" and view.opponent_unsteady:
-            add("I5_SHOVE_UNSTEADY", tactical_score["SHOVE_UNSTEADY"])
-        if category == "SHOVE" and view.opponent_push_open:
-            add("I5_SHOVE_SPACE", tactical_score["SHOVE_OPEN_SPACE"])
+        terms = [("UNIVERSAL_BASE", rules["base"].get(category, 0))]
+
+        def add(name, value):
+            if value:
+                terms.append((name, float(value)))
+
+        table = cfg["actions"][choice.kind.value]
+        delay = (strike_delay(state, view, choice) if category in attacks
+                 else (choice.tiles * phase_ticks(table["per_tile"], view.stats.speed, cfg)
+                       if choice.kind in {ActionKind.DASH, ActionKind.WALK, ActionKind.RUN,
+                                          ActionKind.CRAWL, ActionKind.DISENGAGE}
+                       else phase_ticks(table.get("windup", 0), view.stats.speed, cfg)))
+        recovery = phase_ticks(table.get("recovery", 0), view.stats.speed, cfg,
+                               recovery_weight=fighter.equipment.total_weight)
+        duration = delay + recovery
+        base_cost = table["stamina"] * (choice.tiles if choice.kind == ActionKind.RUN else 1)
+        cost = stamina_cost(fighter, base_cost, cfg)
+        add("UNIVERSAL_STAMINA_COST", -cost * weights["stamina_cost"])
+        add("UNIVERSAL_COMMITMENT_TIME", -duration * weights["action_duration"])
+
+        if category in attacks:
+            zone = choice.aim or Zone.TORSO
+            dispersion = cfg["accuracy"]["aim_dispersion"]
+            difficulty = cfg["zones"]["difficulty"][zone.value]
+            torso_difficulty = cfg["zones"]["difficulty"][Zone.TORSO.value]
+            clean_chance = clamp(
+                dispersion["clean_base"] + view.stats.accuracy * dispersion["per_accuracy"]
+                - max(0, difficulty-torso_difficulty) * dispersion["difficulty_penalty"],
+                dispersion["clean_min"], dispersion["clean_max"])
+            power = table.get("power", 1)
+            attack_value = clean_chance * (1 + power / 2) * (
+                0.75 + clamp(view.stats.strength / max(1, view.opponent_strength), 0.5, 1.5) * 0.25)
+            add("UNIVERSAL_CONTACT_VALUE", attack_value * 8)
+            if view.public_key.opp_state in {"RECOVERING", "WHIFFED", "STAGGERED"}:
+                if view.opponent_remaining >= delay:
+                    margin = min(1, (view.opponent_remaining-delay+1) / max(1, view.opponent_remaining))
+                    add("UNIVERSAL_VISIBLE_OPENING", weights["opening"] * margin)
+                else:
+                    add("UNIVERSAL_OPENING_TOO_SHORT", -weights["unsafe_slow_attack"])
+            if (view.opponent_phase == "WINDUP" and view.opponent_strike_delay is not None):
+                if delay < view.opponent_strike_delay:
+                    margin = (view.opponent_strike_delay-delay) / max(1, view.opponent_strike_delay)
+                    add("UNIVERSAL_COUNTER_WINDOW", weights["counter"] * min(1, margin))
+                else:
+                    add("UNIVERSAL_SLOW_TRADE_RISK", -weights["unsafe_slow_attack"])
+        elif category == "GUARD" and view.opponent_strike_delay is not None:
+            guard_ready = phase_ticks(table.get("windup", 0), view.stats.speed, cfg)
+            if (view.opponent_phase in {"WINDUP", "ACTIVE"}
+                    and view.opponent_strike_delay >= guard_ready):
+                add("UNIVERSAL_IMMINENT_GUARD", weights["imminent_guard"])
+                if view.opponent_action == ActionKind.HEAVY and (
+                        view.stats.strength >= cfg["guard"]["parry_str_ratio"]["heavy"]
+                        * view.opponent_strength):
+                    add("UNIVERSAL_HEAVY_PARRY", weights["counter"] * 0.6)
+        elif category == "SHOVE":
+            if view.opponent_unsteady:
+                add("UNIVERSAL_SHOVE_UNSTEADY", weights["shove_unsteady"])
+            if view.opponent_push_open:
+                add("UNIVERSAL_SHOVE_OPEN_SPACE", weights["shove_open_space"])
+        elif category == "ADRENALINE":
+            triggers = adrenaline_trigger_reasons(fighter, cfg)
+            add("UNIVERSAL_ADRENALINE_TRIGGER", len(triggers) * weights["adrenaline_trigger"])
+
+        if category in inward | outward | {"DASH_LIGHT", "DASH_SLASH", "CRAWL"}:
+            destination = movement_path(state, fighter, choice)[-1]
+            contact = state.perceived_hostile_position(fighter.id)
+            if contact:
+                before = distance(fighter.pos, contact[1])
+                after = distance(destination, contact[1])
+                if category in inward or category == "DASH_LIGHT":
+                    add("UNIVERSAL_POSITION_GAIN", max(0, before-after) * weights["position_per_gap"])
+                elif category in outward:
+                    if view.opponent_strike_delay is None:
+                        sign = -0.25
+                    else:
+                        first_step = phase_ticks(cfg["actions"][choice.kind.value]["per_tile"],
+                                                 view.stats.speed, cfg)
+                        # Retreat only receives evasion utility if a tile is
+                        # reached before the observed strike; a long route is
+                        # not a dodge when impact is already imminent.
+                        sign = 1 if first_step < view.opponent_strike_delay else 0
+                    if sign:
+                        add("UNIVERSAL_POSITION_SAFETY", sign * max(0, after-before)
+                            * weights["position_per_gap"])
         if category == "BANDAGE" and view.own_bleed_rate > 0:
-            urgency = min(1, view.own_bleed_rate / state.config["blood"]["total_bleed_cap_per_turn"])
-            urgency *= 1 + (1-view.blood/state.config["blood"]["start"])
-            add("I5_BANDAGE_BLEED", tactical_score["BANDAGE_BLEEDING"] * urgency)
-            treatment_ticks = phase_ticks(state.config["actions"]["BANDAGE"]["windup"],
-                                          view.stats.speed, state.config)
-            safe_action_window = (view.public_key.opp_state in {"STAGGERED", "RECOVERING", "WHIFFED"}
-                                  and view.opponent_remaining >= treatment_ticks)
-            if not safe_action_window:
-                add("I5_BANDAGE_EXPOSED",
-                    -tactical_score["BANDAGE_UNSAFE_PENALTY"] * (1+urgency))
-        if (category == "WAIT" and not fighter.grounded
-                and fighter.stability < state.config["stability"]["stable_threshold"]
-                and view.gap > 0):
-            recovery_need = (state.config["stability"]["stable_threshold"]-fighter.stability) / max(
-                1, state.config["stability"]["stable_threshold"])
-            add("I5_WAIT_STABILITY", tactical_score["WAIT_STABILITY"] * recovery_need)
+            urgency = min(1, view.own_bleed_rate / cfg["blood"]["total_bleed_cap_per_turn"])
+            urgency *= 1 + (1-view.blood/cfg["blood"]["start"])
+            treatment_ticks = phase_ticks(table["windup"], view.stats.speed, cfg)
+            safe_window = (view.public_key.opp_state in {"STAGGERED", "RECOVERING", "WHIFFED"}
+                           and view.opponent_remaining >= treatment_ticks)
+            immediate_threat = (view.opponent_phase in {"WINDUP", "ACTIVE"}
+                                or view.public_key.opp_state == "IDLE"
+                                and view.gap <= cfg["ai"]["rest_gap"])
+            treatment_safety = 1 if safe_window else 0.15 if immediate_threat else 0.5
+            add("UNIVERSAL_BLEED_TREATMENT",
+                weights["safe_bandage"] * urgency * treatment_safety)
+            if not safe_window and immediate_threat:
+                add("UNIVERSAL_EXPOSED_TREATMENT", -weights["unsafe_bandage"] * (1+urgency))
+        if category == "WAIT" and view.vigor_pct < cfg["ai"]["vigor_low_stamina"]:
+            if view.gap >= cfg["ai"]["rest_gap"]:
+                deficit = (cfg["ai"]["vigor_low_stamina"]-view.vigor_pct) / max(
+                    1, cfg["ai"]["vigor_low_stamina"])
+                add("UNIVERSAL_LOW_VIGOR_RECOVERY", weights["wait_low_vigor"] * deficit)
+        if category == "WAIT" and fighter.stability < cfg["stability"]["stable_threshold"]:
+            recovery_need = (cfg["stability"]["stable_threshold"]-fighter.stability) / max(
+                1, cfg["stability"]["stable_threshold"])
+            add("UNIVERSAL_STABILITY_RECOVERY", weights["injury_risk"] * recovery_need)
         if view.opponent_bleeding and category in {"WAIT", "WALK_OUT", "DASH_OUT"}:
-            # In group combat this is only a witnessed wound cue, not an exact
-            # pool/rate estimate. Solo legacy scoring retains its blood band.
-            if len(state.fighters) > 2:
-                patience = traits["patience"]
-                add("I5_WITNESSED_BLEED_PATIENCE",
-                    tactical_score["BLEED_PATIENCE"] * patience)
-        aggressive_categories = attacks | {"SHOVE", "THRUST", "DISARM", "DASH_IN", "WALK_IN", "RUN_IN"}
-        aggression_factor = 1 if category in aggressive_categories else -0.35 if category in {
-            "GUARD", "DASH_OUT", "WALK_OUT", "RUN_OUT", "WAIT",
-        } else 0
-        if aggression_factor:
-            add("P2_TRAIT_AGGRESSION", (traits["aggression"] - 0.5)
-                * p2["trait_score"] * aggression_factor)
-        confidence_factor = 1 if category == "HEAVY" else 0.45 if category in {"LIGHT", "DASH_LIGHT"} else (
-            -0.5 if category in {"GUARD", "DASH_OUT", "WALK_OUT", "RUN_OUT"} else 0)
-        if confidence_factor:
-            add("P2_TRAIT_CONFIDENCE", (traits["confidence"] - 0.5)
-                * p2["confidence_score"] * confidence_factor)
-        if view.opponent_bleeding and category in {"WAIT", "WALK_OUT", "DASH_OUT"}:
-            add("P2_TRAIT_PATIENCE", (traits["patience"] - 0.5) * p2["patience_score"])
-        if category in attacks and view.anger > 0 and control < 1:
-            add("P2_ANGER_IMPULSE", (1 - control) * view.anger
-                / state.config["defaults"]["pool_max"] * p2["impulse_score"] * traits["aggression"])
-        if fighter.grounded and category in state.config["stability"]["grounded_ai_scores"]:
-            add("P4_GROUNDED_CHOICE", state.config["stability"]["grounded_ai_scores"][category])
-            if category == "GUARD" and view.opponent_phase in {"WINDUP", "ACTIVE"}:
-                add("P4_COVER_IMMINENT_ATTACK", state.config["stability"]["grounded_cover_bonus"])
-            if category == "CRAWL" and view.gap <= state.config["stability"]["grounded_crawl_gap"]:
-                add("P4_CRAWL_FROM_PRESSURE", state.config["stability"]["grounded_crawl_bonus"])
-        if category in {"DASH_OUT", "WALK_OUT", "RUN_OUT"} and pressure > 0 and control < 1:
-            courage = personality.courage if personality else state.config["ronin"].get("courage", 0)
-            panic_scale = max(0.25, 1 - courage / 40)
-            add("P2_PANIC", (1 - control) * pressure * p2["panic_score"] * panic_scale)
-        if (fighter.ai_stagnant_decisions >= p2["anti_deadlock"]["after_decisions"]
-                and category in aggressive_categories):
-            add("P2_ANTI_DEADLOCK", p2["anti_deadlock"]["bias"])
-        penalty = adaptation_penalty(fighter, category, state.config)
-        if penalty:
-            add("P2_ADAPTATION", -penalty)
-        if category in {"HEAVY", "LIGHT", "GUARD"}:
-            add("R1_ANGER", rule[{"HEAVY": "rage_heavy", "LIGHT": "rage_light", "GUARD": "rage_guard"}[category]] * view.anger, "rage")
-        if view.public_key.opp_state in {"RECOVERING", "WHIFFED", "STAGGERED"} and category in {"LIGHT", "HEAVY"}:
-            if view.opponent_remaining >= strike_delay(state, view, choice):
-                add("R2_PUNISH", rule["punish"], "opportunism")
-        if view.public_key.opp_state == "WINDUP_H":
-            light_delay = phase_ticks(state.config["actions"]["LIGHT"]["windup"], view.stats.speed, state.config)
-            if view.opponent_strike_delay is not None and light_delay < view.opponent_strike_delay:
-                if category == "LIGHT":
-                    add("R3_INTERRUPT_HEAVY", rule["counter_heavy_light"], "reading")
-            elif view.stats.strength >= state.config["guard"]["parry_str_ratio"]["heavy"] * view.opponent_strength:
-                if category == "GUARD":
-                    add("R3_PARRY_HEAVY", rule["counter_heavy_guard"], "reading")
-            elif category == "DASH_OUT":
-                add("R3_DODGE_HEAVY", rule["counter_heavy_dash"], "reading")
-        if view.public_key.opp_state == "WINDUP_L":
+            # Group opponents supply only the witnessed bleeding cue, never exact blood/rate.
+            blood_ratio = (view.opponent_blood / cfg["blood"]["start"]
+                           if len(state.fighters) <= 2 else 0.5)
+            add("UNIVERSAL_BLEED_PRESSURE", weights["bleed_pressure"] * (1-blood_ratio))
+
+        mode_bonus = rules["mode_bonus"]
+        if modes["pain"] == "PROTECTIVE":
             if category == "GUARD":
-                add("R4_COUNTER_LIGHT", rule["counter_light_guard"], "reading")
-                # Disciplined profiles should take a visible Light threat
-                # seriously; less disciplined profiles retain their stronger
-                # impulse to trade. This changes preference only, not legality.
-                add("P2_DISCIPLINED_LIGHT_RESPONSE",
-                    rule["counter_light_guard"] * traits["discipline"], "reading")
-            if category == "HEAVY" and view.opponent_strike_delay is not None and strike_delay(state, view, choice) > view.opponent_strike_delay:
-                add("R4_HEAVY_TOO_SLOW", rule["counter_light_heavy"], "reading")
-        if view.public_key.opp_state == "GUARDING" and category in {"HEAVY", "LIGHT"}:
-            add("R5_GUARD_PRESSURE", rule["pressure_heavy" if category == "HEAVY" else "pressure_light"], "pressure")
-        if view.public_key.vigor_band == "LOW":
-            if category == "HEAVY":
-                add("R6_LOW_VIGOR", -max(0, rule["low_vigor_threshold"] - view.vigor_pct) * rule["low_vigor_scale"])
-                if view.exhausted:
-                    add("R6_EXHAUSTED", rule["exhaust_heavy"])
-            if view.gap >= rule["rest_gap"] and category == "WAIT":
-                add("R6_REST", rule["low_vigor_rest"])
-        if category in {"WALK_OUT", "RUN_OUT", "DASH_OUT"}:
-            add("R7_FEAR_ESCAPE", rule["fear_escape"] * view.fear, "caution")
-        elif category in attacks:
-            add("R7_FEAR_ATTACK", rule["fear_attack"] * view.fear, "caution")
-        if view.full_key.blood_band == "CRITICAL":
+                add("MODE_PROTECTIVE_GUARD", mode_bonus["protective_guard"])
+            if category in outward:
+                add("MODE_PROTECTIVE_SPACE", mode_bonus["protective_exit"])
+        if modes["fear"] == "CAUTIOUS":
             if category == "GUARD":
-                add("R8_LOW_BLOOD", rule["blood_guard"])
-            elif category == "DASH_OUT":
-                add("R8_LOW_BLOOD", rule["blood_dash"] * (1 - view.anger / state.config["defaults"]["pool_max"]))
-        if view.full_key.pain_band == "HIGH" and view.anger < rule["pain_anger_max"]:
+                add("MODE_CAUTIOUS_GUARD", mode_bonus["cautious_guard"])
+            if category in outward:
+                add("MODE_CAUTIOUS_SPACE", mode_bonus["cautious_exit"])
+        if modes["anger"] in {"PRESS", "HOT"}:
+            bonus = mode_bonus["hot_attack"] if modes["anger"] == "HOT" else mode_bonus["press_attack"]
+            if category in attacks | {"SHOVE", *inward}:
+                add("MODE_ANGER_PRESSURE", bonus)
+        if modes["pain"] == "BREAK" or modes["fear"] == "BREAK":
             if category == "GUARD":
-                add("R9_PAIN", rule["pain_guard"])
-            elif category == "DASH_OUT":
-                add("R9_PAIN", rule["pain_dash"])
-        repeats = rule["repeat_count"]
-        if category in attacks and len(view.recent_attacks) >= repeats and all(item == category for item in view.recent_attacks[-repeats:]):
-            add("R10_VARIETY", -rule["repeat_penalty"] * repeats, "discipline")
-        if (len(state.fighters) <= 2 and view.opponent_bleeding
-                and view.opponent_blood < rule["patience_blood"]
-                and category in {"DASH_OUT", "WALK_OUT"}):
-            add("R11_PATIENCE", rule["patience_escape"], "patience")
-        if 1 <= view.gap <= rule["close_gap"]:
-            if category == "DASH_LIGHT":
-                add("R12_CLOSE", rule["close_dash_light"] + rule["close_anger"] * view.anger)
-            elif category == "WALK_IN":
-                add("R12_CLOSE", rule["close_walk"])
-                if view.public_key.opp_state == "WINDUP_H":
-                    add("R12_UNSAFE_WALK", rule["close_seen_heavy"])
-        elif view.gap > rule["close_gap"]:
-            if category == "WALK_IN":
-                add("R12_CLOSE_FAR", rule["far_walk"])
-            elif category == "RUN_IN":
-                add("R12_CLOSE_FAR", rule["far_run"])
-        if view.gap >= rule["rest_gap"] and view.fatigue > rule["rest_fatigue"] and category == "WAIT":
-            add("R13_GAP_REST", rule["gap_rest"])
+                add("MODE_CRITICAL_GUARD", mode_bonus["break_guard"])
+            if category in outward and "UNIVERSAL_POSITION_SAFETY" in dict(terms):
+                add("MODE_CRITICAL_SPACE", mode_bonus["break_exit"])
+            if (category in attacks and view.opponent_strike_delay is not None
+                    and delay >= view.opponent_strike_delay):
+                add("MODE_CRITICAL_AVOID_LOSING_TRADE", -mode_bonus["break_unsafe_trade"])
         scored.append(ScoredAction(category, choice, sum(value for _, value in terms), tuple(terms)))
-    if not scored:
-        return ()
-    variation_rule = p2["variation"]
-    max_score = max(item.score for item in scored)
-    amplitude = variation_rule["amplitude"] * max(
-        0, 1 - traits["discipline"] * variation_rule["discipline_reduction"])
+    tie = rules["tie_break"]
+    if not scored or tie["amplitude"] <= 0:
+        return tuple(scored)
+    best = max(item.score for item in scored)
     varied = []
     for item in scored:
-        if max_score - item.score <= variation_rule["margin"] and amplitude:
-            variation = _seeded_variation(state, fighter_id, item.category, amplitude)
-            varied.append(ScoredAction(item.category, item.choice, item.score + variation,
-                                       (*item.reasons, ("P2_SEEDED_VARIATION", variation))))
+        if best-item.score <= tie["margin"]:
+            variation = _seeded_variation(state, fighter_id, item.category,
+                                          item.choice, tie["amplitude"])
+            varied.append(ScoredAction(item.category, item.choice, item.score+variation,
+                                       (*item.reasons, ("UNIVERSAL_SEEDED_TIE", variation))))
         else:
             varied.append(item)
     return tuple(varied)

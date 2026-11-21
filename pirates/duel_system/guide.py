@@ -97,14 +97,12 @@ def make_guide_view(state, player_id, notebook):
         raise TypeError("Guide projection requires an immutable public NotebookView")
     player = next(f for f in state.fighters if f.id == player_id)
     enemy = state.other(player)
-    # Mechanical rules are public. AI coefficients/personality and RNG are not copied.
+    # Only public mechanical rules are copied; profile response parameters stay hidden.
     cfg = load_config()
     for group in ("time", "defaults", "stamina", "fatigue", "stats", "blood", "anger", "morale",
                   "fear", "level", "zones", "wound_net", "wounds", "injury", "stability", "pain",
                   "guard", "gear", "actions", "guide", "accuracy", "anatomy_sites"):
         cfg[group] = deepcopy(state.config[group])
-    for group in ("base", "weights"):
-        cfg["ronin"][group] = dict.fromkeys(cfg["ronin"][group], 0)
     own = deepcopy(player)
     own.personality, own.notebook = None, None
     known = dict(notebook.exchanges).get(enemy.id, 0) >= state.config["notebook"]["reveal_exchanges"]

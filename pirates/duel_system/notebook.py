@@ -94,7 +94,6 @@ def state_of(entry, config):
 class Notebook:
     def __init__(self, config):
         self.config = deepcopy(config)
-        self.archetypes = {}
         self.named = {}
         self.exchanges = {}
 
@@ -130,14 +129,15 @@ class Notebook:
             raise ValueError("Unknown notebook action")
         if not isinstance(tick, int) or tick < 0:
             raise ValueError("Invalid notebook tick")
-        for groups, identity in ((self.archetypes, archetype), (self.named, npc_id)):
-            self._record_entry(groups.setdefault(identity, {}), key, action, tick,
-                               full_key, visible_dimensions)
+        # The archetype argument is accepted for old callers only. Patterns
+        # belong to the observed actor; aggregate profiles are not persisted.
+        self._record_entry(self.named.setdefault(npc_id, {}), key, action, tick,
+                           full_key, visible_dimensions)
 
     def entry(self, archetype, key, npc_id=None):
-        groups = self.named if npc_id is not None else self.archetypes
-        identity = npc_id if npc_id is not None else archetype
-        return public_entry(groups.get(identity, {}).get(key, NotebookEntry(key)))
+        if npc_id is None:
+            return public_entry(NotebookEntry(key))
+        return public_entry(self.named.get(npc_id, {}).get(key, NotebookEntry(key)))
 
     def _trait_summary(self, entries):
         rule = self.config["notebook"]
@@ -149,9 +149,6 @@ class Notebook:
         if len(entries) >= rule["trait_entries"] and total and guards / total < rule["trait_guard_share"]:
             return ("Aggressive: rarely guards when angry",)
         return ()
-
-    def traits(self, archetype):
-        return self._trait_summary(self.archetypes.get(archetype, {}).values())
 
     def record_exchange(self, npc_id, observed=True):
         if observed:
@@ -174,38 +171,36 @@ class Notebook:
             return {identity: [asdict(entry) for _, entry in sorted(
                     entries.items(), key=lambda item: tuple(asdict(item[0]).values()))]
                     for identity, entries in sorted(groups.items())}
-        return {"version": self.config["schema_version"], "archetypes": groups_data(self.archetypes),
+        return {"version": self.config["schema_version"],
                 "named": groups_data(self.named), "exchanges": deepcopy(self.exchanges)}
 
     @classmethod
     def from_data(cls, data, config):
         data = deepcopy(data)
-        if data.get("version") in set(range(1, 27)):
+        if data.get("version") in set(range(1, 30)):
             data["version"] = config["schema_version"]
         if data.get("version") != config["schema_version"]:
             raise ValueError("Unsupported notebook snapshot version")
         result = cls(config)
-        for group in ("archetypes", "named"):
-            groups = getattr(result, group)
-            for identity, rows in data[group].items():
-                entries = {}
-                for row in rows:
-                    values = deepcopy(row)
-                    values["key"] = PublicKey(**values["key"])
-                    values["state"] = PatternState(values["state"])
-                    values["full_keys"] = [FullKey(PublicKey(**item["public"]), item["blood_band"],
-                                                    item["fear_band"], item["pain_band"])
-                                           for item in values["full_keys"]]
-                    entry = NotebookEntry(**values)
-                    if (sum(entry.counts.values()) != entry.total
-                            or any(not isinstance(count, int) or count <= 0 for count in entry.counts.values())
-                            or any(action not in config["ai"]["tie_order"]
-                                   and action not in TACTICAL_CATEGORIES and action not in GROUNDED_ACTIONS
-                                   for action in entry.counts)
-                            or len(entry.full_keys) > config["notebook"]["fullkey_history"]
-                            or any(key.public != entry.key for key in entry.full_keys)):
-                        raise ValueError("Invalid notebook entry")
-                    entries[entry.key] = entry
-                groups[identity] = entries
-        result.exchanges = deepcopy(data["exchanges"])
+        for identity, rows in data.get("named", {}).items():
+            entries = {}
+            for row in rows:
+                values = deepcopy(row)
+                values["key"] = PublicKey(**values["key"])
+                values["state"] = PatternState(values["state"])
+                values["full_keys"] = [FullKey(PublicKey(**item["public"]), item["blood_band"],
+                                                item["fear_band"], item["pain_band"])
+                                       for item in values["full_keys"]]
+                entry = NotebookEntry(**values)
+                if (sum(entry.counts.values()) != entry.total
+                        or any(not isinstance(count, int) or count <= 0 for count in entry.counts.values())
+                        or any(action not in config["ai"]["tie_order"]
+                               and action not in TACTICAL_CATEGORIES and action not in GROUNDED_ACTIONS
+                               for action in entry.counts)
+                        or len(entry.full_keys) > config["notebook"]["fullkey_history"]
+                        or any(key.public != entry.key for key in entry.full_keys)):
+                    raise ValueError("Invalid notebook entry")
+                entries[entry.key] = entry
+            result.named[identity] = entries
+        result.exchanges = deepcopy(data.get("exchanges", {}))
         return result

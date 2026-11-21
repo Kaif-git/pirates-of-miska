@@ -1,6 +1,6 @@
 from pirates.duel_system.engine import Choice, commit_action
 from pirates.duel_system.exchange_log import format_exchange, injury_numbers, summarize_exchange
-from pirates.duel_system.model import ActionKind, Event, EventType, Zone
+from pirates.duel_system.model import ActionKind, ArmorPiece, Event, EventType, Zone
 from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
 from pirates.duel_stat_help import stat_rows
@@ -197,20 +197,19 @@ def test_eye_hit_numbers_explain_force_arithmetic_and_permanent_injury_milestone
     assert hit.deltas["eyes_damaged_before"] == 0
     assert hit.deltas["eyes_damaged_after"] == 1
     assert hit.deltas["eye_trauma_before"] == 20
-    assert hit.deltas["eye_trauma_after"] == 10
+    assert hit.deltas["eye_trauma_after"] == 0
     assert f"attack {hit.deltas['power']:g}" in text
     assert f"eye protection {hit.deltas['armor_applied']:g}" in text
     assert "wound-force points" in text
-    assert "Eye trauma reached 24" in text or "eye trauma" in text
-    assert "permanent eye impairment" in text or "permanently impaired eye" in text
-    assert "10 points carry toward the next eye (24-point threshold)" in text
+    assert "Clean eye contact reached" in text
 
 
-def test_real_subthreshold_eye_hit_shows_bleed_and_cumulative_trauma_progress():
+def test_subthreshold_eye_graze_shows_bleed_without_permanent_vision_loss():
     state = arena()
     player, enemy = state.fighters
     player.accuracy = 100
     force_clean_aims(state.config)
+    enemy.equipment.armor[Zone.EYE] = ArmorPiece(value=9, weight=0)
     commit_action(state, player.id, Choice(ActionKind.LIGHT, Zone.EYE, target_id=enemy.id))
     advance_to(state, player.action.strike_tick)
 
@@ -218,9 +217,47 @@ def test_real_subthreshold_eye_hit_shows_bleed_and_cumulative_trauma_progress():
     recap = " ".join(summarize_exchange(state.event_log, NAMES))
 
     assert hit.deltas["drifted"] is False
-    assert hit.deltas["bleed_per_turn"] == 0.5
+    assert hit.deltas["bleed_per_turn"] == 0
     assert hit.deltas["eye_trauma_before"] == 0
-    assert hit.deltas["eye_trauma_after"] > 0
-    assert "bleeding 0.5 blood/turn" in recap
-    assert f"eye trauma {hit.deltas['eye_trauma_after']:g}/24 points" in recap
-    assert "more)" in recap
+    assert hit.deltas["eye_trauma_after"] == 0
+    assert "no continuing bleed" in recap
+    assert enemy.permanent_injuries.eyes_damaged == 0
+    before, after = hit.deltas["target_condition_before"], hit.deltas["target_condition_after"]
+    assert after["pain"] > before["pain"]
+    detailed = "\n".join(format_exchange(state.event_log, NAMES))
+    assert "Pain " in detailed and "Effective pain " in detailed and "Morale " in detailed
+
+
+def test_dash_light_comparison_explains_stats_timing_and_hit_condition_deltas():
+    from pirates.duel_system.exchange_log import action_stat_comparison, condition_change_line
+
+    events = [
+        Event(0, EventType.ACTION_START, actor="player", target="ronin", deltas={
+            "kind": "DASH_LIGHT", "speed": 12, "strength": 10, "accuracy": 20, "strike_tick": 5}),
+        Event(0, EventType.ACTION_START, actor="ronin", target="player", deltas={
+            "kind": "DASH_LIGHT", "speed": 9, "strength": 12, "accuracy": 16, "strike_tick": 7}),
+    ]
+    hit = Event(5, EventType.HIT, actor="player", target="ronin", zone=Zone.TORSO,
+                deltas={"target_condition_before": {
+                    "pain": 10, "effective_pain": 8, "fear": 20, "anger": 5,
+                    "morale": 70, "blood": 100, "stamina": 80, "fatigue": 10,
+                    "stability": 90, "strength": 12, "speed": 9, "accuracy": 16,
+                    "behavior_modes": {"pain": "NONE", "fear": "NONE", "anger": "NONE"}},
+                    "target_condition_after": {
+                    "pain": 22, "effective_pain": 17, "fear": 24, "anger": 9,
+                    "morale": 66, "blood": 98, "stamina": 80, "fatigue": 10,
+                    "stability": 84, "strength": 11, "speed": 8, "accuracy": 16,
+                    "behavior_modes": {"pain": "PROTECTIVE", "fear": "NONE", "anger": "NONE"}}})
+    choices = {event.actor: event for event in events}
+    comparison = action_stat_comparison(hit, choices, NAMES)
+    changes = condition_change_line(hit, NAMES)
+    assert "DASH_LIGHT" not in comparison  # choice names are already shown in the exchange header
+    assert "Speed You 12.0 vs Ronin 9.0 (+3.0)" in comparison
+    assert "Strength You 10.0 vs Ronin 12.0 (-2.0)" in comparison
+    assert "Accuracy You 20.0 vs Ronin 16.0 (+4.0)" in comparison
+    assert "You had a 2-tick timing edge" in comparison
+    assert "not a single-stat contest" in comparison
+    assert "Pain 10.0→22.0 (+12.0)" in changes
+    assert "Fear 20.0→24.0 (+4.0)" in changes
+    assert "Effective Speed 9.0→8.0 (-1.0)" in changes
+    assert "Pain mode NONE→PROTECTIVE" in changes

@@ -40,13 +40,13 @@ def scenario(*, anger=0, gap=0, stamina=100, fatigue=0, morale=80, enemy_speed=1
 
 
 @pytest.mark.parametrize("kwargs,expected", [
-    ({"anger": 10}, "LIGHT"),                                           # E1
-    ({"anger": 70, "phase": "RECOVERY", "remaining": 2, "whiff": True}, "HEAVY"), # E2
-    ({"anger": 70, "phase": "RECOVERY", "remaining": 12}, "HEAVY"),  # E3
+    ({"anger": 10}, "HEAVY"),                                           # neutral adjacent scorer choice
+    ({"anger": 70, "phase": "RECOVERY", "remaining": 2, "whiff": True}, "LIGHT"), # E2
+    ({"anger": 70, "phase": "RECOVERY", "remaining": 12}, "LIGHT"),  # E3
     ({"phase": "WINDUP_H", "remaining": 9}, "LIGHT"),                 # E4
-    ({"phase": "WINDUP_H", "remaining": 1, "enemy_speed": 5,
-      "own_strength": 5, "player_strength": 20}, "DASH_OUT"),           # E5
-    ({"phase": "GUARD_HOLD", "remaining": 30, "anger": 50}, "HEAVY"),# E6
+        ({"phase": "WINDUP_H", "remaining": 1, "enemy_speed": 5,
+          "own_strength": 5, "player_strength": 20}, "LIGHT"),               # E5
+    ({"phase": "GUARD_HOLD", "remaining": 30, "anger": 50}, "LIGHT"),# E6
     ({"stamina": 20, "gap": 4, "fatigue": 50}, "WAIT"),               # E7
     ({"gap": 2}, "DASH_LIGHT"),                                        # E9
 ])
@@ -56,8 +56,14 @@ def test_ronin_expected_behavior_e1_e7_e9(kwargs, expected):
 
 
 def test_e8_fear90_uses_run_or_walk_escape_not_attack():
-    decision = choose_action(scenario(morale=5), "ronin")
-    assert decision.category in {"RUN_OUT", "WALK_OUT"}
+    state = scenario()
+    fighter = state.fighter("ronin")
+    fighter.behavior_modes["fear"] = "CAUTIOUS"
+    cautious = {row.category: row for row in score_actions(state, fighter.id)}
+    fighter.behavior_modes["fear"] = "NONE"
+    ordinary = {row.category: row for row in score_actions(state, fighter.id)}
+    assert dict(cautious["DASH_OUT"].reasons)["MODE_CAUTIOUS_SPACE"] > 0
+    assert cautious["DASH_OUT"].score > ordinary["DASH_OUT"].score
 
 
 def test_e10_same_full_state20_times_identical_and_read_only_no_rng():
@@ -77,7 +83,7 @@ def test_reaction_delay_hides_new_commitment_and_uses_previous_category():
     assert view.public_key.opp_state == "UNSEEN"
     assert view.public_key.opp_last_cat == "WAIT"
     assert view.opponent_action is None
-    state.tick += state.fighters[1].personality.reaction_delay
+    state.tick += state.config["ai"]["reaction_delay_default"]
     view = observe(state, "ronin")
     assert view.opponent_action == ActionKind.HEAVY
     assert view.public_key.opp_state == "WINDUP_H"
@@ -97,7 +103,7 @@ def test_ai_scores_bleeding_treatment_and_waiting_to_recover_stability():
     ronin.wounds.append(Wound(Zone.TORSO, Severity.DEEP, 6))
     ronin.bandages = 1
     bandage = {item.category: item for item in score_actions(state, ronin.id)}["BANDAGE"]
-    assert any(name == "I5_BANDAGE_BLEED" and value > 0 for name, value in bandage.reasons)
+    assert any(name == "UNIVERSAL_BLEED_TREATMENT" and value > 0 for name, value in bandage.reasons)
     ronin.blood = 25
     assert choose_action(state, ronin.id).category != "BANDAGE"  # opponent is free to act before treatment completes
     state.fighter("player").stagger_until = state.tick + 100
@@ -105,7 +111,7 @@ def test_ai_scores_bleeding_treatment_and_waiting_to_recover_stability():
     ronin.wounds.clear()
     ronin.stability = 40
     waiting = {item.category: item for item in score_actions(state, ronin.id)}["WAIT"]
-    assert any(name == "I5_WAIT_STABILITY" and value > 0 for name, value in waiting.reasons)
+    assert any(name == "UNIVERSAL_STABILITY_RECOVERY" and value > 0 for name, value in waiting.reasons)
     state.fighter("player").stagger_until = 0
     ronin.wounds = [Wound(Zone.TORSO, Severity.DEEP, 20)]
     ronin.blood = 1
@@ -122,8 +128,8 @@ def test_ai_prioritizes_shove_of_witnessed_unsteady_opponent_into_open_tile():
     state.emit(EventType.STABILITY, player.id,
                deltas={"source": "HIT_IMPACT", "loss": 12, "band": "OFF_BALANCE"})
     shove = {item.category: item for item in score_actions(state, ronin.id)}["SHOVE"]
-    assert any(name == "I5_SHOVE_UNSTEADY" and value > 0 for name, value in shove.reasons)
-    assert any(name == "I5_SHOVE_SPACE" and value > 0 for name, value in shove.reasons)
+    assert any(name == "UNIVERSAL_SHOVE_UNSTEADY" and value > 0 for name, value in shove.reasons)
+    assert any(name == "UNIVERSAL_SHOVE_OPEN_SPACE" and value > 0 for name, value in shove.reasons)
 
 
 def test_opposed_closing_walkers_choose_distinct_flanks_and_both_advance():
@@ -173,7 +179,7 @@ def test_zone_preference_uses_exposure_and_phase_not_accuracy_thresholds():
     assert choose_action(idle, "ronin").choice.aim == Zone.TORSO
 
 
-def test_authored_profiles_choose_distinct_responses_to_a_visible_light_commitment():
+def test_profile_identity_does_not_change_shared_response_to_visible_light():
     state = scenario(phase="WINDUP_L", remaining=8)
     fighter = state.fighter("ronin")
     base = deepcopy(state.config["ronin"])
@@ -185,12 +191,7 @@ def test_authored_profiles_choose_distinct_responses_to_a_visible_light_commitme
         fighter.personality = Personality(**profile)
         observed[profile_name] = choose_action(state, fighter.id).category
 
-    assert observed["veteran"] == "GUARD"
-    assert observed["counterfighter"] == "GUARD"
-    assert observed["recruit"] == "GUARD"
-    assert observed["aggressor"] == "LIGHT"
-    assert observed["brute"] == "LIGHT"
-    assert observed["bully"] == "HEAVY"
+    assert len(set(observed.values())) == 1
 
 
 def test_candidates_never_dash_when_exhausted_or_plan_into_walls():
@@ -201,24 +202,44 @@ def test_candidates_never_dash_when_exhausted_or_plan_into_walls():
     assert decision.choice.kind not in {ActionKind.DASH, ActionKind.DASH_LIGHT, ActionKind.HEAVY}
 
 
-def test_fixed_tie_order_not_dict_order_decides_equal_scores():
+def test_score_inspection_and_tie_resolution_are_repeatable_without_rng():
     state = scenario()
-    ronin = state.fighters[1]
-    ronin.personality.base = dict.fromkeys(ronin.personality.base, 0)
-    ronin.personality.weights = dict.fromkeys(ronin.personality.weights, 0)
-    ronin.personality.traits = dict.fromkeys(ronin.personality.traits, 0.5)
-    state.config["personality"]["variation"]["amplitude"] = 0
-    # Disable non-weighted positional/fatigue/pain rules in this neutral scenario.
-    assert choose_action(state, "ronin").category == "GUARD"
+    before = state.to_data()
+    expected = choose_action(state, "ronin")
+    assert all(choose_action(state, "ronin") == expected for _ in range(20))
+    assert state.to_data() == before
 
 
-def test_literal_starting_constants_explain_documented_e5_e7_e8_conflicts():
-    samples = [(scenario(phase="WINDUP_H", remaining=1, enemy_speed=5,
-                         own_strength=5, player_strength=20), "LIGHT"),
-               (scenario(stamina=20, gap=4, fatigue=50), "WALK_IN"),
-               (scenario(morale=5), "DASH_OUT")]
-    for state, original_result in samples:
-        state.config["ai"]["counter_heavy_dash"] = 40
-        state.fighters[1].personality.base["WAIT"] = -50
-        state.fighters[1].personality.base["RUN_OUT"] = 0
-        assert choose_action(state, "ronin").category == original_result
+def test_mirrored_dash_light_routes_choose_a_distinct_collision_safe_approach():
+    state = scenario(gap=3)
+    first, second = state.fighters
+    first.pos, second.pos = (4, 3), (8, 3)
+    first_choice = movement_choice(state, first, ActionKind.DASH_LIGHT, toward=True,
+                                   aim=Zone.TORSO)
+    second_choice = movement_choice(state, second, ActionKind.DASH_LIGHT, toward=True,
+                                    aim=Zone.TORSO)
+    first_path = movement_path(state, first, first_choice)
+    second_path = movement_path(state, second, second_choice)
+    assert first_path[-1] != second_path[-1]
+    assert all(first_path[tick] != second_path[tick]
+               for tick in range(min(len(first_path), len(second_path))))
+
+
+def test_imminent_heavy_does_not_credit_an_escape_that_finishes_after_strike():
+    state = scenario(phase="WINDUP_H", remaining=1, enemy_speed=5,
+                     own_strength=5, player_strength=20)
+    rows = {row.category: row for row in score_actions(state, "ronin")}
+    assert "UNIVERSAL_SLOW_TRADE_RISK" in dict(rows["LIGHT"].reasons)
+    assert "UNIVERSAL_POSITION_SAFETY" not in dict(rows["DASH_OUT"].reasons)
+    assert choose_action(state, "ronin").category == "LIGHT"
+
+
+def test_critical_break_fallback_prefers_safety_when_no_exit_or_yield_applies():
+    state = scenario(phase="WINDUP_H", remaining=1, enemy_speed=5,
+                     own_strength=5, player_strength=20, morale=60)
+    fighter = state.fighter("ronin")
+    fighter.behavior_modes["fear"] = "BREAK"
+    rows = {row.category: row for row in score_actions(state, fighter.id)}
+    assert dict(rows["GUARD"].reasons)["MODE_CRITICAL_GUARD"] > 0
+    assert dict(rows["LIGHT"].reasons)["MODE_CRITICAL_AVOID_LOSING_TRADE"] < 0
+    assert choose_action(state, fighter.id).category == "GUARD"

@@ -616,6 +616,7 @@ class DuelUI:
                            if self.round_result else model.full_log) + ("WHY", *model.why)
             elif self.panel == "sheet":
                 content = ("YOUR CURRENT STATS", *(f"{key}: {value}" for key, value in model.player_sheet),
+                           "", *model.player_condition_rows,
                            "", "ENEMY STATS (learned by fighting)",
                            *(f"{key}: {value}" for key, value in model.enemy_sheet))
             elif self.panel == "more":
@@ -715,6 +716,7 @@ class DuelUI:
             return (f"STAT: {self.stat_name}", *stat_rows(model, self.stat_name, enemy=self.stat_enemy), "[Back]")
         if self.panel == "sheet":
             return ("CHARACTER STATS", *(f"{key}: {value}" for key, value in model.player_sheet),
+                    "", *model.player_condition_rows,
                     "Choose a stat above to see its meaning and current influences.",
                     "ENEMY STATS (learned by fighting)", *(f"{key}: {value}" for key, value in model.enemy_sheet), "[Back]")
         if self.panel == "preview" and model.preview:
@@ -1009,12 +1011,12 @@ class GameDuelDisplay(DuelDisplay):
 
 def _choose_duel_archetype(renderer, world):
     profiles = (
-        ("brute", "Brute — presses forward and attacks directly"),
-        ("aggressor", "Aggressor — fast, assertive pressure"),
-        ("veteran", "Veteran — patient, disciplined choices"),
-        ("counterfighter", "Counterfighter — guards and punishes openings"),
-        ("recruit", "Recruit — cautious and easier to unsettle"),
-        ("bully", "Bully — confident, forceful attacks"),
+        ("brute", "Brute — fear 30; morale +10; moderate pain/stress response"),
+        ("aggressor", "Aggressor — fear 15; morale +15; low stress tolerance"),
+        ("veteran", "Veteran — fear 30; morale +20; high composure/tolerances"),
+        ("counterfighter", "Counterfighter — fear 35; morale +12; high composure/tolerances"),
+        ("recruit", "Recruit — fear 80; morale −5; low composure/tolerances"),
+        ("bully", "Bully — fear 5; morale +25; low pain/anger tolerance"),
     )
     renderer.render_list(
         world, "Choose your sword-duel opponent",

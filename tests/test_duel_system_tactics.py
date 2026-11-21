@@ -461,7 +461,7 @@ def test_v7_active_session_migrates_legacy_shove_tuning_and_deadline():
         tactics.pop(key)
     tactics["shove_stability_loss"] = 23
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 27
+    assert restored.state.config["schema_version"] == 30
     assert restored.state.config["tactics"]["shove_max_stability_loss"] == 23
     assert restored.player.action.end_tick == deadline
 
@@ -477,7 +477,7 @@ def test_v20_active_session_migrates_new_shove_strength_threshold_and_commitment
 
     restored = DuelSession.from_data(data)
 
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.state.config["tactics"]["shove_resist_strength_gap"] == 20
     assert restored.player.action.path == action.path
 
@@ -612,12 +612,17 @@ def test_tactical_choices_are_legal_ai_and_guide_choices_with_public_setup_gates
     player, ronin = ai_state.fighters
     commit_action(ai_state, player.id, Choice(ActionKind.GUARD))
     advance_to(ai_state, 4)
-    assert choose_action(ai_state, ronin.id).category == "FEINT"
+    scored = {row.category: row for row in score_actions(ai_state, ronin.id)}
+    assert "FEINT" in scored
+    assert choose_action(ai_state, ronin.id).category == "LIGHT"
+    assert scored["FEINT"].score < scored["LIGHT"].score
 
     ai_state = tactic_state()
     ronin = ai_state.fighters[1]
     ronin.pain = 70
-    assert choose_action(ai_state, ronin.id).category == "ADRENALINE"
+    surge = {row.category: row for row in score_actions(ai_state, ronin.id)}["ADRENALINE"]
+    assert dict(surge.reasons)["UNIVERSAL_ADRENALINE_TRIGGER"] > 0
+    assert not legality(ai_state, ronin.id, surge.choice)
 
     ai_state = tactic_state()
     player, ronin = ai_state.fighters
@@ -626,8 +631,8 @@ def test_tactical_choices_are_legal_ai_and_guide_choices_with_public_setup_gates
     advance_to(ai_state, action.strike_tick+1)
     player.pos, ronin.pos = (6, 3), (7, 3)
     scores = {row.category: dict(row.reasons) for row in score_actions(ai_state, ronin.id)}
-    assert "P5_SHOVE_OPENING" in scores["SHOVE"]
-    assert "P5_THRUST_OPENING" in scores["THRUST"]
+    assert "UNIVERSAL_BASE" in scores["SHOVE"]
+    assert {"UNIVERSAL_VISIBLE_OPENING", "UNIVERSAL_OPENING_TOO_SHORT"} & set(scores["THRUST"])
 
 
 def test_v4_config_and_session_migrate_to_v7_without_changing_active_deadlines():
@@ -651,8 +656,8 @@ def test_v4_config_and_session_migrate_to_v7_without_changing_active_deadlines()
             fighter_data.pop(key, None)
     data["notebook"]["version"] = 4
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 27
-    assert restored.to_data()["version"] == 27
+    assert restored.state.config["schema_version"] == 30
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_end
 
@@ -690,7 +695,7 @@ def test_adrenaline_is_threshold_gated_once_only_and_suppresses_only_pain_stat_p
     # The AI's own threshold is independently checked; a healthy Ronin has no surge candidate.
     assert "ADRENALINE" not in candidate_map
     scores = {row.category: row for row in score_actions(state, player.id)}
-    assert "P5_ADRENALINE_TRIGGER" in dict(scores["ADRENALINE"].reasons)
+    assert dict(scores["ADRENALINE"].reasons)["UNIVERSAL_ADRENALINE_TRIGGER"] > 0
 
     initial_pain = player.pain
     commit_action(state, player.id, choice)

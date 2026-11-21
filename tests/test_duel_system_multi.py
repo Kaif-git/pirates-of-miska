@@ -206,7 +206,7 @@ def test_v6_snapshot_migration_adds_team_and_target_defaults_without_changing_de
     old["config"].pop("group", None)
 
     restored = CombatState.from_data(old)
-    assert restored.config["schema_version"] == 27
+    assert restored.config["schema_version"] == 30
     assert restored.fighters[0].action.end_tick == deadline
     assert restored.fighters[0].team_id != restored.fighters[1].team_id
     assert restored.fighters[0].action.target_id is None
@@ -237,7 +237,7 @@ def test_v6_session_migration_preserves_active_path_deadlines_and_replay():
     expected_path = deepcopy(session.player.action.path)
 
     restored, replay = DuelSession.from_data(old), DuelSession.from_data(old)
-    assert restored.state.config["schema_version"] == 27
+    assert restored.state.config["schema_version"] == 30
     assert restored.player.action.end_tick == deadline
     assert restored.player.action.path == expected_path
     assert restored.exchange is not None and set(restored.exchange["participants"]) == {
@@ -396,36 +396,52 @@ def test_group_guards_release_at_configured_exchange_deadline_without_recommit(m
                for event in session.state.event_log) == 1
 
 
-def test_group_fear_break_counts_each_decision_and_yields_after_three(monkeypatch):
+def test_group_critical_fear_and_low_morale_yield_when_no_exit_is_legal(monkeypatch):
     actors = [bare_fighter("player", pos=(1, 1), team_id="players"),
               bare_fighter("first", pos=(4, 1), team_id="raiders"),
               bare_fighter("second", pos=(5, 2), team_id="raiders")]
     session = DuelSession.new_group(actors, guide_mode="off", seed=39)
     session.state.fighter("first").morale = session.state.fighter("second").morale = 0
+    session.state.fighter("first").fear_meter = session.state.fighter("second").fear_meter = 100
+    session.state.exits.clear()
     monkeypatch.setattr("pirates.duel_system.session.choose_action",
                         lambda state, fighter_id: SimpleNamespace(
                             category="WAIT", choice=Choice(ActionKind.WAIT)))
 
     assert session.resolve_round(Choice(ActionKind.WAIT))
-    assert [fighter.fear_decisions for fighter in session.state.fighters[1:]] == [1, 1]
-    assert not session.state.end_reason
-    assert session.resolve_round(Choice(ActionKind.WAIT))
-    assert [fighter.fear_decisions for fighter in session.state.fighters[1:]] == [2, 2]
-    assert not session.state.end_reason
-    assert not session.resolve_round(Choice(ActionKind.WAIT))
 
     assert session.state.end_reason == "group_defeated"
     assert session.state.winner == "player"
-    assert all(fighter.yielded and fighter.fear_decisions == 3
+    assert all(fighter.yielded and fighter.fear_decisions == 0
                for fighter in session.state.fighters[1:])
     decisions = [event for event in session.state.event_log if event.type == EventType.DECISION]
     assert {fighter.id: sum(event.actor == fighter.id for event in decisions)
-            for fighter in session.state.fighters[1:]} == {"first": 3, "second": 3}
+            for fighter in session.state.fighters[1:]} == {"first": 1, "second": 1}
     end_index = next(index for index, event in enumerate(session.state.event_log)
                      if event.type == EventType.FIGHT_END)
     yield_indices = [index for index, event in enumerate(session.state.event_log)
                      if event.type == EventType.DECISION and event.deltas["category"] == "YIELD"]
     assert yield_indices and max(yield_indices) < end_index
+
+
+def test_group_stops_committing_choices_after_last_hostile_yield(monkeypatch):
+    actors = [bare_fighter("player", pos=(1, 1), team_id="players"),
+              bare_fighter("first", pos=(4, 1), team_id="raiders"),
+              bare_fighter("second", pos=(5, 2), team_id="raiders"),
+              bare_fighter("ally", pos=(1, 2), team_id="players")]
+    session = DuelSession.new_group(actors, guide_mode="off", seed=40)
+    session.state.exits.clear()
+    for identity in ("first", "second"):
+        fighter = session.state.fighter(identity)
+        fighter.fear_meter, fighter.morale = 100, 0
+    monkeypatch.setattr("pirates.duel_system.session.choose_action",
+                        lambda state, fighter_id: SimpleNamespace(
+                            category="WAIT", choice=Choice(ActionKind.WAIT)))
+    assert session.resolve_round(Choice(ActionKind.WAIT))
+    assert session.state.end_reason == "group_defeated"
+    assert session.state.fighter("ally").action is None
+    assert not any(event.type == EventType.ACTION_START and event.actor == "ally"
+                   for event in session.state.event_log)
 
 
 def test_group_render_limits_threat_summaries_and_target_selection_is_explicit():
@@ -668,7 +684,7 @@ def test_group_session_applies_observed_leader_loss_at_exchange_boundary(monkeyp
                for event in state.event_log)
 
 
-def test_disciplined_group_movement_preserves_approach_spacing_while_recruits_crowd(monkeypatch):
+def test_legacy_discipline_trait_does_not_change_universal_group_path_choice(monkeypatch):
     player = bare_fighter("player", pos=(4, 1), team_id="players")
     recruit = bare_fighter("recruit", pos=(2, 2), team_id="raiders")
     ally = bare_fighter("ally", pos=(3, 1), team_id="raiders")
@@ -686,10 +702,9 @@ def test_disciplined_group_movement_preserves_approach_spacing_while_recruits_cr
     assert crowded is not None and crowded.direction == (1, -1)
     assert (recruit.pos[0] + crowded.direction[0], recruit.pos[1] + crowded.direction[1]) == ally.pos
 
-    recruit.personality.traits["discipline"] = 1
+    recruit.personality.stress_composure = 1
     spaced = movement_choice(state, recruit, ActionKind.WALK, toward=True)
-    assert spaced is not None and spaced.direction == (1, 0)
-    assert (recruit.pos[0] + spaced.direction[0], recruit.pos[1] + spaced.direction[1]) != ally.pos
+    assert spaced == crowded
 
 
 def test_group_coach_uses_only_visible_threats_without_single_opponent_rollout(monkeypatch):

@@ -300,6 +300,22 @@ def injury_shock(state, defender, zone, severity, damage_type):
     return load, control, response
 
 
+def _condition_snapshot(fighter, config, tick):
+    from .stats import effective_stats, fear, pain_burden
+    effective = effective_stats(fighter, config, tick)
+    return {
+        "pain": fighter.pain, "effective_pain": pain_burden(fighter, config),
+        "fear": fear(fighter, config), "anger": fighter.anger,
+        "morale": fighter.morale, "nervousness": fighter.nervousness,
+        "blood": fighter.blood, "stamina": fighter.stamina,
+        "fatigue": fighter.fatigue, "stability": fighter.stability,
+        "strength": effective.strength, "speed": effective.speed,
+        "accuracy": effective.accuracy,
+        "eyes_damaged": fighter.permanent_injuries.eyes_damaged,
+        "behavior_modes": dict(fighter.behavior_modes),
+    }
+
+
 def apply_wound(state, attacker, defender, zone, severity, power, net, damage_type="CUTTING", *,
                 allow_disarm=True, drifted=False, site=None, side=None):
     from .mental import change_anger, change_fear
@@ -307,6 +323,8 @@ def apply_wound(state, attacker, defender, zone, severity, power, net, damage_ty
     cfg = state.config
     cap = cfg["defaults"]["pool_max"]
     data = cfg["wounds"][zone.value].get(severity.value, {})
+    pain = min(cfg["pain"]["bruise_cap"], cfg["pain"]["bruise_power"] * power) if severity == Severity.BRUISE else cfg["pain"][severity.value]
+    pain *= cfg["pain"]["zone_mult"].get(zone.value, 1)
     contact = cfg["injury"]["damage_types"][str(damage_type).upper()]
     if site is None:
         site, side = choose_anatomical_site(state, zone, severity=severity, defender=defender)
@@ -323,7 +341,8 @@ def apply_wound(state, attacker, defender, zone, severity, power, net, damage_ty
     wound = Wound(zone, severity, bleed, initial_blood_loss=initial_loss,
                   depth=profile["depth"],
                   structure=profile["structure"], damage_type=profile["damage_type"],
-                  site=site, side=side, vital_outcome=profile["vital_outcome"])
+                  site=site, side=side, vital_outcome=profile["vital_outcome"],
+                  net_force=max(0, net), pain_added=pain)
     if initial_loss > 0:
         before = defender.blood
         defender.blood = max(0, defender.blood - initial_loss)
@@ -346,7 +365,8 @@ def apply_wound(state, attacker, defender, zone, severity, power, net, damage_ty
     if severity != Severity.BRUISE:
         defender.wounds.append(wound)
         state.emit(EventType.WOUND, attacker.id, defender.id, zone, severity,
-                    deltas={"bleed_per_turn": bleed,
+                    deltas={"bleed_per_turn": bleed, "net_after_armor": max(0, net),
+                            "pain_added": pain,
                             "initial_blood_loss": initial_loss, **profile})
     status_name = data.get("status")
     if status_name:
@@ -388,7 +408,7 @@ def apply_wound(state, attacker, defender, zone, severity, power, net, damage_ty
         before = defender.permanent_injuries.eyes_damaged
         if injury_qualifies and before < 2:
             defender.permanent_injuries.eyes_damaged = before + 1
-            defender.permanent_injuries.eye_trauma = max(0, trauma_total - threshold)
+            defender.permanent_injuries.eye_trauma = 0 if net >= threshold else max(0, trauma_total - threshold)
             state.emit(EventType.EYE_INJURY, attacker.id, defender.id, zone, severity,
                        deltas={"eyes_damaged_before": before,
                                 "eyes_damaged_after": before + 1, "net_after_armor": net,
@@ -436,9 +456,15 @@ def apply_wound(state, attacker, defender, zone, severity, power, net, damage_ty
         state.emit(EventType.INCAPACITATED, attacker.id, defender.id, zone, severity,
                    deltas={"reason": "UNCONSCIOUS", "cause": "CRIPPLED_LEG"},
                    cause_tags=("CRIPPLED_LEG", "UNCONSCIOUS"))
-    pain = min(cfg["pain"]["bruise_cap"], cfg["pain"]["bruise_power"] * power) if severity == Severity.BRUISE else cfg["pain"][severity.value]
-    pain *= cfg["pain"]["zone_mult"].get(zone.value, 1)
+    pain_before = defender.pain
+    pain_tolerance = (defender.personality.pain_tolerance if defender.personality
+                      else cfg["defaults"]["pain_tolerance"])
+    pain_before_effective = pain_before * (
+        1 - pain_tolerance * cfg["stats"]["pain_tolerance_suppression"])
     defender.pain = clamp(defender.pain + pain, 0, cap)
+    from .mental import refresh_behavior_modes
+    refresh_behavior_modes(state, defender, "HIT_PAIN",
+                           before_values={"pain": pain_before_effective})
     end_eff = effective_stats(defender, cfg, state.tick).endurance
     defender.fatigue = clamp(defender.fatigue + pain * cfg["fatigue"]["pain_spike"]
                              * max(0, cfg["fatigue"]["gain_base"] - end_eff / cfg["fatigue"]["endurance_divisor"]), 0, cap)
@@ -652,7 +678,8 @@ def resolve_strike(state, attacker, defender, snap):
                          "attacker_strength": attacker_strength,
                          "defender_strength": defender_strength,
                          "required_ratio": cfg["tactics"]["disarm_strength_ratio"],
-                         "drifted": drifted}
+                          "drifted": drifted}
+    target_condition_before = _condition_snapshot(defender, cfg, state.tick)
     pain = apply_wound(state, attacker, defender, zone, severity, power, net, damage_type,
                        allow_disarm=action.kind != ActionKind.DISARM, drifted=drifted,
                        site=site, side=side)
@@ -706,6 +733,7 @@ def resolve_strike(state, attacker, defender, snap):
     defender.hits_without_return += 1
     if defender.hits_without_return % cfg["anger"]["no_return_count"] == 0:
         change_anger(state, defender, cfg["anger"]["no_return_hits"], "UNANSWERED_HITS")
+    target_condition_after = _condition_snapshot(defender, cfg, state.tick)
     attacker.last_hit_tick = state.tick
     attacker.first_exchange_tick = attacker.first_exchange_tick if attacker.first_exchange_tick is not None else state.tick
     defender.first_exchange_tick = defender.first_exchange_tick if defender.first_exchange_tick is not None else state.tick
@@ -747,8 +775,10 @@ def resolve_strike(state, attacker, defender, snap):
                                                if zone == Zone.EYE else None),
                         "shock_load": shock_load, "decision_control": control,
                         "shock_response": shock_response,
-                        "impact_requested": impact_requested,
-                        "impact_applied": impact_applied,
+                         "impact_requested": impact_requested,
+                         "impact_applied": impact_applied,
+                        "target_condition_before": target_condition_before,
+                        "target_condition_after": target_condition_after,
                        "strength": live.strength, "armor": armor.value if armor else 0,
                        "power_mult": cfg["gear"]["unarmed_power"] if attacker.disarmed else action.power_mult,
                          "weapon_edge": weapon_edge(attacker, cfg),

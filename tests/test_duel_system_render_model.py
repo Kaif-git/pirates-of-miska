@@ -43,6 +43,21 @@ def test_action_options_label_conditional_and_unavailable_states_instead_of_all_
     assert len({option.assessment for option in options.values()}) > 1
 
 
+def test_angry_visible_opponent_adds_non_guaranteed_response_scenarios_to_action_details():
+    session = DuelSession.new(guide_mode="off")
+    player, enemy = session.player, session.enemy
+    player.pos, enemy.pos = (0, 0), (1, 0)
+    enemy.anger = 90
+    model = session.render_model()
+    options = {option.label: option for option in model.actions}
+    details = options["Thrust"].details
+    assert "Anger favors pressure/closing" in details
+    assert "Watch list (not exhaustive, not a prediction)" in details
+    assert "Light" in details and "Thrust" in details
+    assert "not a guaranteed hit" in details
+    assert "quick straight ray" in details and "sidestep" in details
+
+
 def test_action_assessment_uses_observed_control_window_and_incoming_threat_timing():
     session = DuelSession.new(guide_mode="off")
     player, enemy = session.player, session.enemy
@@ -270,9 +285,22 @@ def test_zone_forecast_is_conditional_numeric_and_render_pure():
     assert any("Strength ×" in forecast or "Speed ×" in forecast or "bleed" in forecast
                for forecast in forecasts)
     eye = next(option.forecast for option in forecast_options if option.zone == Zone.EYE)
-    assert "Eye-trauma track" in eye and "/24 points" in eye
-    assert "permanently impair" in eye
+    assert "Eye injury" in eye and "impair eye" in eye
+    assert "8 post-armor force" in eye
     assert session.state.to_data() == before
+
+
+def test_player_sheet_lists_all_numeric_conditions_and_every_anatomical_site():
+    session = DuelSession.new(guide_mode="off")
+    model = session.render_model()
+    rows = model.player_condition_rows
+    flattened = "\n".join(rows)
+    assert "MENTAL METERS" in flattened and "PHYSICAL METERS" in flattened
+    assert "Pain raw" in flattened and "Fear " in flattened and "Anger " in flattened
+    assert "Morale " in flattened and "nervousness " in flattened
+    for sites in session.state.config["anatomy_sites"].values():
+        for site in sites:
+            assert f"{site.replace('_', ' ').title()}: unaffected; wounds 0; force 0" in flattened
 
 
 def test_observed_guard_forecast_shows_a_conditional_zero_body_injury_branch():
@@ -457,11 +485,20 @@ def test_emotion_readout_is_exact_for_player_and_enemy_tells_are_public_and_unce
     session.enemy.anger, session.enemy.pain, session.enemy.morale = 70, 99, 1
     session.enemy.wounds = [Wound(Zone.TORSO, Severity.CUT, 3)]
     model = session.render_model()
-    assert "Fear" in model.player_emotion_rows[0] and "anger 33" in model.player_emotion_rows[0]
+    assert "Fear" in model.player_emotion_rows[1] and "anger 33" in model.player_emotion_rows[1]
     assert any("uncertain" in line or "unknown" in line for line in model.enemy_tell)
     assert any("Visible wounds" in line for line in model.enemy_tell)
     assert not {"Pain", "Morale", "Anger"}.intersection(name for name, _ in model.enemy_sheet)
     assert "99" not in " ".join(model.enemy_tell)
+
+
+def test_player_emotion_readout_explains_latched_threshold_modes():
+    session = DuelSession.new(guide_mode="off")
+    session.player.behavior_modes.update(pain="PROTECTIVE", fear="CAUTIOUS", anger="HOT")
+    model = session.render_model()
+    assert model.player_emotion_rows[0] == "Modes pain:protective fear:cautious anger:hot"
+    assert model.player_behavior_modes == (("pain", "PROTECTIVE"), ("fear", "CAUTIOUS"),
+                                           ("anger", "HOT"))
 
 
 def test_hidden_archetype_notebook_history_does_not_create_public_ghost_or_tell():

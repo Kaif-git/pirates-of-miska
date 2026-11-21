@@ -151,6 +151,8 @@ class RenderModel:
     enemy_opportunity: str = "Next choice unknown."
     enemy_response_summary: str = "Response timing unknown."
     enemy_condition: str = "No visible condition read."
+    player_behavior_modes: tuple[tuple[str, str], ...] = ()
+    player_condition_rows: tuple[str, ...] = ()
     player_injury_rows: tuple[str, ...] = ()
     enemy_injury_rows: tuple[str, ...] = ()
     player_stability: float = 100
@@ -329,22 +331,16 @@ def _conditional_injury_forecast(state, attacker, defender, kind, zone):
             f"clean chance {clean_chance:.0%}. Points have no fixed maximum and are not a percent.")
     if zone == Zone.EYE:
         threshold = cfg["wound_net"]["eye_injury"]
-        current = defender.permanent_injuries.eye_trauma
-        add = max(0, net) if severity in {Severity.CUT, Severity.DEEP, Severity.SEVERED} else 0
-        projected = current + add
         eyes = defender.permanent_injuries.eyes_damaged
-        crosses = add >= threshold or projected >= threshold
-        carry = max(0, projected-threshold) if crosses else 0
-        if crosses and eyes < 2:
-            consequence = (f"this would permanently impair eye {eyes+1}/2; {carry:g}/{threshold:g} "
-                           "points carry toward the other eye")
+        qualifies = severity in {Severity.CUT, Severity.DEEP, Severity.SEVERED} and net >= threshold
+        if qualifies and eyes < 2:
+            consequence = f"this would impair eye {eyes+1}/2"
         elif eyes >= 2:
-            consequence = "both eyes are already permanently impaired; there is no further eye milestone"
+            consequence = "both eyes are already impaired; no further eye injury is possible"
         else:
-            consequence = (f"{max(0, threshold-projected):g} more points to permanently impair "
-                           f"eye {eyes+1}/2")
-        text += (f" Eye-trauma track: {current:g}/{threshold:g} points toward the next permanent eye injury; "
-                 f"this clean contact adds {add:g} → {consequence}.")
+            consequence = (f"requires a clean CUT-or-worse contact and at least {threshold:g} post-armor force "
+                           f"to impair eye {eyes+1}/2")
+        text += f" Eye injury (threshold {threshold:g} post-armor force): {consequence}."
     phase = defender.action.phase_at(tick) if defender.action else "IDLE"
     if (defender.action and defender.action.kind == ActionKind.GUARD
             and phase in {"GUARD_RAISE", "GUARD_HOLD"}):
@@ -447,6 +443,14 @@ def event_line(event, names):
         return f"{actor}: clean heavy cutting head strike caused death"
     if event.type == EventType.INCAPACITATED:
         return f"{actor}: incapacitated ({event.deltas.get('cause', 'injury').replace('_', ' ').lower()})"
+    if event.type == EventType.BEHAVIOR_MODE:
+        mode = event.deltas["mode_after"].replace("_", " ").lower()
+        meter = event.deltas["meter"]
+        value = event.deltas.get("value_after", event.deltas.get("threshold", 0))
+        threshold = event.deltas.get("threshold", 0)
+        cause = str(event.deltas.get("cause", "state change")).replace("_", " ").lower()
+        return (f"{actor}: {meter} {mode} at {value:g}/100 "
+                f"(threshold {threshold:g}; {cause})")
     if event.type in {EventType.PARRY, EventType.WHIFF, EventType.BLOCK, EventType.GUARD_BREAK,
                       EventType.STAGGER, EventType.ANGER_CRASH, EventType.EXHAUST, EventType.FEAR_BREAK}:
         return f"{actor}: {event.type.value.lower().replace('_', ' ')}"
@@ -484,6 +488,76 @@ def _enemy_tells(enemy, key, entry, config):
     if enemy.fatigue >= config["ai"]["vigor_low_fatigue"]:
         rows.append("Looks winded; next choice unknown.")
     return tuple(rows[:2] or ("No reliable read yet; next choice unknown.",))
+
+
+def _plausible_response_read(state, player, enemy, key, entry):
+    """Return a cue-based watch list; this is deliberately not the NPC policy."""
+    if enemy.action:
+        return "Committed action is visible; no next-action prediction."
+    if enemy.stagger_until > state.tick or enemy.grounded or enemy.unconscious:
+        return "Control/posture limits choices; exact response remains unknown."
+    learned = []
+    if entry.state in {PatternState.HABIT, PatternState.TENDENCY, PatternState.TENTATIVE}:
+        learned = sorted(entry.counts, key=lambda item: (-item[1], item[0]))[:3]
+    if learned:
+        observations = ", ".join(f"{action.replace('_', '+').title()} {count}/{entry.total}"
+                                  for action, count in learned)
+        evidence = f"Observed in this situation ({observations}); may change."
+    else:
+        evidence = "No reliable same-situation pattern."
+
+    gap = max(abs(enemy.pos[0]-player.pos[0]), abs(enemy.pos[1]-player.pos[1]))
+    reach = weapon_reach(enemy, state.config)
+    angry = key.anger_band in {"ANGRY", "RAGE"}
+    vigorous = (enemy.stamina > state.config["actions"]["HEAVY"]["stamina"]
+                and enemy.fatigue < state.config["ai"]["vigor_low_fatigue"]
+                and not enemy.exhausted)
+    has_thrust = (not enemy.disarmed and enemy.equipment.weapon is not None
+                  and enemy.equipment.weapon.damage_type != "BLUNT")
+    if gap <= reach:
+        candidates = ["Light", *( ["Thrust"] if has_thrust else []),
+                      *( ["Heavy"] if vigorous else []), "Guard", "move out"]
+        if angry:
+            candidates = ["Light", *( ["Thrust"] if has_thrust else []),
+                          *( ["Heavy"] if vigorous else []), "Dash+Light", "Guard"]
+    elif gap <= state.config["ai"]["close_gap"]:
+        candidates = (["Dash+Light", "Dash in", "Run in", "Guard"] if angry else
+                      ["Dash+Light", "Dash/Run in", "Guard", "move out"])
+    else:
+        candidates = (["Run/Dash in", "Dash+Light", "Guard", "Wait"] if angry else
+                      ["Run in", "Walk in", "Guard", "Wait"])
+    if not vigorous:
+        candidates = [item for item in candidates if item not in {"Heavy", "Dash+Light"}]
+        candidates.append("recover or move")
+    candidates = list(dict.fromkeys(candidates))[:5]
+    cue = ("Anger favors pressure/closing" if angry else
+           "No strong anger cue; defense, attack and movement remain plausible")
+    if not vigorous:
+        cue += "; visible low vigor/windedness may favor cheaper choices"
+    return f"{cue}. Watch list (not exhaustive, not a prediction): {', '.join(candidates)}. {evidence}"
+
+
+def _response_coverage_note(kind):
+    if kind == ActionKind.THRUST:
+        return ("Against those possibilities: Thrust is a quick straight ray; it can beat a slower approach only "
+                "if the ray still contains him. A Dash+Light sidestep can leave it, and intersecting blade paths "
+                "within the clash window can stop both attacks; this is not a guaranteed hit.")
+    if kind in {ActionKind.LIGHT, ActionKind.DASH_LIGHT}:
+        return ("Against those possibilities: prefer the quick contact when its estimated strike is earlier or "
+                "can interrupt; Dash+Light also has an exposed approach and a locked final sector. A faster-looking "
+                "option is not a guaranteed hit.")
+    if kind == ActionKind.HEAVY:
+        return ("Against those possibilities: Heavy is a force choice, not a safe answer to pressure; use a visible "
+                "opening because a quicker hit, sidestep or intersecting blade can spoil it.")
+    if kind == ActionKind.GUARD:
+        return ("Against those possibilities: Guard can parry only with the required timing and Strength; its covered "
+                "line matters, and movement/Feint or an uncovered site can bypass it.")
+    if kind in {ActionKind.WALK, ActionKind.RUN, ActionKind.DASH, ActionKind.DISENGAGE,
+                ActionKind.CRAWL}:
+        return ("Against those possibilities: movement avoids a strike only when the first step resolves before contact "
+                "and leaves its locked sector/ray; same-tick strikes resolve before movement.")
+    return ("Against those possibilities: this does not guarantee a counter; compare the visible strike deadline, "
+            "range, line and action cost before committing.")
 
 
 def _opponent_read(state, enemy, *, visible, group_combat):
@@ -710,6 +784,8 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
            else PublicKey("FAR", "CALM", "LOW", "UNKNOWN", "UNSEEN"))
     entry = notebook.entry("", key, npc_id=enemy.id)
     enemy_tell = _enemy_tells(enemy, key, entry, cfg) if enemy_visible and not group_combat else ()
+    plausible_response_read = (_plausible_response_read(state, player, enemy, key, entry)
+                               if enemy_visible and not group_combat else "")
     action_count = dict(entry.counts).get(entry.top_action, 0) if entry.top_action else 0
     enemy_confidence = {
         PatternState.UNKNOWN: "Unknown — no named-NPC observations in similar conditions.",
@@ -1026,6 +1102,9 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         else:
             details = (f"{assessment.upper()} — {assessment_reason} Intent: {intent}. {read} "
                        f"Opponent timing: {enemy_opportunity} {details}")
+        if plausible_response_read:
+            details += (f" Visible-cue scenarios: {plausible_response_read} "
+                        + _response_coverage_note(choice.kind))
         return ActionOption(label, True, details, assessment, preview.stamina,
                             max(0, relevant_tick - state.tick))
     if player.grounded:
@@ -1226,6 +1305,9 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         ("FEAR", fear(player, cfg), cfg["defaults"]["pool_max"]),
         ("ANGER", player.anger, cfg["defaults"]["pool_max"]), ("MORALE", player.morale, cfg["defaults"]["pool_max"])))
     player_emotion_rows = (
+        "Modes " + " ".join(
+            f"{meter}:{player.behavior_modes[meter].lower()}"
+            for meter in ("pain", "fear", "anger")),
         f"Fear {fear(player, cfg):.0f}/100; anger {player.anger:.0f}/100; pain {player.pain:.0f}/100 "
         f"(effective {pain_burden(player, cfg):.0f}).",
         f"Anger tolerance {player.personality.anger_tolerance if player.personality else cfg['defaults']['anger_tolerance']:.0%}; "
@@ -1288,27 +1370,13 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
         if fighter.permanent_injuries.eyes_damaged:
             vision = ("bilateral impairment prevents acquiring precise eye targets"
                       if fighter.permanent_injuries.eyes_damaged == 2
-                      else "one eye impaired; precise eye targeting remains possible")
-            if fighter.permanent_injuries.eyes_damaged == 2:
-                vision += (f"; sight limited to {cfg['injury']['bilateral_vision_range']} tile(s)"
-                           if cfg["injury"]["bilateral_vision_range"] != 1
-                           else "; sight limited to adjacent tiles")
+                      else "one eye impaired; depth/long-range sight reduced")
+            vision_range = (cfg["injury"]["bilateral_vision_range"]
+                            if fighter.permanent_injuries.eyes_damaged == 2
+                            else cfg["injury"]["unilateral_vision_range"])
+            vision += (f"; sight limited to {vision_range} tile(s)"
+                       if vision_range != 1 else "; sight limited to adjacent tiles")
             rows.append(f"Permanent injury: {fighter.permanent_injuries.eyes_damaged} eye(s) impaired; {vision}; Accuracy unchanged.")
-        if ((fighter.permanent_injuries.eye_trauma > 0 or fighter.permanent_injuries.eyes_damaged
-             or any(wound.zone == Zone.EYE for wound in fighter.wounds))
-                and (fighter.id == player.id or len(state.fighters) <= 2)):
-            threshold = cfg["wound_net"]["eye_injury"]
-            trauma = fighter.permanent_injuries.eye_trauma
-            next_eye = fighter.permanent_injuries.eyes_damaged + 1
-            if next_eye > 2:
-                progress = "both eyes impaired; no further eye injury milestone"
-            elif trauma >= threshold:
-                progress = (f"{threshold:g}-point threshold already banked; next eligible clean eye wound "
-                            f"permanently impairs eye {next_eye}/2")
-            else:
-                progress = (f"{trauma:g}/{threshold:g} wound-force points; at {threshold:g}, "
-                            f"permanently impairs eye {next_eye}/2")
-            rows.append(f"Cumulative eye trauma: {trauma:g} points; {progress}. Separate from each wound's bleed.")
         if fighter.decapitated:
             rows.append("Fatal injury: decapitation.")
         rows.append(weapon_status(fighter))
@@ -1316,11 +1384,56 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
     player_injury_rows, enemy_injury_rows = injury_rows(player), injury_rows(enemy)
     wounds = tuple((w.zone.value.lower(), w.bleed_per_turn * (1-cfg["blood"]["bandage_reduction"] if w.bandaged else 1)) for w in player.wounds)
     eff = effective_stats(player, cfg, state.tick)
+    tolerance = player.personality.pain_tolerance if player.personality else cfg["defaults"]["pain_tolerance"]
+    anger_tolerance = player.personality.anger_tolerance if player.personality else cfg["defaults"]["anger_tolerance"]
+    susceptibility = (player.personality.fear_gain_susceptibility if player.personality
+                      else cfg["ronin"]["fear_gain_susceptibility"])
+    condition_rows = [
+        "MENTAL METERS (current / 100)",
+        f"Pain raw {player.pain:.1f}; effective pain burden {pain_burden(player, cfg):.1f}; mode {player.behavior_modes['pain']}; enter 50/100, exit 40/90.",
+        f"Fear {fear(player, cfg):.1f}; mode {player.behavior_modes['fear']}; susceptibility {susceptibility:.2f}x gains; enter 50/100, exit 40/90.",
+        f"Anger {player.anger:.1f}; mode {player.behavior_modes['anger']}; tolerance {anger_tolerance:.0%}; enter 50/100, exit 40/90.",
+        f"Morale {player.morale:.1f}; nervousness {player.nervousness:.1f}; yield gate morale ≤25 only at critical pain/fear with no viable exit.",
+        f"Pain tolerance {tolerance:.0%}; composure {player.personality.composure if player.personality else 0.5:.2f}; stress composure {player.personality.stress_composure if player.personality else 0.5:.2f}.",
+        "PHYSICAL METERS AND EFFECTIVE CAPABILITIES",
+        f"Blood {player.blood:.1f}/100; stamina {player.stamina:.1f}/{max_stamina(player, cfg):.1f}; fatigue {player.fatigue:.1f}/100; stability {player.stability:.1f}/100.",
+    ]
+    for label, raw, current in (("Strength", player.strength, eff.strength),
+                                ("Speed", player.speed, eff.speed),
+                                ("Accuracy", player.accuracy, eff.accuracy)):
+        condition_rows.append(f"{label} {raw:.1f} base → {current:.1f} effective ({current-raw:+.1f}).")
+    condition_rows.append("BODY SITES (wound force is post-armor; unknown legacy values shown as ?)")
+    for zone_name, sites in cfg["anatomy_sites"].items():
+        condition_rows.append(zone_name + " —")
+        for site in sites:
+            site_wounds = [wound for wound in player.wounds
+                           if wound.site.upper() == site.upper()
+                           or wound.site.upper() == zone_name and site == zone_name]
+            if not site_wounds:
+                condition_rows.append(f"{site.replace('_', ' ').title()}: unaffected; wounds 0; force 0; pain +0; bleed 0/turn.")
+                continue
+            wound_facts = []
+            for wound in site_wounds:
+                bleed = wound.bleed_per_turn * (1-cfg["blood"]["bandage_reduction"] if wound.bandaged else 1)
+                force = "?" if wound.net_force is None else f"{wound.net_force:.1f}"
+                pain_added = "?" if wound.pain_added is None else f"{wound.pain_added:.1f}"
+                function = cfg["wounds"][wound.zone.value].get(wound.severity.value, {})
+                modifier = ", ".join(f"{name} ×{function[key]:g}"
+                                      for key, name in (("strength_mult", "STR"),
+                                                        ("speed_mult", "SPD"),
+                                                        ("accuracy_mult", "ACC"))
+                                      if key in function and function[key] != 1)
+                wound_facts.append(f"{wound.severity.value} force {force}; pain +{pain_added}; bleed {bleed:.2f}/turn"
+                                   + (f"; {modifier}" if modifier else ""))
+            condition_rows.append(f"{site.replace('_', ' ').title()}: AFFECTED ({len(site_wounds)} wound(s)); "
+                                  + " | ".join(wound_facts))
+    condition_rows.append(f"Vision: {player.permanent_injuries.eyes_damaged}/2 eyes impaired; "
+                          f"range cap {cfg['injury']['bilateral_vision_range'] if player.permanent_injuries.eyes_damaged >= 2 else cfg['injury']['unilateral_vision_range'] if player.permanent_injuries.eyes_damaged == 1 else cfg['group']['vision_range']} tiles.")
     fresh = copy(player)
     fresh.fatigue = fresh.pain = fresh.anger = fresh.nervousness = 0
-    confidence = (fresh.personality.traits["confidence"] if fresh.personality
-                  else cfg["defaults"]["confidence"])
-    fresh.fear_meter = cfg["defaults"]["pool_max"] * (1 - confidence)
+    starting_fear = (fresh.personality.starting_fear if fresh.personality
+                     else cfg["defaults"]["starting_fear"])
+    fresh.fear_meter = starting_fear
     fresh.blood, fresh.morale = cfg["blood"]["start"], cfg["morale"]["start"]
     fresh.statuses, fresh.exhausted = [], False
     fresh.riposte = False
@@ -1556,9 +1669,12 @@ def build_render_model(state, notebook, selected=None, advice=None, *, timeline=
                               group_combat=group_combat,
                               enemy_commitment=enemy_commitment,
                               enemy_opportunity=enemy_opportunity,
-                               enemy_response_summary=enemy_response_summary,
-                               enemy_condition=enemy_condition,
-                               zone_attack_kind=zone_kind.value if zone_kind else "")
+                                enemy_response_summary=enemy_response_summary,
+                                enemy_condition=enemy_condition,
+                            player_behavior_modes=tuple((meter, player.behavior_modes[meter])
+                                                            for meter in ("pain", "fear", "anger")),
+                                player_condition_rows=tuple(condition_rows),
+                                zone_attack_kind=zone_kind.value if zone_kind else "")
 
 
 def bar(fraction, segments):

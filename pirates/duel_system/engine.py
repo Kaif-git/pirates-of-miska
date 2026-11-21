@@ -430,7 +430,12 @@ def apply_passive(state):
             hold_cost = (cfg["guard"]["defend_hold_cost_per_tick"]
                          if action.contextual_defense else cfg["guard"]["hold_cost_per_tick"])
             pay_stamina(state, fighter, stamina_cost(fighter, hold_cost, cfg))
+        from .mental import refresh_behavior_modes
+        from .stats import pain_burden
+        pain_before = pain_burden(fighter, cfg)
         fighter.pain = max(0, fighter.pain - cfg["pain"]["decay_per_turn"] / turn)
+        refresh_behavior_modes(state, fighter, "PAIN_DECAY",
+                               before_values={"pain": pain_before})
         composure = fighter.personality.composure if fighter.personality else 1
         change_anger(state, fighter, -cfg["anger"]["decay_per_turn"] * composure / turn, "ANGER_DECAY")
         exertion = ("walk" if kind in {ActionKind.WALK, ActionKind.CRAWL} else "dash" if kind in {

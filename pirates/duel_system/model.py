@@ -93,6 +93,7 @@ class EventType(str, Enum):
     STATUS = "STATUS"
     ANGER_CRASH = "ANGER_CRASH"
     FEAR_BREAK = "FEAR_BREAK"
+    BEHAVIOR_MODE = "BEHAVIOR_MODE"
     FIGHT_END = "FIGHT_END"
     DECISION = "DECISION"
     TERMINAL_OUTCOME = "TERMINAL_OUTCOME"
@@ -113,6 +114,8 @@ class Wound:
     site: str | None = None
     side: str | None = None
     vital_outcome: str | None = None
+    net_force: float | None = None
+    pain_added: float | None = None
 
     def __post_init__(self):
         self.zone, self.severity = Zone(self.zone), Severity(self.severity)
@@ -120,6 +123,14 @@ class Wound:
             raise ValueError("Bleeding must be finite and nonnegative")
         if not math.isfinite(self.initial_blood_loss) or self.initial_blood_loss < 0:
             raise ValueError("Initial blood loss must be finite and nonnegative")
+        if (self.net_force is not None and
+                (isinstance(self.net_force, bool) or not isinstance(self.net_force, (int, float))
+                 or not math.isfinite(self.net_force) or self.net_force < 0)):
+            raise ValueError("Wound force must be finite and nonnegative")
+        if (self.pain_added is not None and
+                (isinstance(self.pain_added, bool) or not isinstance(self.pain_added, (int, float))
+                 or not math.isfinite(self.pain_added) or self.pain_added < 0)):
+            raise ValueError("Wound pain must be finite and nonnegative")
         self.damage_type = str(self.damage_type).upper()
         if self.damage_type not in {"CUTTING", "PIERCING", "BLUNT"}:
             raise ValueError("Unknown wound damage type")
@@ -294,31 +305,22 @@ class PreFightState:
 @dataclass
 class Personality:
     archetype: str
-    weights: dict[str, float]
-    base: dict[str, float]
-    reaction_delay: int
-    zone_pref: list[str]
+    fear_gain_susceptibility: float = 1.0
+    starting_fear: float = 0
+    morale_bias: float = 0
     composure: float = 1.0
-    courage: float = 0
-    traits: dict[str, float] = field(default_factory=lambda: {
-        "aggression": 0.8, "discipline": 0.4, "confidence": 0.7,
-        "patience": 0.25, "adaptability": 0.35,
-    })
-    score_bias: dict[str, float] = field(default_factory=dict)
+    stress_composure: float = 0.5
     anger_tolerance: float = 0.5
     pain_tolerance: float = 0.5
-    fear_gain_susceptibility: float = 1.0
 
     def __post_init__(self):
-        dimensions = {"aggression", "discipline", "confidence", "patience", "adaptability"}
-        if set(self.traits) != dimensions or any(
-                isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or not 0 <= value <= 1
-                for value in self.traits.values()):
-            raise ValueError("Personality traits must contain five finite values in [0, 1]")
-        if (isinstance(self.composure, bool) or not math.isfinite(self.composure)
-                or not 0 <= self.composure <= 1):
-            raise ValueError("Personality composure must be in [0, 1]")
+        numeric = (self.starting_fear, self.morale_bias, self.composure, self.stress_composure,
+                   self.anger_tolerance, self.pain_tolerance, self.fear_gain_susceptibility)
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) for value in numeric):
+            raise ValueError("Numeric response profile values must be finite")
+        if self.starting_fear < 0 or not 0 <= self.composure <= 1 or not 0 <= self.stress_composure <= 1:
+            raise ValueError("Starting fear or composure is outside its supported range")
         if any(isinstance(value, bool) or not isinstance(value, (int, float))
                or not math.isfinite(value) or not 0 <= value <= 1
                for value in (self.anger_tolerance, self.pain_tolerance)):
@@ -328,12 +330,6 @@ class Personality:
                 or not math.isfinite(self.fear_gain_susceptibility)
                 or not 0.5 <= self.fear_gain_susceptibility <= 1.5):
             raise ValueError("Fear-gain susceptibility must be finite and in [0.5, 1.5]")
-        if isinstance(self.reaction_delay, bool) or not isinstance(self.reaction_delay, int) or self.reaction_delay < 0:
-            raise ValueError("Personality reaction delay must be a nonnegative integer")
-        if any(not isinstance(key, str) or isinstance(value, bool)
-               or not isinstance(value, (int, float)) or not math.isfinite(value)
-               for key, value in self.score_bias.items()):
-            raise ValueError("Personality score biases must be finite numbers")
 
 
 @dataclass(frozen=True)
@@ -449,12 +445,11 @@ class Fighter:
     last_hit_tick: int | None = None
     hits_without_return: int = 0
     fear_decisions: int = 0
+    behavior_modes: dict[str, str] = field(default_factory=lambda: {
+        "pain": "NONE", "fear": "NONE", "anger": "NONE"})
     anger_history: list[tuple[int, float]] = field(default_factory=list)
     blood_thresholds: list[float] = field(default_factory=list)
     action_history: list[str] = field(default_factory=list)
-    ai_experience: list[dict] = field(default_factory=list)
-    ai_stagnant_decisions: int = 0
-    ai_current_category: str | None = None
     last_recoil_tick: int | None = None
     stability: float | None = None
     grounded: bool = False
@@ -519,9 +514,9 @@ class Fighter:
             if getattr(self, key) is None:
                 setattr(self, key, default[key])
         if self.fear_meter is None:
-            confidence = (self.personality.traits["confidence"] if self.personality
-                          else default["confidence"])
-            self.fear_meter = default["pool_max"] * (1 - confidence)
+            starting_fear = (self.personality.starting_fear if self.personality
+                             else default["starting_fear"])
+            self.fear_meter = starting_fear
         if self.stamina is None:
             self.stamina = cap
         if self.blood is None:
@@ -552,10 +547,9 @@ class Fighter:
                 self.blood = self.prefight.blood
             self.wounds = deepcopy(self.prefight.injuries)
             self.permanent_injuries = deepcopy(self.prefight.permanent_injuries)
-            confidence = (self.personality.traits["confidence"] if self.personality
-                          else default["confidence"])
-            self.fear_meter = min(default["pool_max"],
-                                  default["pool_max"] * (1 - confidence)
+            starting_fear = (self.personality.starting_fear if self.personality
+                             else default["starting_fear"])
+            self.fear_meter = min(default["pool_max"], starting_fear
                                   + self.prefight.nervousness * default["pool_max"])
         # Kept as a compatibility field for old state payloads only; current
         # mental pressure is represented by fear_meter.
@@ -571,9 +565,6 @@ class Fighter:
                 raise ValueError(f"Invalid {key} pool")
         if isinstance(self.xp, bool) or not isinstance(self.xp, (int, float)) or not math.isfinite(self.xp) or self.xp < 0:
             raise ValueError("XP must be finite and nonnegative")
-        if (isinstance(self.ai_stagnant_decisions, bool) or not isinstance(self.ai_stagnant_decisions, int)
-                or self.ai_stagnant_decisions < 0):
-            raise ValueError("Invalid AI decision streak")
         if self.last_recoil_tick is not None and (
                 isinstance(self.last_recoil_tick, bool) or not isinstance(self.last_recoil_tick, int)
                 or self.last_recoil_tick < 0):
@@ -613,12 +604,14 @@ class Fighter:
             value = getattr(self, key)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
                 raise ValueError(f"Invalid {key}")
-        if len(self.ai_experience) > 12 or any(
-                not isinstance(row, dict) or set(row) != {"category", "outcome"}
-                or not isinstance(row["category"], str)
-                or row["outcome"] not in {"COUNTERED", "SUCCESS"}
-                for row in self.ai_experience):
-            raise ValueError("Invalid bounded AI experience history")
+        allowed_modes = {"pain": {"NONE", "PROTECTIVE", "BREAK"},
+                         "fear": {"NONE", "CAUTIOUS", "BREAK"},
+                         "anger": {"NONE", "PRESS", "HOT"}}
+        if (not isinstance(self.behavior_modes, dict)
+                or set(self.behavior_modes) != set(allowed_modes)
+                or any(not isinstance(value, str) or value not in allowed_modes[key]
+                       for key, value in self.behavior_modes.items())):
+            raise ValueError("Invalid persisted behavior modes")
 
     def can_act(self, tick=0):
         return (self.blood > 0 and not (self.unconscious or self.yielded or self.fled or self.decapitated)
@@ -649,6 +642,9 @@ class Event:
 
 def _fighter_from_data(data):
     values = deepcopy(data)
+    values.pop("ai_experience", None)
+    values.pop("ai_stagnant_decisions", None)
+    values.pop("ai_current_category", None)
     if "fear_meter" not in values:
         # Legacy saves represented fear as a morale/anger derivation and stored
         # nervousness separately. Fold both into the new persisted fear pool.
@@ -673,10 +669,21 @@ def _fighter_from_data(data):
     values["wounds"] = [Wound(**item) for item in values["wounds"]]
     values["statuses"] = [Status(**item) for item in values["statuses"]]
     if values["personality"]:
-        values["personality"].setdefault(
-            "fear_gain_susceptibility",
-            _legacy_fear_susceptibility(values["personality"]))
-        values["personality"] = Personality(**values["personality"])
+        profile = values["personality"]
+        traits = profile.pop("traits", {})
+        profile.pop("weights", None)
+        profile.pop("base", None)
+        profile.pop("reaction_delay", None)
+        profile.pop("zone_pref", None)
+        profile.pop("score_bias", None)
+        profile.pop("ai_experience", None)
+        profile.pop("ai_stagnant_decisions", None)
+        profile.pop("ai_current_category", None)
+        profile.setdefault("fear_gain_susceptibility", _legacy_fear_susceptibility({"traits": traits}))
+        profile.setdefault("starting_fear", 100 * (1 - traits.get("confidence", 0.5)))
+        profile.setdefault("morale_bias", profile.pop("courage", 0))
+        profile.setdefault("stress_composure", traits.get("discipline", 0.5))
+        values["personality"] = Personality(**profile)
     for row in values.get("contact_memory", {}).values():
         if row.get("position") is not None:
             row["position"] = tuple(row["position"])
@@ -834,6 +841,8 @@ class CombatState:
         vision_range = self.config["group"]["vision_range"]
         if observer.permanent_injuries.eyes_damaged >= 2:
             vision_range = min(vision_range, self.config["injury"]["bilateral_vision_range"])
+        elif observer.permanent_injuries.eyes_damaged == 1:
+            vision_range = min(vision_range, self.config["injury"]["unilateral_vision_range"])
         if distance > vision_range:
             return False
         for pos in self.line_cells(observer.pos, target.pos):
@@ -933,18 +942,23 @@ class CombatState:
                                     EventType.INCAPACITATED, EventType.SEVER, EventType.EYE_INJURY,
                                     EventType.DECAPITATION, EventType.TERMINAL_OUTCOME}
             actor_only_events = {EventType.ACTION_START, EventType.ACTION_END, EventType.MOVE,
-                                 EventType.DECISION, EventType.STATUS, EventType.POOL_CHANGE}
+                                  EventType.DECISION, EventType.STATUS, EventType.POOL_CHANGE,
+                                  EventType.BEHAVIOR_MODE}
+            actor_private_events = {EventType.BEHAVIOR_MODE}
             visible_sources = ([actors[actor]] if event_type in actor_only_events and actor in actors
                                else sources)
-            witnesses = tuple(fighter.id for fighter in self.fighters
-                              if fighter.id == actor
-                              or event_type in direct_target_events and fighter.id == target
-                              or visible_sources and all(source.id == fighter.id or self.can_see(fighter, source)
-                                                         for source in visible_sources))
+            if event_type in actor_private_events:
+                witnesses = (actor,) if actor in actors else ()
+            else:
+                witnesses = tuple(fighter.id for fighter in self.fighters
+                                  if fighter.id == actor
+                                  or event_type in direct_target_events and fighter.id == target
+                                  or visible_sources and all(source.id == fighter.id or self.can_see(fighter, source)
+                                                             for source in visible_sources))
             audible = {EventType.ACTION_START, EventType.MOVE, EventType.WHIFF, EventType.HIT, EventType.CLASH, EventType.WOUND,
                        EventType.BLOCK, EventType.PARRY, EventType.FALL, EventType.SHOVE,
                        EventType.INCAPACITATED, EventType.SEVER, EventType.EYE_INJURY,
-                       EventType.DECAPITATION, EventType.TERMINAL_OUTCOME, EventType.FEAR_BREAK,
+                        EventType.DECAPITATION, EventType.TERMINAL_OUTCOME, EventType.FEAR_BREAK,
                        EventType.FIGHT_END}
             if (event_type in audible or event_type == EventType.STATUS
                     and "MOVEMENT_BLOCKED" in cause_tags) and actor in actors:
@@ -986,7 +1000,7 @@ class CombatState:
     def from_data(cls, data):
         values = deepcopy(data)
         version = values.pop("schema_version")
-        if version in set(range(1, 27)):
+        if version in set(range(1, 30)):
             values["config"] = upgrade_config(values["config"])
             prior_bleed = {
                 "TORSO": {"CUT": 3, "DEEP": 6},

@@ -4,12 +4,13 @@ from copy import deepcopy
 import pytest
 
 from pirates.duel_system.ai import (
-    adaptation_penalty, choose_action, decision_control, record_ai_decision, score_actions,
+    choose_action, decision_control, score_actions,
 )
 from pirates.duel_system.config import load_config, upgrade_config, validate_config
 from pirates.duel_system.engine import Choice, commit_action, legality
 from pirates.duel_system.model import ActionKind, EventType, Personality, Zone
 from pirates.duel_system.session import DuelSession
+from pirates.duel_system.stats import legacy_fear_pressure
 from test_duel_system_scheduler import arena
 
 
@@ -17,13 +18,32 @@ def neutral_ai_state(seed=1):
     state = arena(rng_seed=seed)
     fighter = state.fighters[1]
     fighter.personality = Personality(**deepcopy(state.config["ronin"]))
-    fighter.personality.base = dict.fromkeys(fighter.personality.base, 0)
-    fighter.personality.weights = dict.fromkeys(fighter.personality.weights, 0)
-    fighter.personality.traits = dict.fromkeys(fighter.personality.traits, 0.5)
     return state, fighter
 
 
-def test_personality_traits_are_bounded_and_profiles_are_authored_and_selectable():
+def legacy_policy_config(version):
+    """Build a pre-schema-29 config carrying equivalent legacy profile inputs."""
+    config = deepcopy(load_config())
+    config["schema_version"] = version
+    config["defaults"]["confidence"] = 1 - config["defaults"].pop("starting_fear") / 100
+    for profile in [config["ronin"], *config["ai_profiles"].values()]:
+        confidence = 1 - profile.pop("starting_fear") / 100
+        stress = profile.pop("stress_composure")
+        morale = profile.pop("morale_bias")
+        profile["traits"] = {"aggression": 0.5, "discipline": stress,
+                             "confidence": confidence, "patience": 0.5,
+                             "adaptability": 0.5}
+        profile["courage"] = morale
+        profile.update(weights={}, base={}, reaction_delay=4, zone_pref=["TORSO"], score_bias={})
+    config["personality"].update({
+        "variation": {"margin": 0, "amplitude": 0},
+        "adaptation": {"history": 12, "minimum_counters": 3,
+                       "counter_penalty": 1, "success_decay": 1, "max_penalty": 10},
+    })
+    return config
+
+
+def test_numeric_response_profiles_are_bounded_and_identity_is_selectable():
     config = DuelSession.new(guide_mode="off").state.config
     assert set(config["ai_profiles"]) == {
         "brute", "aggressor", "veteran", "counterfighter", "recruit", "bully",
@@ -32,13 +52,16 @@ def test_personality_traits_are_bounded_and_profiles_are_authored_and_selectable
     assert DuelSession.new(seed=2, guide_mode="off").enemy.personality.archetype != "brute"
     assert DuelSession.new(archetype="recruit", guide_mode="off").enemy.personality.archetype == "recruit"
     personality = DuelSession.new(archetype="aggressor", guide_mode="off").enemy.personality
-    assert all(0 <= value <= 1 for value in personality.traits.values())
-    invalid = dict(personality.traits, aggression=1.01)
-    with pytest.raises(ValueError, match="trait"):
-        Personality(**{**personality.__dict__, "traits": invalid})
+    assert 0 <= personality.starting_fear <= 100
+    with pytest.raises(ValueError, match="susceptibility"):
+        Personality(archetype="bad", fear_gain_susceptibility=1.6)
     invalid_config = load_config()
-    invalid_config["ai_profiles"]["brute"]["traits"]["discipline"] = 1.1
-    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+    invalid_config["ai_profiles"]["brute"]["stress_composure"] = 1.1
+    with pytest.raises(ValueError, match="bounded response"):
+        validate_config(invalid_config)
+    invalid_config = load_config()
+    invalid_config["defaults"]["starting_fear"] = True
+    with pytest.raises(ValueError, match="starting_fear: expected finite number"):
         validate_config(invalid_config)
     invalid_susceptibility = load_config()
     invalid_susceptibility["ai_profiles"]["brute"]["fear_gain_susceptibility"] = 1.51
@@ -47,8 +70,8 @@ def test_personality_traits_are_bounded_and_profiles_are_authored_and_selectable
 
 
 def test_schema25_config_and_fighter_migration_maps_confidence_to_fear_susceptibility():
-    old_config = load_config()
-    old_config["schema_version"] = 25
+    old_config = legacy_policy_config(25)
+    old_config["defaults"]["confidence"] = 0.3
     old_config["ai_profiles"]["recruit"]["traits"]["confidence"] = 0.1
     old_config["ai_profiles"]["recruit"].pop("fear_gain_susceptibility")
     old_config["ronin"].pop("fear_gain_susceptibility")
@@ -57,10 +80,12 @@ def test_schema25_config_and_fighter_migration_maps_confidence_to_fear_susceptib
     old_config["ai_profiles"]["brute"]["score_bias"]["LIGHT"] = 77
 
     migrated = upgrade_config(old_config)
-    assert migrated["schema_version"] == 27
+    assert migrated["schema_version"] == 30
     assert migrated["ai_profiles"]["recruit"]["fear_gain_susceptibility"] == 1.2
     assert migrated["ai_profiles"]["brute"]["fear_gain_susceptibility"] == 0.9
-    assert migrated["ai_profiles"]["brute"]["score_bias"]["LIGHT"] == 77
+    assert migrated["ai_profiles"]["recruit"]["starting_fear"] == 90
+    assert migrated["defaults"]["starting_fear"] == 70
+    assert "score_bias" not in migrated["ai_profiles"]["brute"]
     assert migrated["ronin"]["fear_gain_susceptibility"] == 0.9
 
     session = DuelSession.new(archetype="recruit", guide_mode="off")
@@ -71,98 +96,132 @@ def test_schema25_config_and_fighter_migration_maps_confidence_to_fear_susceptib
     data["state"]["fighters"] = [row for row in data["state"]["fighters"]]
     for fighter in data["state"]["fighters"]:
         if fighter["personality"]:
-            fighter["personality"].pop("fear_gain_susceptibility", None)
+            fighter["personality"] = {
+                "archetype": "recruit",
+                **deepcopy(old_config["ai_profiles"]["recruit"]),
+            }
     restored = DuelSession.from_data(data)
-    assert restored.state.config["schema_version"] == 27
-    assert restored.enemy.personality.fear_gain_susceptibility == 1.15
+    assert restored.state.config["schema_version"] == 30
+    assert restored.enemy.personality.fear_gain_susceptibility == 1.2
+
+    old_v26 = legacy_policy_config(26)
+    old_v26.pop("behavior_thresholds")
+    migrated_v27 = upgrade_config(old_v26)
+    assert migrated_v27["schema_version"] == 30
+    assert migrated_v27["behavior_thresholds"] == {
+        "mode_enter": 50, "mode_exit": 40, "critical_enter": 100,
+        "critical_exit": 90, "yield_morale_max": 25,
+    }
+    old_v27 = legacy_policy_config(27)
+    old_v27.pop("universal_ai")
+    old_v27["ai_profiles"]["veteran"]["traits"]["confidence"] = 0.4
+    migrated_v28 = upgrade_config(old_v27)
+    assert migrated_v28["schema_version"] == 30
+    assert migrated_v28["universal_ai"]["base"]["LIGHT"] == 20
+    assert migrated_v28["ai_profiles"]["veteran"]["starting_fear"] == 60
 
 
 def test_schema_23_adds_dash_slash_without_rewriting_dash_light():
-    prior = load_config()
-    prior["schema_version"] = 23
+    prior = legacy_policy_config(23)
     dash_light = deepcopy(prior["actions"]["DASH_LIGHT"])
     prior["actions"].pop("DASH_SLASH")
 
     migrated = upgrade_config(prior)
 
-    assert migrated["schema_version"] == 27
+    assert migrated["schema_version"] == 30
     assert migrated["actions"]["DASH_LIGHT"] == dash_light
     assert migrated["actions"]["DASH_SLASH"]["max_tiles"] == 1
 
 
-def test_traits_condition_scores_and_derived_composure_tracks_fear_pain_and_nerves():
+def test_numeric_stress_response_does_not_select_actions_but_composure_remains_bounded():
     state, fighter = neutral_ai_state()
-    fighter.personality.traits = {"aggression": 1, "discipline": 0.5, "confidence": 0.5,
-                                  "patience": 0.5, "adaptability": 0.5}
+    fighter.personality.stress_composure = 0.5
     aggressive = {row.category: row for row in score_actions(state, fighter.id)}
-    state.config["personality"]["trait_score"] = 0
-    no_trait_effect = {row.category: row for row in score_actions(state, fighter.id)}
-    assert aggressive["LIGHT"].score > no_trait_effect["LIGHT"].score
-    assert any(name.startswith("P2_") for name, _ in aggressive["LIGHT"].reasons)
+    fighter.personality.stress_composure = 0.1
+    low_composure = {row.category: row for row in score_actions(state, fighter.id)}
+    assert {key: row.score for key, row in aggressive.items()} == {key: row.score for key, row in low_composure.items()}
+    assert not any(name.startswith("P2_") for row in aggressive.values() for name, _ in row.reasons)
 
     calm = decision_control(state, fighter.id)
     fighter.morale, fighter.pain, fighter.nervousness = 0, 80, 1
     pressured = decision_control(state, fighter.id)
     assert 0 <= pressured < calm <= 1
+    weights = state.config["personality"]["pressure_weights"]
+    expected_pressure = (weights["fear"] * legacy_fear_pressure(fighter, state.config) / 100
+                         + weights["pain"] * fighter.pain / 100
+                         + weights["nervousness"] * fighter.nervousness)
+    assert pressured == pytest.approx(
+        fighter.personality.composure * (1-expected_pressure*(1-fighter.personality.stress_composure)))
 
 
-def test_authored_profiles_score_differently_at_the_same_emotion_and_geometry():
+def test_authored_profile_identity_does_not_change_universal_action_scores():
     aggressor = DuelSession.new(archetype="aggressor", guide_mode="off")
     recruit = DuelSession.new(archetype="recruit", guide_mode="off")
     for session in (aggressor, recruit):
         session.player.pos, session.enemy.pos = (4, 3), (5, 3)
         session.enemy.morale = 70
+        session.enemy.fear_meter = 0
     aggressive_scores = {row.category: row.score for row in score_actions(aggressor.state, "ronin")}
     recruit_scores = {row.category: row.score for row in score_actions(recruit.state, "ronin")}
     assert aggressor.enemy.anger == recruit.enemy.anger
     assert aggressor.enemy.morale == recruit.enemy.morale
-    assert aggressive_scores["LIGHT"] > recruit_scores["LIGHT"]
-    assert recruit_scores["GUARD"] > aggressive_scores["GUARD"]
+    assert aggressive_scores == recruit_scores
 
 
-def test_panic_score_increases_when_the_same_personality_is_under_emotional_pressure():
+def test_seeded_action_ties_do_not_depend_on_npc_identity_label():
+    state, fighter = neutral_ai_state(seed=725)
+    state.fighters[0].pos, fighter.pos = (4, 3), (5, 3)
+    before = choose_action(state, fighter.id)
+    original_id = fighter.id
+    fighter.id = "renamed-npc"
+    after = choose_action(state, fighter.id)
+    assert before.choice == after.choice
+    fighter.id = original_id
+
+
+def test_shared_modes_adjust_preferences_without_personality_specific_policy():
     state, fighter = neutral_ai_state()
-    fighter.personality.composure = 0.5
-    calm = {row.category: dict(row.reasons) for row in score_actions(state, fighter.id)}
-    fighter.morale, fighter.pain, fighter.nervousness = 0, 70, 0.8
-    pressured = {row.category: dict(row.reasons) for row in score_actions(state, fighter.id)}
-    assert "P2_PANIC" not in calm["DASH_OUT"]
-    assert pressured["DASH_OUT"]["P2_PANIC"] > 0
+    calm = {row.category: row for row in score_actions(state, fighter.id)}
+    fighter.behavior_modes["fear"] = "CAUTIOUS"
+    cautious = {row.category: row for row in score_actions(state, fighter.id)}
+    assert dict(cautious["DASH_OUT"].reasons)["MODE_CAUTIOUS_SPACE"] > 0
+    assert cautious["DASH_OUT"].score > calm["DASH_OUT"].score
+    fighter.behavior_modes["anger"] = "HOT"
+    hot = {row.category: row for row in score_actions(state, fighter.id)}
+    assert dict(hot["LIGHT"].reasons)["MODE_ANGER_PRESSURE"] == state.config[
+        "universal_ai"]["mode_bonus"]["hot_attack"]
 
 
-def test_seeded_variation_is_repeatable_plausible_and_does_not_consume_combat_rng():
-    chosen = set()
+def test_universal_seeded_tiebreak_is_repeatable_bounded_and_rng_free():
+    variations = set()
     for seed in range(24):
         state, fighter = neutral_ai_state(seed)
         before = state.to_data()
+        rows = score_actions(state, fighter.id)
         first = choose_action(state, fighter.id)
         assert choose_action(state, fighter.id) == first
         assert state.to_data() == before
-        chosen.add(first.category)
-    assert len(chosen) >= 2
+        values = [dict(row.reasons)["UNIVERSAL_SEEDED_TIE"] for row in rows
+                  if "UNIVERSAL_SEEDED_TIE" in dict(row.reasons)]
+        assert values
+        assert all(abs(value) <= state.config["universal_ai"]["tie_break"]["amplitude"]
+                   for value in values)
+        variations.update(values)
+    assert len(variations) > 1
 
 
-def test_paired_opening_distributions_are_legal_repeatable_and_profile_distinct():
-    calm = {name: [] for name in ("brute", "aggressor", "veteran", "counterfighter", "recruit", "bully")}
-    pressured = {name: [] for name in calm}
+def test_matched_seed_openings_are_profile_invariant_and_legal():
+    names = ("brute", "aggressor", "veteran", "counterfighter", "recruit", "bully")
     for seed in range(1, 41):
-        for name in calm:
-            for target in (calm, pressured):
-                session = DuelSession.new(seed=seed, archetype=name, guide_mode="off")
-                enemy = session.enemy
-                enemy.anger, enemy.morale, enemy.pain, enemy.nervousness, enemy.fatigue = (
-                    0, 70, 0, 0, 0) if target is calm else (0, 10, 60, 0.6, 0)
-                decision = choose_action(session.state, enemy.id)
-                assert not legality(session.state, enemy.id, decision.choice)
-                target[name].append(decision.category)
-
-    assert all(set(pressured[name]) == {"DASH_OUT"} for name in pressured)
-    assert calm["veteran"].count("WALK_IN") >= 36
-    assert calm["counterfighter"].count("GUARD") >= 30
-    assert len(set(calm["recruit"])) >= 2
-    assert calm["brute"].count("WALK_IN") >= 36
-    assert calm["aggressor"].count("DASH_LIGHT") >= 36
-    assert calm["bully"].count("WALK_IN") >= 36
+        decisions = []
+        for name in names:
+            session = DuelSession.new(seed=seed, archetype=name, guide_mode="off")
+            session.enemy.fear_meter = 0
+            decision = choose_action(session.state, session.enemy.id)
+            assert not legality(session.state, session.enemy.id, decision.choice)
+            decisions.append(decision)
+        assert len({decision.category for decision in decisions}) == 1
+        assert all(decision == decisions[0] for decision in decisions)
 
 
 def test_retry_keeps_the_selected_npc_profile():
@@ -172,21 +231,18 @@ def test_retry_keeps_the_selected_npc_profile():
 
 
 def test_schema19_config_migrates_shove_timing_tuning_and_measured_profile_biases():
-    old = load_config()
-    old["schema_version"] = 19
+    old = legacy_policy_config(19)
     old["tactics"].pop("shove_committed_heavy_bonus")
     old["ai_profiles"]["brute"]["score_bias"]["DASH_LIGHT"] = 0
     old["ai_profiles"]["bully"]["score_bias"]["DASH_LIGHT"] = 2
     migrated = upgrade_config(old)
-    assert migrated["schema_version"] == 27
+    assert migrated["schema_version"] == 30
     assert migrated["tactics"]["shove_committed_heavy_bonus"] == 5
-    assert migrated["ai_profiles"]["brute"]["score_bias"]["DASH_LIGHT"] == -30
-    assert migrated["ai_profiles"]["bully"]["score_bias"]["DASH_LIGHT"] == -30
+    assert "score_bias" not in migrated["ai_profiles"]["brute"]
 
 
 def test_schema21_config_migration_adds_tolerance_defaults_without_losing_traits():
-    old = load_config()
-    old["schema_version"] = 21
+    old = legacy_policy_config(21)
     old["stats"]["fear_accuracy"] = 0
     old["anger"]["acc_penalty"] = 0
     for key in ("confidence", "anger_tolerance", "pain_tolerance"):
@@ -199,78 +255,42 @@ def test_schema21_config_migration_adds_tolerance_defaults_without_losing_traits
 
     migrated = upgrade_config(old)
 
-    assert migrated["schema_version"] == 27
-    assert migrated["ai_profiles"]["veteran"]["traits"] == load_config()["ai_profiles"]["veteran"]["traits"]
+    assert migrated["schema_version"] == 30
+    assert migrated["ai_profiles"]["veteran"]["stress_composure"] == 0.9
     assert migrated["ai_profiles"]["veteran"]["pain_tolerance"] == 0.9
     assert migrated["ai_profiles"]["recruit"]["anger_tolerance"] == 0.25
-    assert migrated["defaults"]["confidence"] == load_config()["defaults"]["confidence"]
+    assert migrated["defaults"]["starting_fear"] == load_config()["defaults"]["starting_fear"]
     assert migrated["stats"]["fear_accuracy"] == load_config()["stats"]["fear_accuracy"]
     assert migrated["anger"]["acc_penalty"] == load_config()["anger"]["acc_penalty"]
 
 
 def test_schema22_bleed_migration_updates_shipped_defaults_but_preserves_custom_tuning():
-    old = load_config()
-    old["schema_version"] = 22
+    old = legacy_policy_config(22)
     old["wounds"]["TORSO"]["CUT"]["bleed"] = 3
     old["wounds"]["TORSO"]["DEEP"]["bleed"] = 17
     old["wounds"]["HAND"]["SEVERED"]["bleed"] = 8
 
     migrated = upgrade_config(old)
 
-    assert migrated["schema_version"] == 27
+    assert migrated["schema_version"] == 30
     assert migrated["wounds"]["TORSO"]["CUT"]["bleed"] == 0.5
     assert migrated["wounds"]["TORSO"]["DEEP"]["bleed"] == 17
     assert migrated["wounds"]["HAND"]["SEVERED"]["bleed"] == 12
 
 
-def test_only_resolved_countered_outcomes_adapt_and_success_decays_penalty():
+def test_old_adaptation_history_and_deadlock_fields_are_discarded_on_restore():
     session = DuelSession.new(archetype="brute", guide_mode="off")
-    fighter = session.enemy
-    session.player.pos, fighter.pos = (7, 3), (8, 3)
-    fighter.ai_current_category = "LIGHT"
-    assert adaptation_penalty(fighter, "LIGHT", session.state.config) == 0
-    baseline = next(row.score for row in score_actions(session.state, fighter.id) if row.category == "LIGHT")
-
-    # A queued commitment is not evidence; only resolved public outcomes teach.
-    commit_action(session.state, fighter.id, Choice(ActionKind.LIGHT, Zone.TORSO))
-    assert fighter.ai_experience == []
-
-    for _ in range(2):
-        session.state.emit(EventType.PARRY, "player", fighter.id, Zone.TORSO)
-        session._record_ai_outcomes()
-    fighter.action = None
-    first_penalty = adaptation_penalty(fighter, "LIGHT", session.state.config)
-    assert first_penalty > 0
-    countered_score = next(row.score for row in score_actions(session.state, fighter.id) if row.category == "LIGHT")
-    assert countered_score < baseline
-
-    session.state.emit(EventType.HIT, fighter.id, "player", Zone.TORSO)
-    session._record_ai_outcomes()
-    assert adaptation_penalty(fighter, "LIGHT", session.state.config) < first_penalty
-
-
-def test_adaptation_ring_is_bounded_and_anti_deadlock_only_scores_legal_choices():
-    session = DuelSession.new(archetype="brute", guide_mode="off")
-    fighter = session.enemy
-    fighter.ai_current_category = "LIGHT"
-    for _ in range(20):
-        session.state.emit(EventType.WHIFF, fighter.id, "player")
-        session._record_ai_outcomes()
-    assert len(fighter.ai_experience) == 12
-
-    fighter.ai_stagnant_decisions = 3
-    rows = score_actions(session.state, fighter.id)
-    assert rows
-    assert all(row.category in (set(session.state.config["ai"]["tie_order"])
-                                | set(session.state.config["tactics"]["ai_scores"])) for row in rows)
-    assert any(name == "P2_ANTI_DEADLOCK" for row in rows for name, _ in row.reasons)
-    fighter.ai_stagnant_decisions = 0
-    legal_before = {row.category for row in score_actions(session.state, fighter.id)}
-    fighter.ai_stagnant_decisions = 3
-    legal_after = {row.category for row in score_actions(session.state, fighter.id)}
-    assert legal_after == legal_before
-    record_ai_decision(fighter, "DASH_IN")
-    assert fighter.ai_stagnant_decisions == 0
+    data = session.to_data()
+    for row in data["state"]["fighters"]:
+        row["ai_experience"] = [{"category": "LIGHT", "outcome": "COUNTERED"}]
+        row["ai_stagnant_decisions"] = 12
+        row["ai_current_category"] = "LIGHT"
+    data["version"] = data["state"]["schema_version"] = 28
+    data["state"]["config"]["schema_version"] = 28
+    data["notebook"]["version"] = 28
+    restored = DuelSession.from_data(data)
+    assert not hasattr(restored.enemy, "ai_experience")
+    assert "ai_experience" not in restored.to_data()["state"]["fighters"][1]
 
 
 def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(tmp_path):
@@ -286,8 +306,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     legacy_config.pop("ai_profiles")
     legacy_config.pop("personality")
     legacy_config.pop("injury")
-    legacy_config["ronin"].pop("traits")
-    legacy_config["ronin"].pop("score_bias", None)
+    legacy_config["ronin"].pop("stress_composure", None)
     state.pop("pending_injury_responses", None)
     for fighter_row in state["fighters"]:
         for key in ("ai_experience", "ai_stagnant_decisions", "ai_current_category", "last_recoil_tick"):
@@ -307,28 +326,25 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     old_path = deepcopy(state["fighters"][0]["action"]["path"])
     old_deadline = state["fighters"][0]["action"]["end_tick"]
     restored = DuelSession.from_data(data)
-    assert restored.to_data()["version"] == 27
+    assert restored.to_data()["version"] == 30
     assert restored.player.action.path == [(tick, tuple(pos)) for tick, pos in old_path]
     assert restored.player.action.end_tick == old_deadline
-    assert restored.enemy.ai_experience == []
-    assert set(restored.enemy.personality.traits) == {
-        "aggression", "discipline", "confidence", "patience", "adaptability",
-    }
+    assert not hasattr(restored.enemy, "ai_experience")
+    assert 0 <= restored.enemy.personality.stress_composure <= 1
 
     old_config = deepcopy(load_config())
     old_config["schema_version"] = 1
     old_config.pop("ai_profiles")
     old_config.pop("personality")
     old_config.pop("injury")
-    old_config["ronin"].pop("traits")
-    old_config["ronin"].pop("score_bias")
+    old_config["ronin"].pop("stress_composure", None)
     old_config_path = tmp_path / "duel-config-v1.json"
     old_config_path.write_text(json.dumps(old_config), encoding="utf-8")
     migrated_config = load_config(old_config_path)
-    assert migrated_config["schema_version"] == 27
+    assert migrated_config["schema_version"] == 30
     assert migrated_config["actions"]["DASH"]["per_tile"] == old_config["actions"]["DASH"]["per_tile"]
-    assert migrated_config["ronin"]["base"] == old_config["ronin"]["base"]
-    assert migrated_config["ronin"]["traits"] == migrated_config["ai_profiles"]["brute"]["traits"]
+    assert "base" not in migrated_config["ronin"]
+    assert "traits" not in migrated_config["ai_profiles"]["brute"]
 
     from pirates.game import World
     world = World()
@@ -337,7 +353,7 @@ def test_session_schema_v1_migration_preserves_active_path_and_defaults_memory(t
     world.save(save_path)
     loaded = World.load(save_path)
     resumed = DuelSession.from_data(loaded.duel_journal)
-    assert loaded.duel_journal["version"] == 27
+    assert loaded.duel_journal["version"] == 30
     restored.run_to_player()
     resumed.run_to_player()
     assert resumed.state.to_data() == restored.state.to_data()

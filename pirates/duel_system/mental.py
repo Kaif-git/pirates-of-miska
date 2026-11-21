@@ -35,15 +35,81 @@ def change_anger(state, fighter, delta, cause):
     if (fighter.anger < rule["crash_low"] and before >= rule["crash_low"]
             and any(value > rule["crash_high"] for _, value in fighter.anger_history)):
                 anger_crash(state, fighter, "ANGER_DROP")
+    refresh_behavior_modes(state, fighter, cause, before_values={"anger": before})
 
 
 def change_fear(state, fighter, delta, cause):
     before = fighter.fear_meter
+    if delta > 0 and fighter.personality is not None:
+        delta *= fighter.personality.fear_gain_susceptibility
     fighter.fear_meter = clamp(before + delta, 0, state.config["defaults"]["pool_max"])
     if fighter.fear_meter != before:
         state.emit(EventType.POOL_CHANGE, fighter.id,
                    deltas={"fear": fighter.fear_meter,
                            "fear_delta": fighter.fear_meter - before}, cause_tags=(cause,))
+    refresh_behavior_modes(state, fighter, cause, before_values={"fear": before})
+
+
+def _next_behavior_mode(meter, current, medium, critical, thresholds):
+    if meter >= thresholds["critical_enter"]:
+        return critical
+    if current == critical and meter >= thresholds["critical_exit"]:
+        return critical
+    if meter >= thresholds["mode_enter"]:
+        return medium
+    if current == medium and meter >= thresholds["mode_exit"]:
+        return medium
+    return "NONE"
+
+
+def behavior_values(fighter, config):
+    from .stats import pain_burden
+    return {"pain": pain_burden(fighter, config),
+            "fear": fighter.fear_meter,
+            "anger": fighter.anger}
+
+
+def refresh_behavior_modes(state, fighter, cause="STATE_SYNC", *, before_values=None, emit=True):
+    """Latch shared threshold modes; called only from simulation state changes/decisions."""
+    thresholds = state.config["behavior_thresholds"]
+    values = behavior_values(fighter, state.config)
+    modes = {"pain": ("PROTECTIVE", "BREAK"),
+             "fear": ("CAUTIOUS", "BREAK"),
+             "anger": ("PRESS", "HOT")}
+    before_values = before_values or {}
+    changed = []
+    for meter, (medium, critical) in modes.items():
+        old_mode = fighter.behavior_modes[meter]
+        new_mode = _next_behavior_mode(values[meter], old_mode, medium, critical, thresholds)
+        if new_mode == old_mode:
+            continue
+        fighter.behavior_modes[meter] = new_mode
+        if emit:
+            if new_mode == critical:
+                threshold = thresholds["critical_enter"]
+                transition = "ENTER_CRITICAL"
+            elif new_mode == medium:
+                threshold = (thresholds["critical_exit"] if old_mode == critical
+                             else thresholds["mode_enter"])
+                transition = "ENTER_MODE" if old_mode == "NONE" else "DOWNGRADE"
+            elif old_mode == critical:
+                threshold, transition = thresholds["critical_exit"], "EXIT_CRITICAL"
+            else:
+                threshold, transition = thresholds["mode_exit"], "EXIT_MODE"
+            state.emit(EventType.BEHAVIOR_MODE, fighter.id,
+                       deltas={"meter": meter,
+                               "value_before": before_values.get(meter, values[meter]),
+                               "value_after": values[meter], "mode_before": old_mode,
+                               "mode_after": new_mode, "transition": transition,
+                               "threshold": threshold, "cause": cause},
+                       cause_tags=("BEHAVIOR_THRESHOLD", transition, str(cause)))
+        changed.append((meter, old_mode, new_mode))
+    return tuple(changed)
+
+
+def initialize_behavior_modes(state, fighter):
+    """Set latches for new/migrated state without generating synthetic events."""
+    return refresh_behavior_modes(state, fighter, emit=False)
 
 
 def blood_morale(state, fighter):
@@ -88,16 +154,16 @@ def initialize_fight(fighters, *, config=None, rng_seed=0, walkable=None, exits=
         visible_hostiles = state.visible_hostiles_for(fighter.id)
         other = visible_hostiles[0] if visible_hostiles else (
             state.other(fighter) if len(state.fighters) <= 2 else None)
-        confidence = (fighter.personality.traits["confidence"] if fighter.personality
-                      else cfg["defaults"]["confidence"])
+        starting_fear = (fighter.personality.starting_fear if fighter.personality
+                         else cfg["defaults"]["starting_fear"])
         legacy_prefight_nerves = fighter.prefight.nervousness if fighter.prefight else 0
-        fighter.fear_meter = clamp(cfg["defaults"]["pool_max"] * (1 - confidence)
-                                   + legacy_prefight_nerves * cfg["defaults"]["pool_max"],
-                                   0, cfg["defaults"]["pool_max"])
+        fighter.fear_meter = clamp(starting_fear
+                                    + legacy_prefight_nerves * cfg["defaults"]["pool_max"],
+                                    0, cfg["defaults"]["pool_max"])
         level_penalty = (cfg["morale"]["level_gap_penalty"] * max(0, other.level - fighter.level)
                          if other else 0)
-        courage = fighter.personality.courage if fighter.personality else 0
-        fighter.morale = clamp(cfg["morale"]["start"] + courage - level_penalty,
+        morale_bias = fighter.personality.morale_bias if fighter.personality else 0
+        fighter.morale = clamp(cfg["morale"]["start"] + morale_bias - level_penalty,
                                 0, cfg["defaults"]["pool_max"])
         fighter.nervousness = 0
         fighter.anger_history = [(state.tick, fighter.anger)]

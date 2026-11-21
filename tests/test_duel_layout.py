@@ -1,7 +1,7 @@
 import pytest
 
 from pirates.duel_layout import compact_injury_row, context_labels, dashboard_geometry
-from pirates.duel_system.model import Severity, Wound, Zone
+from pirates.duel_system.model import EventType, Severity, Wound, Zone
 from pirates.duel_system.session import DuelSession
 from pirates.duel_ui import DuelUI
 
@@ -104,7 +104,10 @@ def test_direction_buttons_commit_only_after_distance_selection():
     assert ui.session.state.tick == 0
     ui.activate("S")
     assert ui.panel == "main" and len(ui.session.inputs) == 1
-    assert ui.session.player.pos == (before[0], before[1]+1)
+    voluntary = next(event for event in ui.session.state.event_log
+                     if event.type == EventType.MOVE and event.actor == ui.session.player.id
+                     and event.deltas.get("from") == before and not event.deltas.get("forced"))
+    assert voluntary.deltas["to"] == (before[0], before[1]+1)
 
 
 def test_extreme_speed_still_produces_only_one_action_per_fighter():

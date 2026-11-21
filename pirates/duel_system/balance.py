@@ -10,7 +10,7 @@ import json
 import random
 import statistics
 
-from .ai import choose_action, distance, observe, record_ai_decision, record_ai_outcomes
+from .ai import choose_action, distance, observe
 from .config import load_config
 from .engine import Choice, advance_one_tick, commit_action, legality, movement_path, release_guard
 from .guide import legal_choices
@@ -184,7 +184,6 @@ def run_fight(first_bot, second_bot, *, seed, config=None, level_gap=0, mirror=F
     rngs = {fighter.id: random.Random(f"{seed}:{index}") for index, fighter in enumerate(state.fighters)}
     counts = Counter()
     action_counts = {fighter.id: Counter() for fighter in state.fighters}
-    outcome_cursor = len(state.event_log)
     while not state.end_reason and state.tick < cfg["balance"]["max_ticks"] and sum(counts.values()) < cfg["balance"]["max_decisions"]:
         for fighter in state.fighters:
             _guard_release(state, fighter, bots[fighter.id])
@@ -207,14 +206,11 @@ def run_fight(first_bot, second_bot, *, seed, config=None, level_gap=0, mirror=F
         # All choices above read precisely the same pre-commit state.
         for identity, choice, category in choices:
             if category is not None:
-                record_ai_decision(next(f for f in state.fighters if f.id == identity), category)
                 state.emit(EventType.DECISION, identity, deltas={"category": category})
             commit_action(state, identity, choice)
             counts[identity] += 1
             action_counts[identity][choice.kind.value] += 1
         advance_one_tick(state)
-        record_ai_outcomes(state, state.event_log[outcome_cursor:])
-        outcome_cursor = len(state.event_log)
     first, second = state.fighters
     winner = "first" if state.winner == first.id else "second" if state.winner == second.id else None
     loser = second if winner == "first" else first if winner == "second" else None
